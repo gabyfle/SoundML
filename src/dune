@@ -1,0 +1,4 @@
+(library
+ (name soundml)
+ (public_name soundml)
+ (libraries owl ffmpeg))
