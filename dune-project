@@ -11,9 +11,9 @@
 
 (maintainers "Gabriel Santamaria <gaby.santamaria@outlook.fr>")
 
-(license LICENSE)
+(license Apache-2.0)
 
-(documentation https://url/to/documentation)
+(documentation https://github.com/gabyfle/soundml)
 
 (package
  (name soundml)
@@ -22,9 +22,8 @@
   "SoundML is a library built on top of Owl to analyse sounds files.")
  (depends
   (ocaml
-   (>= 5.2.0))
-  (dune
-   (>= 3.15))
+   (>= 5.1.0))
+  dune
   (owl
    (>= 1.1))
   (ffmpeg
