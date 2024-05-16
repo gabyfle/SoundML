@@ -1,4 +1,4 @@
 (executable
  (name soundml)
  (public_name soundml)
- (libraries ffmpeg-av))
+ (libraries ffmpeg-av ffmpeg-swresample owl))

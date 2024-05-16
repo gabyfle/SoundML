@@ -19,4 +19,37 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-let () = ()
+type audio = {buffer: Buffer.t; channels: Avutil.Channel_layout.t}
+
+module FrameToS32Bytes =
+  Swresample.Make (Swresample.Frame) (Swresample.S32Bytes)
+
+let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
+    =
+  let buffer = Buffer.create 0 in
+  let format =
+    match Av.Format.find_input_format format with
+    | Some f ->
+        f
+    | None ->
+        failwith ("Could not find format: " ^ format)
+  in
+  let input = Av.open_input ~format filename in
+  let idx, istream, icodec = Av.find_best_audio_stream input in
+  let options = [`Engine_soxr] in
+  let rsp = FrameToS32Bytes.from_codec ~options icodec channels 44100 in
+  let rec f () =
+    match Av.read_input ~audio_frame:[istream] input with
+    | `Audio_frame (i, frame) when i = idx ->
+        Buffer.add_bytes buffer (FrameToS32Bytes.convert rsp frame) ;
+        f ()
+    | exception Avutil.Error `Eof ->
+        ()
+    | _ ->
+        f ()
+  in
+  f () ;
+  Av.get_input istream |> Av.close ;
+  Gc.full_major () ;
+  Gc.full_major () ;
+  {buffer; channels}

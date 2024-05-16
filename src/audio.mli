@@ -19,4 +19,27 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-let () = ()
+(**
+    High level representation of an audio file data, used to store data when reading audio files *)
+type audio
+
+val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
+(**
+    [read_audio ~channel filename format] reads an audio file returns a representation of the file.
+    
+    Example usage:
+    
+    {[
+    let () =
+        let src = read_audio file.wav wav in
+        (* ... *)
+    ]}
+
+    you can as well choose to have a stereo representation of the file
+
+    {[
+    let () =
+        let src = read_audio `Stereo file.wav wav in
+        (* ... *)
+    ]}
+    *)
