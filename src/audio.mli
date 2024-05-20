@@ -32,6 +32,10 @@ val size : audio -> int
 (**
     [size audio] returns the size (in bytes) of the given audio data element *)
 
+val sampling : audio -> int
+(**
+    [sampling audio] returns the sampling rate of the given audio data element *)
+
 val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
 (**
     [read_audio ~channel filename format] reads an audio file returns a representation of the file.
@@ -50,8 +54,7 @@ val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
     let () =
         let src = read_audio `Stereo file.wav wav in
         (* ... *)
-    ]}
-    *)
+    ]} *)
 
 val fft :
      audio
@@ -68,6 +71,11 @@ val fft :
             let src = read_audio file.wav wav in
             let fft = fft src 0 1024 in
             (* ... *)
-    ]}
+    ]} *)
+
+val fftfreq : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    [fftfreq audio] return the FT sample frequencies.
     
-    *)
+    Inspired from: np.fft.fft.
+    @see <https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html> Numpy Documentation *)
