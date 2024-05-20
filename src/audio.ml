@@ -19,14 +19,39 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-type audio = {buffer: Buffer.t; channels: Avutil.Channel_layout.t}
-
+open Owl
 module FrameToS32Bytes =
   Swresample.Make (Swresample.Frame) (Swresample.S32Bytes)
+module G = Dense.Ndarray.Generic
+
+type audio =
+  { name: string
+  ; data: (Complex.t, Bigarray.complex64_elt) G.t
+  ; _channels: Avutil.Channel_layout.t }
+
+let size (a : audio) = Dense.Ndarray.Generic.size_in_bytes a.data
+
+let data (a : audio) = a.data
+
+let audio_to_array (buf : Bytes.t) : (Complex.t, Bigarray.complex64_elt) G.t =
+  let sample_size = 4 in
+  let num_samples = Bytes.length buf in
+  let arr = G.create Bigarray.Float32 [|num_samples|] 0. in
+  for i = 0 to num_samples / 4 do
+    let offset = i * sample_size in
+    if offset + sample_size <= Bytes.length buf then
+      let sample = Bytes.sub buf offset sample_size in
+      let value = Int32.to_float (Bytes.get_int32_be sample 0) in
+      G.set arr [|i|] value
+  done ;
+  Log.info "Done converting into an array of %d 32-bits floats."
+    (G.size_in_bytes arr) ;
+  arr |> G.cast_s2z
 
 let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     =
-  let buffer = Buffer.create 0 in
+  Log.info "Reading audio file %s" filename ;
+  let buffer = Bytes.create 0 in
   let format =
     match Av.Format.find_input_format format with
     | Some f ->
@@ -37,19 +62,28 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
   let options = [`Engine_soxr] in
-  let rsp = FrameToS32Bytes.from_codec ~options icodec channels 44100 in
-  let rec f () =
+  let sampling = 44100 in
+  let rsp = FrameToS32Bytes.from_codec ~options icodec channels sampling in
+  let rec f acc =
     match Av.read_input ~audio_frame:[istream] input with
     | `Audio_frame (i, frame) when i = idx ->
-        Buffer.add_bytes buffer (FrameToS32Bytes.convert rsp frame) ;
-        f ()
+        let bytes = FrameToS32Bytes.convert rsp frame in
+        f (Bytes.cat acc bytes)
     | exception Avutil.Error `Eof ->
-        ()
+        acc
     | _ ->
-        f ()
+        f acc
   in
-  f () ;
+  let buffer = f buffer |> audio_to_array in
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
   Gc.full_major () ;
-  {buffer; channels}
+  Log.info "Read %d bytes from file %s."
+    (Dense.Ndarray.Generic.size_in_bytes buffer)
+    filename ;
+  {name= filename; data= buffer; _channels= channels}
+
+let fft (a : audio) (_start : int) (_finish : int) :
+    (Complex.t, Bigarray.complex64_elt) G.t =
+  Log.info "Starting to create the FFT of the audio file %s" a.name ;
+  a.data |> Owl.Fft.Generic.fft (*|> G.get_slice [[start; finish - 1]]*)
