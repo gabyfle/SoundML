@@ -27,16 +27,25 @@ module G = Dense.Ndarray.Generic
 type audio =
   { name: string
   ; data: (Complex.t, Bigarray.complex64_elt) G.t
-  ; _channels: Avutil.Channel_layout.t }
+  ; sampling: int
+  ; size: int }
 
-let size (a : audio) = Dense.Ndarray.Generic.size_in_bytes a.data
+let size (a : audio) = a.size
 
 let data (a : audio) = a.data
 
-let audio_to_array (buf : Bytes.t) : (Complex.t, Bigarray.complex64_elt) G.t =
+let sampling (a : audio) = a.sampling
+
+let normalise (data : (float, Bigarray.float32_elt) G.t) :
+    (float, Bigarray.float32_elt) G.t =
+  let c = 2147483648 in
+  G.(1. /. float_of_int c $* data)
+
+let audio_to_array (buf : Bytes.t) :
+    (Complex.t, Bigarray.complex64_elt) G.t * int =
   let sample_size = 4 in
   let num_samples = Bytes.length buf in
-  let arr = G.create Bigarray.Float32 [|num_samples|] 0. in
+  let arr = G.create Bigarray.Float32 [|num_samples / 4|] 0. in
   for i = 0 to num_samples / 4 do
     let offset = i * sample_size in
     if offset + sample_size <= Bytes.length buf then
@@ -46,7 +55,7 @@ let audio_to_array (buf : Bytes.t) : (Complex.t, Bigarray.complex64_elt) G.t =
   done ;
   Log.info "Done converting into an array of %d 32-bits floats."
     (G.size_in_bytes arr) ;
-  arr |> G.cast_s2z
+  (arr |> normalise |> G.cast_s2z, G.size_in_bytes arr / sample_size)
 
 let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     =
@@ -61,6 +70,15 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   in
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
+  let _name =
+    match
+      Avcodec.Audio.get_sample_format icodec |> Avutil.Sample_format.get_name
+    with
+    | Some s ->
+        Log.info "Sample format: %s" s
+    | None ->
+        Log.info "Sample format: unknown"
+  in
   let options = [`Engine_soxr] in
   let sampling = 44100 in
   let rsp = FrameToS32Bytes.from_codec ~options icodec channels sampling in
@@ -74,16 +92,22 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     | _ ->
         f acc
   in
-  let buffer = f buffer |> audio_to_array in
+  let buffer, size = f buffer |> audio_to_array in
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
   Gc.full_major () ;
-  Log.info "Read %d bytes from file %s."
-    (Dense.Ndarray.Generic.size_in_bytes buffer)
-    filename ;
-  {name= filename; data= buffer; _channels= channels}
+  {name= filename; data= buffer; sampling; size}
 
 let fft (a : audio) (_start : int) (_finish : int) :
     (Complex.t, Bigarray.complex64_elt) G.t =
   Log.info "Starting to create the FFT of the audio file %s" a.name ;
   a.data |> Owl.Fft.Generic.fft (*|> G.get_slice [[start; finish - 1]]*)
+
+let fftfreq (a : audio) =
+  let n = float_of_int a.size in
+  let d = 1. /. float_of_int a.sampling in
+  let nslice = ((int_of_float n - 1) / 2) + 1 in
+  let fhalf = Arr.linspace 0. (float_of_int nslice) nslice in
+  let shalf = Arr.linspace (-.float_of_int nslice) (-1.) nslice in
+  let v = Arr.concatenate ~axis:0 [|fhalf; shalf|] in
+  Arr.(1. /. (d *. n) $* v)

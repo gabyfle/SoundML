@@ -23,21 +23,20 @@ open Owl
 
 let magnitudes = List.map (fun c -> Complex.norm c)
 
-let _phases = List.map (fun c -> Complex.arg c)
-
 let () =
-  let audio = Audio.read_audio "test/sin_2k.wav" "wav" in
+  let audio = Audio.read_audio "test/sin_1k.wav" "wav" in
   let fft =
-    Audio.fft audio 0 4096 |> Dense.Ndarray.Generic.to_array |> Array.to_list
+    Audio.fft audio 0 4098
+    |> Dense.Ndarray.Generic.get_slice [[0; Audio.size audio / 2]]
+    |> Dense.Ndarray.Generic.to_array |> Array.to_list
   in
   let x =
-    Arr.linspace 1. 0. (List.length fft) |> Arr.to_array |> Array.to_list
+    Audio.fftfreq audio
+    |> Dense.Ndarray.Generic.get_slice [[0; Audio.size audio / 2]]
+    |> Dense.Ndarray.Generic.to_array |> Array.to_list
   in
   Printf.printf "Length of x: %d\n" (List.length x) ;
   Printf.printf "Length of fft: %d\n" (List.length fft) ;
-  let mags = magnitudes fft in
-  Printf.printf "Max element of fft_mags: %f\n"
-    (List.fold_left (fun acc v -> if v >= acc then v else acc) 0. mags) ;
   let open Oplot.Plt in
   let axis = axis 0. 0. in
   let get_points a b : plot_object =
@@ -45,5 +44,6 @@ let () =
     let res = List.map2 mmap a b in
     Lines [res]
   in
-  let y1 = get_points x mags in
-  display [Color red; y1; Color black; axis]
+  let p2 = color 1. 0. 0. in
+  let y1 = get_points x (magnitudes fft) in
+  display ~dev:png [p2; Color red; y1; Color black; axis]
