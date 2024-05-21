@@ -24,7 +24,7 @@ open Owl
 let _magnitudes = List.map (fun c -> Complex.norm c)
 
 let () =
-  let audio = Audio.read_audio "sin_1k.wav" "wav" in
+  let audio = Audio.read_audio "deadly.wav" "wav" in
   let fft = Audio.fft audio 0 4098 in
   Log.warn "FFT: %d" (Audio.size audio) ;
   let fft =

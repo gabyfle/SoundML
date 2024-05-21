@@ -6,7 +6,7 @@ import time
 
 def read(f, normalized=False):
     """MP3 to numpy array"""
-    a = pydub.AudioSegment.from_mp3(f)
+    a = pydub.AudioSegment.from_wav(f)
     y = np.array(a.get_array_of_samples())
     if a.channels == 2:
         y = y.reshape((-1, 2))
@@ -18,7 +18,7 @@ def read(f, normalized=False):
 
 start = time.time()
 
-filename = "test/sin_15k.wav"
+filename = "deadly.wav"
 fs, signal = read(filename)
 
 end = time.time()
@@ -35,6 +35,8 @@ if signal.dtype == np.int16:
     signal = signal / 32768.0
 elif signal.dtype == np.int32:
     signal = signal / 2147483648.0
+
+start = time.time()
 
 fft_signal = np.fft.fft(signal)
 frequencies = np.fft.fftfreq(n, 1 / fs)
