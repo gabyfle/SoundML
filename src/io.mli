@@ -19,29 +19,36 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
-module G = Dense.Ndarray.Generic
+open Audio
 
+val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
 (**
-    High level representation of an audio file data, used to store data when reading audio files *)
-type audio =
-  { name: string
-  ; data: (float, Bigarray.float64_elt) G.t
-  ; sampling: int
-  ; size: int }
+    [read_audio ~channel filename format] reads an audio file returns a representation of the file.
+    
+    Example usage:
+    
+    {[
+    let () =
+        let src = read_audio file.wav wav in
+        (* ... *)
+    ]}
 
-val name : audio -> string
-(**
-    [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
+    you can as well choose to have a stereo representation of the file
 
-val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    [data audio] returns the data of the given audio data element *)
+    {[
+    let () =
+        let src = read_audio `Stereo file.wav wav in
+        (* ... *)
+    ]} *)
 
-val size : audio -> int
+val write_audio : ?sampling:int option -> audio -> string -> string -> unit
 (**
-    [size audio] returns the size (in bytes) of the given audio data element *)
-
-val sampling : audio -> int
-(**
-    [sampling audio] returns the sampling rate of the given audio data element *)
+    [write_audio ?sampling audio filename format] writes an audio file from the given audio data element.
+    
+    Example usage:
+    
+    {[
+    let () =
+        let src = read_audio "file.wav" "wav" in
+        write_audio src "file.wav" "aac"
+    ]} *)

@@ -20,28 +20,51 @@
 (*****************************************************************************)
 
 open Owl
-module G = Dense.Ndarray.Generic
+open Audio
 
-(**
-    High level representation of an audio file data, used to store data when reading audio files *)
-type audio =
-  { name: string
-  ; data: (float, Bigarray.float64_elt) G.t
-  ; sampling: int
-  ; size: int }
+let normalise (data : (float, Bigarray.float64_elt) G.t) :
+    (float, Bigarray.float64_elt) G.t =
+  let c = 2147483648 in
+  G.(1. /. float_of_int c $* data)
 
-val name : audio -> string
-(**
-    [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
+let fft (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
+  let nsplit = Domain.recommended_domain_count () in
+  let data = data a in
+  let shape = (G.shape data).(0) in
+  let data = data |> normalise |> G.cast_d2z in
+  (*we're playing with 1-D arrays*)
+  let n = shape / nsplit in
+  let slices =
+    Array.init nsplit (fun i ->
+        let start = i * n in
+        let finish = min (start + n) shape in
+        G.get_slice [[start; finish - 1]] data )
+  in
+  let fft_slice slice =
+    let fft = Owl.Fft.D.fft slice in
+    fft
+  in
+  let data = G.empty Bigarray.Complex64 [|shape|] in
+  let domains = Dynarray.create () in
+  (* we start the computing of each slice inside nslit domains *)
+  for i = 0 to nsplit - 1 do
+    let di = Domain.spawn (fun _ -> fft_slice slices.(i)) in
+    Dynarray.add_last domains di
+  done ;
+  for i = 0 to nsplit - 1 do
+    let di = Dynarray.get domains i in
+    let slice = Domain.join di in
+    G.set_slice [[i * n; ((i + 1) * n) - 1]] data slice
+  done ;
+  data
 
-val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    [data audio] returns the data of the given audio data element *)
-
-val size : audio -> int
-(**
-    [size audio] returns the size (in bytes) of the given audio data element *)
-
-val sampling : audio -> int
-(**
-    [sampling audio] returns the sampling rate of the given audio data element *)
+let fftfreq (a : audio) =
+  let size = size a in
+  let sampling = sampling a in
+  let n = float_of_int size in
+  let d = 1. /. float_of_int sampling in
+  let nslice = ((int_of_float n - 1) / 2) + 1 in
+  let fhalf = Arr.linspace 0. (float_of_int nslice) nslice in
+  let shalf = Arr.linspace (-.float_of_int nslice) (-1.) nslice in
+  let v = Arr.concatenate ~axis:0 [|fhalf; shalf|] in
+  Arr.(1. /. (d *. n) $* v)

@@ -19,29 +19,22 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
-module G = Dense.Ndarray.Generic
-
+val fft : Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
 (**
-    High level representation of an audio file data, used to store data when reading audio files *)
-type audio =
-  { name: string
-  ; data: (float, Bigarray.float64_elt) G.t
-  ; sampling: int
-  ; size: int }
+    [fft audio] computes an FFT on the slice [start; finish] of the given audio data.
+    
+    Examples:
 
-val name : audio -> string
-(**
-    [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
+    {[
+        let () =
+            let src = read_audio file.wav wav in
+            let fft = fft src in
+            (* ... *)
+    ]} *)
 
-val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
+val fftfreq : Audio.audio -> (float, Bigarray.float64_elt) Audio.G.t
 (**
-    [data audio] returns the data of the given audio data element *)
-
-val size : audio -> int
-(**
-    [size audio] returns the size (in bytes) of the given audio data element *)
-
-val sampling : audio -> int
-(**
-    [sampling audio] returns the sampling rate of the given audio data element *)
+    [fftfreq audio] return the FT sample frequencies.
+    
+    Inspired from: np.fft.fft.
+    @see <https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html> Numpy Documentation *)

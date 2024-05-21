@@ -19,8 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-let () =
-  Printexc.record_backtrace true ;
-  let audio = Audio.read_audio "test/sin_1k.wav" "wav" in
-  Printf.printf "Audio size: %d\n" (Audio.size audio) ;
-  Audio.write_audio audio "testing.flac" "flac"
+module Audio = Audio
+module Io = Io
+module Analysis = Analysis
