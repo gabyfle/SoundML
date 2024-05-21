@@ -20,15 +20,27 @@
 (*****************************************************************************)
 
 open Owl
+
+let ( %> ) f g x = g (f x)
+
+(* decoding frames *)
 module FrameToS32Bytes =
   Swresample.Make (Swresample.Frame) (Swresample.S32Bytes)
+
+(* encoding arrays *)
+module FloatArrayToFrame =
+  Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
+
+(* generic multi-dimensionnal array *)
 module G = Dense.Ndarray.Generic
 
 type audio =
   { name: string
-  ; data: (Complex.t, Bigarray.complex32_elt) G.t
+  ; data: (float, Bigarray.float32_elt) G.t
   ; sampling: int
   ; size: int }
+
+let name (a : audio) = a.name
 
 let size (a : audio) = a.size
 
@@ -43,7 +55,6 @@ let normalise (data : (float, Bigarray.float32_elt) G.t) :
 
 let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     =
-  Log.info "Reading audio file %s" filename ;
   let format =
     match Av.Format.find_input_format format with
     | Some f ->
@@ -79,23 +90,58 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   let data =
     G.of_array Bigarray.Float32 (Dynarray.to_array data) [|Dynarray.length data|]
   in
-  let data = normalise data |> G.cast_s2c in
   Av.get_input istream |> Av.close ;
   {name= filename; data; sampling; size}
 
-let fft (a : audio) (_start : int) (_finish : int) :
-    (Complex.t, Bigarray.complex32_elt) G.t =
-  Log.info "Starting to create the FFT of the audio file %s" a.name ;
-  let stime = Unix.time () in
+let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
+    : unit =
+  let sampling = match sampling with Some s -> s | None -> a.sampling in
+  let open Avcodec in
+  let codec =
+    try Audio.find_encoder_by_name fmt
+    with _ ->
+      Log.error "Could not find codec %s" fmt ;
+      exit 1
+  in
+  let out_sample_format = Audio.find_best_sample_format codec `Dbl in
+  let rsp =
+    FloatArrayToFrame.create `Mono sampling `Stereo ~out_sample_format sampling
+  in
+  let time_base = {Avutil.num= 1; den= sampling} in
+  let encoder =
+    Audio.create_encoder ~channel_layout:`Stereo ~channels:2 ~time_base
+      ~sample_format:out_sample_format ~sample_rate:sampling codec
+  in
+  let frame_size =
+    if List.mem `Variable_frame_size (capabilities codec) then 512
+    else Audio.frame_size encoder
+  in
+  let data = G.to_array a.data in
+  let out_file = open_out_bin output in
+  (* we can now convert our array to a frame *)
+  for i = 0 to Array.length data / frame_size do
+    let offset = i * frame_size in
+    let length = min frame_size (Array.length data - offset) in
+    data
+    |> FloatArrayToFrame.convert ~offset ~length rsp
+    |> encode encoder (Packet.to_bytes %> output_bytes out_file)
+  done ;
+  flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
+  close_out out_file ;
+  Gc.full_major () ;
+  Gc.full_major ()
+
+let fft (a : audio) : (Complex.t, Bigarray.complex32_elt) G.t =
   let nsplit = Domain.recommended_domain_count () in
   let shape = (G.shape a.data).(0) in
+  let data = a.data |> normalise |> G.cast_s2c in
   (*we're playing with 1-D arrays*)
   let n = shape / nsplit in
   let slices =
     Array.init nsplit (fun i ->
         let start = i * n in
         let finish = min (start + n) shape in
-        G.get_slice [[start; finish - 1]] a.data )
+        G.get_slice [[start; finish - 1]] data )
   in
   let fft_slice slice =
     let fft = Owl.Fft.S.fft slice in
@@ -113,8 +159,6 @@ let fft (a : audio) (_start : int) (_finish : int) :
     let slice = Domain.join di in
     G.set_slice [[i * n; ((i + 1) * n) - 1]] data slice
   done ;
-  Log.info "Finished creating the FFT of the audio file %s. Time: %f" a.name
-    (Unix.time () -. stime) ;
   data
 
 let fftfreq (a : audio) =

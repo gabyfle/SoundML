@@ -18,7 +18,7 @@ def read(f, normalized=False):
 
 start = time.time()
 
-filename = "deadly.wav"
+filename = "test/sin_1k.wav"
 fs, signal = read(filename)
 
 end = time.time()
@@ -44,11 +44,3 @@ frequencies = np.fft.fftfreq(n, 1 / fs)
 end = time.time()
 
 print("Temps d'exécution : ", end - start, "s")
-
-plt.figure()
-plt.plot(frequencies[: n // 2], np.abs(fft_signal)[: n // 2])
-plt.xlabel("Fréquence (Hz)")
-plt.ylabel("Amplitude")
-plt.title("Transformée de Fourier du signal")
-plt.grid()
-plt.show()
