@@ -23,8 +23,11 @@
     High level representation of an audio file data, used to store data when reading audio files *)
 type audio
 
-val data :
-  audio -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+val name : audio -> string
+(**
+    [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
+
+val data : audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio data element *)
 
@@ -56,20 +59,29 @@ val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
         (* ... *)
     ]} *)
 
-val fft :
-     audio
-  -> int
-  -> int
-  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+val write_audio : ?sampling:int option -> audio -> string -> string -> unit
 (**
-    [fft audio start finish] computes an FFT on the slice [start; finish] of the given audio data.
+    [write_audio ?sampling audio filename format] writes an audio file from the given audio data element.
+    
+    Example usage:
+    
+    {[
+    let () =
+        let src = read_audio "file.wav" "wav" in
+        write_audio src "file.wav" "aac"
+    ]} *)
+
+val fft :
+  audio -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    [fft audio] computes an FFT on the slice [start; finish] of the given audio data.
     
     Examples:
 
     {[
         let () =
             let src = read_audio file.wav wav in
-            let fft = fft src 0 1024 in
+            let fft = fft src in
             (* ... *)
     ]} *)
 
