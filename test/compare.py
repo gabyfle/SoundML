@@ -1,17 +1,35 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.io import wavfile
+import pydub
+import time
 
-filename = "test/sin_1k.wav"
-fs, signal = wavfile.read(filename)
+
+def read(f, normalized=False):
+    """MP3 to numpy array"""
+    a = pydub.AudioSegment.from_mp3(f)
+    y = np.array(a.get_array_of_samples())
+    if a.channels == 2:
+        y = y.reshape((-1, 2))
+    if normalized:
+        return a.frame_rate, np.float32(y) / 2**15
+    else:
+        return a.frame_rate, y
+
+
+start = time.time()
+
+filename = "test/sin_15k.wav"
+fs, signal = read(filename)
+
+end = time.time()
+print("Temps lecture : ", end - start, "s")
 
 if len(signal.shape) > 1:
     signal = signal[:, 0]
 
 n = len(signal)
 
-print(len(signal))
-print(signal)
+print("Taille du signal:", len(signal))
 
 if signal.dtype == np.int16:
     signal = signal / 32768.0
@@ -19,9 +37,11 @@ elif signal.dtype == np.int32:
     signal = signal / 2147483648.0
 
 fft_signal = np.fft.fft(signal)
-print(n)
-print(fs)
 frequencies = np.fft.fftfreq(n, 1 / fs)
+
+end = time.time()
+
+print("Temps d'exécution : ", end - start, "s")
 
 plt.figure()
 plt.plot(frequencies[: n // 2], np.abs(fft_signal)[: n // 2])

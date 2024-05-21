@@ -20,8 +20,8 @@
 (*****************************************************************************)
 
 open Owl
-module FrameToS32Bytes =
-  Swresample.Make (Swresample.Frame) (Swresample.S32Bytes)
+module FrameToS16Bytes =
+  Swresample.Make (Swresample.Frame) (Swresample.S16Bytes)
 module G = Dense.Ndarray.Generic
 
 type audio =
@@ -41,26 +41,9 @@ let normalise (data : (float, Bigarray.float32_elt) G.t) :
   let c = 2147483648 in
   G.(1. /. float_of_int c $* data)
 
-let audio_to_array (buf : Bytes.t) :
-    (Complex.t, Bigarray.complex64_elt) G.t * int =
-  let sample_size = 4 in
-  let num_samples = Bytes.length buf in
-  let arr = G.create Bigarray.Float32 [|num_samples / 4|] 0. in
-  for i = 0 to num_samples / 4 do
-    let offset = i * sample_size in
-    if offset + sample_size <= Bytes.length buf then
-      let sample = Bytes.sub buf offset sample_size in
-      let value = Int32.to_float (Bytes.get_int32_be sample 0) in
-      G.set arr [|i|] value
-  done ;
-  Log.info "Done converting into an array of %d 32-bits floats."
-    (G.size_in_bytes arr) ;
-  (arr |> normalise |> G.cast_s2z, G.size_in_bytes arr / sample_size)
-
 let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     =
   Log.info "Reading audio file %s" filename ;
-  let buffer = Bytes.create 0 in
   let format =
     match Av.Format.find_input_format format with
     | Some f ->
@@ -70,38 +53,48 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   in
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
-  let _name =
-    match
-      Avcodec.Audio.get_sample_format icodec |> Avutil.Sample_format.get_name
-    with
-    | Some s ->
-        Log.info "Sample format: %s" s
-    | None ->
-        Log.info "Sample format: unknown"
-  in
   let options = [`Engine_soxr] in
-  let sampling = 44100 in
-  let rsp = FrameToS32Bytes.from_codec ~options icodec channels sampling in
-  let rec f acc =
+  let sampling = 22050 in
+  let rsp = FrameToS16Bytes.from_codec ~options icodec channels sampling in
+  let data = Dynarray.create () in
+  let rec f start =
     match Av.read_input ~audio_frame:[istream] input with
     | `Audio_frame (i, frame) when i = idx ->
-        let bytes = FrameToS32Bytes.convert rsp frame in
-        f (Bytes.cat acc bytes)
+        let bytes = FrameToS16Bytes.convert rsp frame in
+        let length = Bytes.length bytes in
+        for i = 0 to length / 2 do
+          let offset = i * 2 in
+          if offset + 2 <= length then
+            let value = Int.to_float (Bytes.get_int16_ne bytes offset) in
+            Dynarray.add_last data value
+        done ;
+        f (start + (length / 2))
     | exception Avutil.Error `Eof ->
-        acc
+        start
     | _ ->
-        f acc
+        f start
   in
-  let buffer, size = f buffer |> audio_to_array in
+  let total = f 0 in
+  Log.info "Size of data: %d" (Dynarray.length data) ;
+  let size = Dynarray.length data in
+  Log.info "Read %d samples" total ;
+  let data =
+    G.of_array Bigarray.Float32 (Dynarray.to_array data) [|Dynarray.length data|]
+  in
+  let data = normalise data |> G.cast_s2z in
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
   Gc.full_major () ;
-  {name= filename; data= buffer; sampling; size}
+  {name= filename; data; sampling; size}
 
 let fft (a : audio) (_start : int) (_finish : int) :
     (Complex.t, Bigarray.complex64_elt) G.t =
   Log.info "Starting to create the FFT of the audio file %s" a.name ;
-  a.data |> Owl.Fft.Generic.fft (*|> G.get_slice [[start; finish - 1]]*)
+  Log.info "Recommended domains: %d" (Domain.recommended_domain_count ()) ;
+  (* TODO: Spawn n domains and compute the FFT on each of the domain before
+     combining the results *)
+  ignore (Domain.spawn (fun _ -> print_endline "I ran in parallel")) ;
+  a.data |> Owl.Fft.D.fft (*|> G.get_slice [[start; finish - 1]]*)
 
 let fftfreq (a : audio) =
   let n = float_of_int a.size in
