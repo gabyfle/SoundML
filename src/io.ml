@@ -65,16 +65,15 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
         f start
   in
   f 0 ;
-  let size = Dynarray.length data in
   let data =
     G.of_array Bigarray.Float64 (Dynarray.to_array data) [|Dynarray.length data|]
   in
   Av.get_input istream |> Av.close ;
-  {name= filename; data; sampling; size}
+  create ~name:filename ~data ~sampling
 
-let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
-    : unit =
-  let sampling = match sampling with Some s -> s | None -> a.sampling in
+let write_audio ?(sr = None) (a : audio) (output : string) (fmt : string) : unit
+    =
+  let sampling = match sr with Some s -> s | None -> sampling a in
   let open Avcodec in
   let codec =
     try Audio.find_encoder_by_name fmt
@@ -96,7 +95,7 @@ let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
     else Audio.frame_size encoder
   in
   let out_file = open_out_bin output in
-  let values = a.data |> G.to_array in
+  let values = data a |> G.to_array in
   let length = Array.length values in
   for i = 0 to length / frame_size do
     let start = i * frame_size in

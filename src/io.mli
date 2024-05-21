@@ -41,9 +41,9 @@ val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
         (* ... *)
     ]} *)
 
-val write_audio : ?sampling:int option -> audio -> string -> string -> unit
+val write_audio : ?sr:int option -> audio -> string -> string -> unit
 (**
-    [write_audio ?sampling audio filename format] writes an audio file from the given audio data element.
+    [write_audio ?sr audio filename format] writes an audio file from the given audio data element.
     
     Example usage:
     
