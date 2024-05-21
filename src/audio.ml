@@ -30,6 +30,10 @@ type audio =
   ; sampling: int
   ; size: int }
 
+let create ~name ~data ~sampling =
+  let size = G.numel data in
+  {name; data; sampling; size}
+
 let name (a : audio) = a.name
 
 let size (a : audio) = a.size

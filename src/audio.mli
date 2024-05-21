@@ -24,11 +24,12 @@ module G = Dense.Ndarray.Generic
 
 (**
     High level representation of an audio file data, used to store data when reading audio files *)
-type audio =
-  { name: string
-  ; data: (float, Bigarray.float64_elt) G.t
-  ; sampling: int
-  ; size: int }
+type audio
+
+val create :
+  name:string -> data:(float, Bigarray.float64_elt) G.t -> sampling:int -> audio
+(**
+    [create ~name ~data ~sampling] creates a new audio data element with the given name, data and sampling rate *)
 
 val name : audio -> string
 (**
