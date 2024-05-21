@@ -27,7 +27,7 @@ val name : audio -> string
 (**
     [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
 
-val data : audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio data element *)
 
@@ -72,7 +72,7 @@ val write_audio : ?sampling:int option -> audio -> string -> string -> unit
     ]} *)
 
 val fft :
-  audio -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+  audio -> (Complex.t, Bigarray.complex64_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [fft audio] computes an FFT on the slice [start; finish] of the given audio data.
     
