@@ -21,29 +21,21 @@
 
 open Owl
 
-let magnitudes = List.map (fun c -> Complex.norm c)
+let _magnitudes = List.map (fun c -> Complex.norm c)
 
 let () =
-  let audio = Audio.read_audio "test/sin_1k.wav" "wav" in
+  let audio = Audio.read_audio "sin_1k.wav" "wav" in
+  let fft = Audio.fft audio 0 4098 in
+  Log.warn "FFT: %d" (Audio.size audio) ;
   let fft =
-    Audio.fft audio 0 4098
+    fft
     |> Dense.Ndarray.Generic.get_slice [[0; Audio.size audio / 2]]
     |> Dense.Ndarray.Generic.to_array |> Array.to_list
   in
+  Log.info "FFT: %d" (List.length fft) ;
   let x =
     Audio.fftfreq audio
     |> Dense.Ndarray.Generic.get_slice [[0; Audio.size audio / 2]]
     |> Dense.Ndarray.Generic.to_array |> Array.to_list
   in
-  Printf.printf "Length of x: %d\n" (List.length x) ;
-  Printf.printf "Length of fft: %d\n" (List.length fft) ;
-  let open Oplot.Plt in
-  let axis = axis 0. 0. in
-  let get_points a b : plot_object =
-    let mmap x y : Oplot.Points.Point2.t = {x; y} in
-    let res = List.map2 mmap a b in
-    Lines [res]
-  in
-  let p2 = color 1. 0. 0. in
-  let y1 = get_points x (magnitudes fft) in
-  display ~dev:png [p2; Color red; y1; Color black; axis]
+  Log.info "X: %d" (List.length x)
