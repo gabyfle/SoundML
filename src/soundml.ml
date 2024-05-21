@@ -20,5 +20,7 @@
 (*****************************************************************************)
 
 let () =
-  let audio = Audio.read_audio "test/noise.wav" "wav" in
-  Audio.write_audio audio "testing.flac" "aac"
+  Printexc.record_backtrace true ;
+  let audio = Audio.read_audio "test/sin_1k.wav" "wav" in
+  Printf.printf "Audio size: %d\n" (Audio.size audio) ;
+  Audio.write_audio audio "testing.flac" "flac"

@@ -18,7 +18,7 @@ def read(f, normalized=False):
 
 start = time.time()
 
-filename = "test/sin_1k.wav"
+filename = "test/noise.wav"
 fs, signal = read(filename)
 
 end = time.time()
@@ -29,6 +29,7 @@ if len(signal.shape) > 1:
 
 n = len(signal)
 
+print("Fréquence d'échantillonnage:", fs)
 print("Taille du signal:", len(signal))
 
 if signal.dtype == np.int16:
