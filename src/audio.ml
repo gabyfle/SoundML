@@ -65,7 +65,7 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
   let options = [`Engine_soxr] in
-  let sampling = 22050 in
+  let sampling = 96000 in
   let rsp = FrameToS32Bytes.from_codec ~options icodec channels sampling in
   let data = Dynarray.create () in
   let rec f start =
@@ -105,26 +105,26 @@ let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
   in
   let out_sample_format = Audio.find_best_sample_format codec `Dbl in
   let rsp =
-    FloatArrayToFrame.create `Mono sampling `Stereo ~out_sample_format sampling
+    FloatArrayToFrame.create `Mono sampling `Mono ~out_sample_format sampling
   in
   let time_base = {Avutil.num= 1; den= sampling} in
   let encoder =
-    Audio.create_encoder ~channel_layout:`Stereo ~channels:2 ~time_base
+    Audio.create_encoder ~channel_layout:`Mono ~channels:1 ~time_base
       ~sample_format:out_sample_format ~sample_rate:sampling codec
   in
   let frame_size =
     if List.mem `Variable_frame_size (capabilities codec) then 512
     else Audio.frame_size encoder
   in
-  let data = G.to_array a.data in
   let out_file = open_out_bin output in
-  (* we can now convert our array to a frame *)
-  for i = 0 to Array.length data / frame_size do
-    let offset = i * frame_size in
-    let length = min frame_size (Array.length data - offset) in
-    data
-    |> FloatArrayToFrame.convert ~offset ~length rsp
-    |> encode encoder (Packet.to_bytes %> output_bytes out_file)
+  let values = a.data |> G.to_array in
+  let length = Array.length values in
+  for i = 0 to length / frame_size do
+    let start = i * frame_size in
+    let finish = min (start + frame_size) length in
+    let slice = Array.sub values start (finish - start - 1) in
+    let frame = FloatArrayToFrame.convert rsp slice in
+    encode encoder (Packet.to_bytes %> output_bytes out_file) frame
   done ;
   flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
   close_out out_file ;
