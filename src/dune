@@ -1,4 +1,11 @@
-(executable
+(library
  (name soundml)
  (public_name soundml)
+ (modules audio analysis io)
  (libraries ffmpeg-av ffmpeg-swresample owl))
+
+(executable ; for testing purpose only, have to be removed
+ (name test)
+ (public_name test)
+ (libraries soundml)
+ (modules test))

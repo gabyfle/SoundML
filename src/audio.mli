@@ -19,9 +19,16 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+open Owl
+module G = Dense.Ndarray.Generic
+
 (**
     High level representation of an audio file data, used to store data when reading audio files *)
-type audio
+type audio =
+  { name: string
+  ; data: (float, Bigarray.float64_elt) G.t
+  ; sampling: int
+  ; size: int }
 
 val name : audio -> string
 (**
@@ -38,56 +45,3 @@ val size : audio -> int
 val sampling : audio -> int
 (**
     [sampling audio] returns the sampling rate of the given audio data element *)
-
-val read_audio : ?channels:Avutil.Channel_layout.t -> string -> string -> audio
-(**
-    [read_audio ~channel filename format] reads an audio file returns a representation of the file.
-    
-    Example usage:
-    
-    {[
-    let () =
-        let src = read_audio file.wav wav in
-        (* ... *)
-    ]}
-
-    you can as well choose to have a stereo representation of the file
-
-    {[
-    let () =
-        let src = read_audio `Stereo file.wav wav in
-        (* ... *)
-    ]} *)
-
-val write_audio : ?sampling:int option -> audio -> string -> string -> unit
-(**
-    [write_audio ?sampling audio filename format] writes an audio file from the given audio data element.
-    
-    Example usage:
-    
-    {[
-    let () =
-        let src = read_audio "file.wav" "wav" in
-        write_audio src "file.wav" "aac"
-    ]} *)
-
-val fft :
-  audio -> (Complex.t, Bigarray.complex64_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    [fft audio] computes an FFT on the slice [start; finish] of the given audio data.
-    
-    Examples:
-
-    {[
-        let () =
-            let src = read_audio file.wav wav in
-            let fft = fft src in
-            (* ... *)
-    ]} *)
-
-val fftfreq : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    [fftfreq audio] return the FT sample frequencies.
-    
-    Inspired from: np.fft.fft.
-    @see <https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html> Numpy Documentation *)
