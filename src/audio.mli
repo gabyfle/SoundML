@@ -24,7 +24,7 @@
 type audio
 
 val data :
-  audio -> (Complex.t, Bigarray.complex64_elt) Owl.Dense.Ndarray.Generic.t
+  audio -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio data element *)
 
@@ -60,7 +60,7 @@ val fft :
      audio
   -> int
   -> int
-  -> (Complex.t, Bigarray.complex64_elt) Owl.Dense.Ndarray.Generic.t
+  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [fft audio start finish] computes an FFT on the slice [start; finish] of the given audio data.
     
