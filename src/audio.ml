@@ -36,7 +36,7 @@ module G = Dense.Ndarray.Generic
 
 type audio =
   { name: string
-  ; data: (float, Bigarray.float32_elt) G.t
+  ; data: (float, Bigarray.float64_elt) G.t
   ; sampling: int
   ; size: int }
 
@@ -48,8 +48,8 @@ let data (a : audio) = a.data
 
 let sampling (a : audio) = a.sampling
 
-let normalise (data : (float, Bigarray.float32_elt) G.t) :
-    (float, Bigarray.float32_elt) G.t =
+let normalise (data : (float, Bigarray.float64_elt) G.t) :
+    (float, Bigarray.float64_elt) G.t =
   let c = 2147483648 in
   G.(1. /. float_of_int c $* data)
 
@@ -88,7 +88,7 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   f 0 ;
   let size = Dynarray.length data in
   let data =
-    G.of_array Bigarray.Float32 (Dynarray.to_array data) [|Dynarray.length data|]
+    G.of_array Bigarray.Float64 (Dynarray.to_array data) [|Dynarray.length data|]
   in
   Av.get_input istream |> Av.close ;
   {name= filename; data; sampling; size}
@@ -105,7 +105,7 @@ let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
   in
   let out_sample_format = Audio.find_best_sample_format codec `Dbl in
   let rsp =
-    FloatArrayToFrame.create `Mono sampling `Mono ~out_sample_format sampling
+    FloatArrayToFrame.create `Mono sampling `Stereo ~out_sample_format sampling
   in
   let time_base = {Avutil.num= 1; den= sampling} in
   let encoder =
@@ -131,10 +131,10 @@ let write_audio ?(sampling = None) (a : audio) (output : string) (fmt : string)
   Gc.full_major () ;
   Gc.full_major ()
 
-let fft (a : audio) : (Complex.t, Bigarray.complex32_elt) G.t =
+let fft (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
   let nsplit = Domain.recommended_domain_count () in
   let shape = (G.shape a.data).(0) in
-  let data = a.data |> normalise |> G.cast_s2c in
+  let data = a.data |> normalise |> G.cast_d2z in
   (*we're playing with 1-D arrays*)
   let n = shape / nsplit in
   let slices =
@@ -144,10 +144,10 @@ let fft (a : audio) : (Complex.t, Bigarray.complex32_elt) G.t =
         G.get_slice [[start; finish - 1]] data )
   in
   let fft_slice slice =
-    let fft = Owl.Fft.S.fft slice in
+    let fft = Owl.Fft.D.fft slice in
     fft
   in
-  let data = G.empty Bigarray.Complex32 [|shape|] in
+  let data = G.empty Bigarray.Complex64 [|shape|] in
   let domains = Dynarray.create () in
   (* we start the computing of each slice inside nslit domains *)
   for i = 0 to nsplit - 1 do
