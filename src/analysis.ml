@@ -22,16 +22,12 @@
 open Owl
 open Audio
 
-let normalise (data : (float, Bigarray.float64_elt) G.t) :
-    (float, Bigarray.float64_elt) G.t =
-  let c = 2147483648 in
-  G.(1. /. float_of_int c $* data)
-
-let fft (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
+let fft ?(norm = true) (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
   let nsplit = Domain.recommended_domain_count () in
-  let data = data a in
+  let norm = if norm then Fun.id else normalise in
+  let data = data (norm a) in
   let shape = (G.shape data).(0) in
-  let data = data |> normalise |> G.cast_d2z in
+  let data = data |> G.cast_d2z in
   (*we're playing with 1-D arrays*)
   let n = shape / nsplit in
   let slices =

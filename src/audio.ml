@@ -41,3 +41,8 @@ let size (a : audio) = a.size
 let data (a : audio) = a.data
 
 let sampling (a : audio) = a.sampling
+
+let normalise (a : audio) : audio =
+  let data = a.data in
+  let c = 2147483648 in
+  {a with data= G.(1. /. float_of_int c $* data)}

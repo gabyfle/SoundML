@@ -19,9 +19,11 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-val fft : Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
+val fft :
+  ?norm:bool -> Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
 (**
-    [fft audio] computes an FFT on the slice [start; finish] of the given audio data.
+    [fft ?norm audio] computes an FFT on the slice [start; finish] of the given audio data.
+    By default, [norm] is set to [true]. This will normalise the audio data before computing the FFT.
     
     Examples:
 

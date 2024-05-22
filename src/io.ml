@@ -32,8 +32,8 @@ module FrameToS32Bytes =
 module FloatArrayToFrame =
   Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
 
-let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
-    =
+let read_audio ?(channels = `Mono) ?(sr = 44100) (filename : string)
+    (format : string) : audio =
   let format =
     match Av.Format.find_input_format format with
     | Some f ->
@@ -44,8 +44,7 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
   let options = [`Engine_soxr] in
-  let sampling = 96000 in
-  let rsp = FrameToS32Bytes.from_codec ~options icodec channels sampling in
+  let rsp = FrameToS32Bytes.from_codec ~options icodec channels sr in
   let data = Dynarray.create () in
   let rec f start =
     match Av.read_input ~audio_frame:[istream] input with
@@ -69,7 +68,7 @@ let read_audio ?(channels = `Mono) (filename : string) (format : string) : audio
     G.of_array Bigarray.Float64 (Dynarray.to_array data) [|Dynarray.length data|]
   in
   Av.get_input istream |> Av.close ;
-  create ~name:filename ~data ~sampling
+  create ~name:filename ~data ~sampling:sr
 
 let write_audio ?(sr = None) (a : audio) (output : string) (fmt : string) : unit
     =
@@ -83,7 +82,7 @@ let write_audio ?(sr = None) (a : audio) (output : string) (fmt : string) : unit
   in
   let out_sample_format = Audio.find_best_sample_format codec `Dbl in
   let rsp =
-    FloatArrayToFrame.create `Mono sampling `Stereo ~out_sample_format sampling
+    FloatArrayToFrame.create `Mono sampling `Mono ~out_sample_format sampling
   in
   let time_base = {Avutil.num= 1; den= sampling} in
   let encoder =
@@ -100,7 +99,7 @@ let write_audio ?(sr = None) (a : audio) (output : string) (fmt : string) : unit
   for i = 0 to length / frame_size do
     let start = i * frame_size in
     let finish = min (start + frame_size) length in
-    let slice = Array.sub values start (finish - start - 1) in
+    let slice = Array.sub values start (finish - start) in
     let frame = FloatArrayToFrame.convert rsp slice in
     encode encoder (Packet.to_bytes %> output_bytes out_file) frame
   done ;
