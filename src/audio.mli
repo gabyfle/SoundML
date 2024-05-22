@@ -46,3 +46,7 @@ val size : audio -> int
 val sampling : audio -> int
 (**
     [sampling audio] returns the sampling rate of the given audio data element *)
+
+val normalise : audio -> audio
+(**
+    [normalise audio] normalises the data of the given audio data element *)

@@ -7,5 +7,5 @@
 (executable ; for testing purpose only, have to be removed
  (name test)
  (public_name test)
- (libraries soundml)
+ (libraries ffmpeg-av ffmpeg-swresample soundml)
  (modules test))
