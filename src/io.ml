@@ -19,7 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
 open Audio
 
 let ( %> ) f g x = g (f x)
@@ -32,8 +31,7 @@ module FrameToS32Bytes =
 module FloatArrayToFrame =
   Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
 
-let read_audio ?(channels = `Mono) ?(sr = 44100) (filename : string)
-    (format : string) : audio =
+let read_audio (filename : string) (format : string) : audio =
   let format =
     match Av.Format.find_input_format format with
     | Some f ->
@@ -43,8 +41,10 @@ let read_audio ?(channels = `Mono) ?(sr = 44100) (filename : string)
   in
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
+  let out_sr = Avcodec.Audio.get_sample_rate icodec in
+  let channels = Avcodec.Audio.get_channel_layout icodec in
   let options = [`Engine_soxr] in
-  let rsp = FrameToS32Bytes.from_codec ~options icodec channels sr in
+  let rsp = FrameToS32Bytes.from_codec ~options icodec channels out_sr in
   let data = Dynarray.create () in
   let rec f start =
     match Av.read_input ~audio_frame:[istream] input with
@@ -68,40 +68,63 @@ let read_audio ?(channels = `Mono) ?(sr = 44100) (filename : string)
     G.of_array Bigarray.Float64 (Dynarray.to_array data) [|Dynarray.length data|]
   in
   Av.get_input istream |> Av.close ;
-  create ~name:filename ~data ~sampling:sr
+  Gc.full_major () ;
+  Gc.full_major () ;
+  create ~name:filename ~data ~sampling:out_sr ~codec:icodec
 
-let write_audio ?(sr = None) (a : audio) (output : string) (fmt : string) : unit
-    =
-  let sampling = match sr with Some s -> s | None -> sampling a in
+let write_audio (a : audio) (filename : string) (format : string) : unit =
   let open Avcodec in
-  let codec =
-    try Audio.find_encoder_by_name fmt
-    with _ ->
-      Log.error "Could not find codec %s" fmt ;
-      exit 1
+  let format =
+    match Av.Format.guess_output_format ~short_name:format ~filename () with
+    | Some f ->
+        f
+    | None ->
+        failwith ("Could not find format: " ^ format)
   in
-  let out_sample_format = Audio.find_best_sample_format codec `Dbl in
-  let rsp =
-    FloatArrayToFrame.create `Mono sampling `Mono ~out_sample_format sampling
+  let ocodec = Av.Format.get_audio_codec_id format |> Audio.find_encoder in
+  Printf.printf "Codec: %s\n" (Audio.get_name ocodec) ;
+  let name =
+    match
+      Avutil.Sample_format.get_name (Audio.find_best_sample_format ocodec `Dbl)
+    with
+    | Some n ->
+        n
+    | None ->
+        "unknown"
   in
-  let time_base = {Avutil.num= 1; den= sampling} in
+  Printf.printf "Sample format %s\n" name ;
+  (* we first need to gather data about the codec used to decode the file *)
+  let icodec = codec a in
+  let in_cl = Audio.get_channel_layout icodec in
+  let channels = Audio.get_nb_channels icodec in
+  let in_sample_rate = Audio.get_sample_rate icodec in
+  let in_sample_format = Audio.get_sample_format icodec in
+  let out_sample_format = Audio.find_best_sample_format ocodec `Dbl in
+  let out_sample_rate = Audio.find_best_sample_rate ocodec 44100 in
+  let time_base = {Avutil.num= 1; den= in_sample_rate} in
   let encoder =
-    Audio.create_encoder ~channel_layout:`Mono ~channels:1 ~time_base
-      ~sample_format:out_sample_format ~sample_rate:sampling codec
+    Audio.create_encoder ~channel_layout:in_cl ~channels ~time_base
+      ~sample_format:out_sample_format ~sample_rate:out_sample_rate ocodec
   in
   let frame_size =
-    if List.mem `Variable_frame_size (capabilities codec) then 512
+    if List.mem `Variable_frame_size (capabilities ocodec) then 512
     else Audio.frame_size encoder
   in
-  let out_file = open_out_bin output in
+  let rsp =
+    FloatArrayToFrame.create in_cl ~in_sample_format in_sample_rate in_cl
+      ~out_sample_format out_sample_rate
+  in
+  let out_file = open_out_bin filename in
   let values = data a |> G.to_array in
   let length = Array.length values in
   for i = 0 to length / frame_size do
     let start = i * frame_size in
     let finish = min (start + frame_size) length in
     let slice = Array.sub values start (finish - start) in
-    let frame = FloatArrayToFrame.convert rsp slice in
-    encode encoder (Packet.to_bytes %> output_bytes out_file) frame
+    try
+      let frame = FloatArrayToFrame.convert rsp slice in
+      encode encoder (Packet.to_bytes %> output_bytes out_file) frame
+    with _ -> ()
   done ;
   flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
   close_out out_file ;

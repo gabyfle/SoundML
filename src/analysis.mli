@@ -34,6 +34,22 @@ val fft :
             (* ... *)
     ]} *)
 
+val ifft :
+     (Complex.t, Bigarray.complex64_elt) Audio.G.t
+  -> (float, Bigarray.float64_elt) Audio.G.t
+(**
+    [ifft fft] computes the inverse FFT of the given FFT data.
+    
+    Example:
+
+    {[
+        let () =
+            let src = read_audio file.wav wav in
+            let fft = fft src in
+            let ifft = ifft fft in
+            (* ... *)
+    ]} *)
+
 val fftfreq : Audio.audio -> (float, Bigarray.float64_elt) Audio.G.t
 (**
     [fftfreq audio] return the FT sample frequencies.
