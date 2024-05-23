@@ -22,37 +22,14 @@
 open Owl
 open Audio
 
-let fft ?(norm = true) (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
-  let nsplit = Domain.recommended_domain_count () in
-  let norm = if norm then Fun.id else normalise in
-  let data = data (norm a) in
-  let shape = (G.shape data).(0) in
-  let data = data |> G.cast_d2z in
-  (*we're playing with 1-D arrays*)
-  let n = shape / nsplit in
-  let slices =
-    Array.init nsplit (fun i ->
-        let start = i * n in
-        let finish = min (start + n) shape in
-        G.get_slice [[start; finish - 1]] data )
-  in
-  let fft_slice slice =
-    let fft = Owl.Fft.D.fft slice in
-    fft
-  in
-  let data = G.empty Bigarray.Complex64 [|shape|] in
-  let domains = Dynarray.create () in
-  (* we start the computing of each slice inside nslit domains *)
-  for i = 0 to nsplit - 1 do
-    let di = Domain.spawn (fun _ -> fft_slice slices.(i)) in
-    Dynarray.add_last domains di
-  done ;
-  for i = 0 to nsplit - 1 do
-    let di = Dynarray.get domains i in
-    let slice = Domain.join di in
-    G.set_slice [[i * n; ((i + 1) * n) - 1]] data slice
-  done ;
-  data
+let fft ?(norm = false) (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
+  let norm = if norm then fun _ -> () else normalise in
+  norm a ;
+  Owl.Fft.D.rfft (data a)
+
+let ifft (ft : (Complex.t, Bigarray.complex64_elt) G.t) :
+    (float, Bigarray.float64_elt) G.t =
+  Owl.Fft.D.irfft ft
 
 let fftfreq (a : audio) =
   let size = size a in

@@ -21,12 +21,9 @@
 
 open Audio
 
-val read_audio :
-  ?channels:Avutil.Channel_layout.t -> ?sr:int -> string -> string -> audio
+val read_audio : string -> string -> audio
 (**
-    [read_audio ?channels ?sr filename format] reads an audio file returns a representation of the file.
-
-    By default, [channels] is set to `Mono and [sr] is set to 44100.
+    [read_audio filename format] reads an audio file returns a representation of the file.
     
     Example usage:
     
@@ -44,9 +41,9 @@ val read_audio :
         (* ... *)
     ]} *)
 
-val write_audio : ?sr:int option -> audio -> string -> string -> unit
+val write_audio : audio -> string -> string -> unit
 (**
-    [write_audio ?sr audio filename format] writes an audio file from the given audio data element.
+    [write_audio audio filename format] writes an audio file from the given audio data element.
     
     Example usage:
     

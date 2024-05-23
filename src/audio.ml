@@ -28,11 +28,12 @@ type audio =
   { name: string
   ; data: (float, Bigarray.float64_elt) G.t
   ; sampling: int
-  ; size: int }
+  ; size: int
+  ; codec: Avutil.audio Avcodec.params }
 
-let create ~name ~data ~sampling =
+let create ~name ~data ~sampling ~codec =
   let size = G.numel data in
-  {name; data; sampling; size}
+  {name; data; sampling; size; codec}
 
 let name (a : audio) = a.name
 
@@ -40,9 +41,13 @@ let size (a : audio) = a.size
 
 let data (a : audio) = a.data
 
+let set_data (a : audio) (d : (float, Bigarray.float64_elt) G.t) =
+  {a with data= d}
+
 let sampling (a : audio) = a.sampling
 
-let normalise (a : audio) : audio =
-  let data = a.data in
+let codec (a : audio) = a.codec
+
+let normalise (a : audio) : unit =
   let c = 2147483648 in
-  {a with data= G.(1. /. float_of_int c $* data)}
+  G.scalar_mul_ (1. /. float_of_int c) a.data

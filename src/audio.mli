@@ -27,7 +27,11 @@ module G = Dense.Ndarray.Generic
 type audio
 
 val create :
-  name:string -> data:(float, Bigarray.float64_elt) G.t -> sampling:int -> audio
+     name:string
+  -> data:(float, Bigarray.float64_elt) G.t
+  -> sampling:int
+  -> codec:Avutil.audio Avcodec.params
+  -> audio
 (**
     [create ~name ~data ~sampling] creates a new audio data element with the given name, data and sampling rate *)
 
@@ -39,6 +43,11 @@ val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio data element *)
 
+val set_data :
+  audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t -> audio
+(**
+    [set_data audio data] sets the data of the given audio data element *)
+
 val size : audio -> int
 (**
     [size audio] returns the size (in bytes) of the given audio data element *)
@@ -47,6 +56,11 @@ val sampling : audio -> int
 (**
     [sampling audio] returns the sampling rate of the given audio data element *)
 
-val normalise : audio -> audio
+val codec : audio -> Avutil.audio Avcodec.params
 (**
-    [normalise audio] normalises the data of the given audio data element *)
+    [codec audio] returns the codec of the given audio data element *)
+
+val normalise : audio -> unit
+(**
+    [normalise audio] normalises the data of the given audio data element.
+    The operation is performed in place (impure function) *)
