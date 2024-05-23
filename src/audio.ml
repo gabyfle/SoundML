@@ -24,29 +24,53 @@ open Owl
 (* generic multi-dimensionnal array *)
 module G = Dense.Ndarray.Generic
 
+module Metadata = struct
+  type t =
+    { name: string
+    ; channels: int
+    ; sample_width: int
+    ; sample_rate: int
+    ; bit_rate: int }
+
+  let create ?(name : string = "Unknown") channels sample_width sample_rate
+      bit_rate =
+    {name; channels; sample_width; sample_rate; bit_rate}
+
+  let name (m : t) = m.name
+
+  let channels (m : t) = m.channels
+
+  let sample_width (m : t) = m.sample_width
+
+  let sample_rate (m : t) = m.sample_rate
+
+  let bit_rate (m : t) = m.bit_rate
+end
+
 type audio =
-  { name: string
-  ; data: (float, Bigarray.float64_elt) G.t
-  ; sampling: int
-  ; size: int
-  ; codec: Avutil.audio Avcodec.params }
+  { meta: Metadata.t
+  ; icodec: Avutil.audio Avcodec.params
+  ; data: (float, Bigarray.float64_elt) G.t }
 
-let create ~name ~data ~sampling ~codec =
-  let size = G.numel data in
-  {name; data; sampling; size; codec}
+let create (meta : Metadata.t) icodec data = {meta; icodec; data}
 
-let name (a : audio) = a.name
+let meta (a : audio) = a.meta
 
-let size (a : audio) = a.size
+let rawsize (a : audio) = G.numel a.data
+
+let length (a : audio) : int =
+  let meta = meta a in
+  let channels = float_of_int (Metadata.channels meta) in
+  let sr = float_of_int (Metadata.sample_rate meta) in
+  let size = float_of_int (rawsize a) /. channels in
+  Int.of_float (size /. sr *. 1000.)
 
 let data (a : audio) = a.data
 
 let set_data (a : audio) (d : (float, Bigarray.float64_elt) G.t) =
   {a with data= d}
 
-let sampling (a : audio) = a.sampling
-
-let codec (a : audio) = a.codec
+let codec (a : audio) = a.icodec
 
 let normalise (a : audio) : unit =
   let c = 2147483648 in

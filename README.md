@@ -13,9 +13,9 @@
 > [!WARNING]
 > The project is still in development and is not yet ready for use.
 
-## :toolbox: Getting Started
+## Getting Started
 
-### :gear: Installation
+### Installation
 
 This project uses Opam as a package manager
 ```bash
@@ -27,9 +27,23 @@ opam install soundml
 
 * [x] Read and Write audio
 * [x] Compute the FFT of an audio signal
-* [ ] Compute the IFFT of an FFT
+* [x] Compute the IFFT of an FFT
 * [ ] Compute the spectrogram of an audio file
 
+## Requirements
+
+You should be using the OCaml compiler with a version at least equal to 5.1.0. You can install it by following the instructions on the [OCaml website](https://ocaml.org/docs/install.html). This project uses the Dune build system.
+
+This library heavily relies on the Owl and ocaml-ffmpeg libraries.
+
+<div align=center>
+
+| Name                                                                                                  | Version     | Description                                                                                        |
+| ----------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| [**Owl**](https://github.com/owlbarn/owl) - *OCaml Scientific Computing*                              | `>= 1.1`    | Library for scientific computing in OCaml. Used to make the heavy computations (FFT, IFFT, etc...) |
+| [**ocaml-ffmpeg**](https://github.com/savonet/ocaml-ffmpeg) - *OCaml bindings to the FFmpeg library.* | `>= 1.1.11` | OCaml bindings for FFmpeg. Used to read and write audio data.                                      |
+
+</div>
 
 ## License
 

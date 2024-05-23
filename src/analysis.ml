@@ -32,8 +32,9 @@ let ifft (ft : (Complex.t, Bigarray.complex64_elt) G.t) :
   Owl.Fft.D.irfft ft
 
 let fftfreq (a : audio) =
-  let size = size a in
-  let sampling = sampling a in
+  let meta = meta a in
+  let size = rawsize a in
+  let sampling = Metadata.sample_rate meta in
   let n = float_of_int size in
   let d = 1. /. float_of_int sampling in
   let nslice = ((int_of_float n - 1) / 2) + 1 in
