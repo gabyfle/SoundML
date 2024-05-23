@@ -4,7 +4,7 @@ let () =
   let beg = Sys.time () in
   Printf.printf "Starting to read audio file\n" ;
   let start = Sys.time () in
-  let audio = Io.read_audio "testing.wav" "wav" in
+  let audio = Io.read_audio "test/noise.wav" "wav" in
   Audio.normalise audio ;
   Printf.printf "Done in %f; Size %d\n"
     (Sys.time () -. start)
