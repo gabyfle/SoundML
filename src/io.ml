@@ -31,6 +31,41 @@ module FrameToS32Bytes =
 module FloatArrayToFrame =
   Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
 
+let write_format (sf : Avutil.Sample_format.t) =
+  match sf with
+  | `None ->
+      failwith "Unsupported format"
+  | `Dbl | `Dblp ->
+      let bytes = Bytes.create 8 in
+      fun i v ->
+        Bytes.set_int64_le bytes i (Int64.of_float v) ;
+        bytes
+  | `Flt | `Fltp ->
+      let bytes = Bytes.create 4 in
+      fun i v ->
+        Bytes.set_int32_le bytes i (Int32.of_float v) ;
+        bytes
+  | `S16 | `S16p ->
+      let bytes = Bytes.create 2 in
+      fun i v ->
+        Bytes.set_int16_le bytes i (Int.of_float v) ;
+        bytes
+  | `S32 | `S32p ->
+      let bytes = Bytes.create 4 in
+      fun i v ->
+        Bytes.set_int32_le bytes i (Int32.of_float v) ;
+        bytes
+  | `S64 | `S64p ->
+      let bytes = Bytes.create 8 in
+      fun i v ->
+        Bytes.set_int64_le bytes i (Int64.of_float v) ;
+        bytes
+  | `U8 | `U8p ->
+      let bytes = Bytes.create 1 in
+      fun i v ->
+        Bytes.set_int8 bytes i (Int.of_float v) ;
+        bytes
+
 let read_audio (filename : string) (format : string) : audio =
   let format =
     match Av.Format.find_input_format format with
@@ -82,17 +117,6 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
         failwith ("Could not find format: " ^ format)
   in
   let ocodec = Av.Format.get_audio_codec_id format |> Audio.find_encoder in
-  Printf.printf "Codec: %s\n" (Audio.get_name ocodec) ;
-  let name =
-    match
-      Avutil.Sample_format.get_name (Audio.find_best_sample_format ocodec `Dbl)
-    with
-    | Some n ->
-        n
-    | None ->
-        "unknown"
-  in
-  Printf.printf "Sample format %s\n" name ;
   (* we first need to gather data about the codec used to decode the file *)
   let icodec = codec a in
   let in_cl = Audio.get_channel_layout icodec in
@@ -110,23 +134,45 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
     if List.mem `Variable_frame_size (capabilities ocodec) then 512
     else Audio.frame_size encoder
   in
-  let rsp =
-    FloatArrayToFrame.create in_cl ~in_sample_format in_sample_rate in_cl
-      ~out_sample_format out_sample_rate
-  in
   let out_file = open_out_bin filename in
   let values = data a |> G.to_array in
   let length = Array.length values in
-  for i = 0 to length / frame_size do
-    let start = i * frame_size in
-    let finish = min (start + frame_size) length in
-    let slice = Array.sub values start (finish - start) in
-    try
-      let frame = FloatArrayToFrame.convert rsp slice in
-      encode encoder (Packet.to_bytes %> output_bytes out_file) frame
-    with _ -> ()
-  done ;
-  flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
+  let write_frames () =
+    let rsp =
+      FloatArrayToFrame.create in_cl ~in_sample_format in_sample_rate in_cl
+        ~out_sample_format out_sample_rate
+    in
+    for i = 0 to length / frame_size do
+      let start = i * frame_size in
+      let finish = min (start + frame_size) length in
+      let slice = Array.sub values start (finish - start) in
+      try
+        let frame = FloatArrayToFrame.convert rsp slice in
+        encode encoder (Packet.to_bytes %> output_bytes out_file) frame
+      with _ -> ()
+    done ;
+    flush_encoder encoder (Packet.to_bytes %> output_bytes out_file)
+  in
+  let write_packets () =
+    let buffer_size = 4096 in
+    let write_func = write_format out_sample_format in
+    for i = 0 to length / buffer_size do
+      let start = i * buffer_size in
+      let finish = min (start + buffer_size) length in
+      let slice = Array.sub values start (finish - start) in
+      let rec f bytes n =
+        match n with
+        | 0 ->
+            bytes
+        | _ ->
+            f (Bytes.cat bytes (write_func 0 slice.(n - 1))) (n - 1)
+      in
+      let bytes = f (Bytes.create 0) (finish - start) in
+      let packet = Packet.create (Bytes.to_string bytes) in
+      Av.write_packet out_file time_base packet
+    done
+  in
+  if frame_size > 0 then write_frames () else write_packets () ;
   close_out out_file ;
   Gc.full_major () ;
   Gc.full_major ()
