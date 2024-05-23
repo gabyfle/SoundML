@@ -23,44 +23,99 @@ open Owl
 module G = Dense.Ndarray.Generic
 
 (**
-    High level representation of an audio file data, used to store data when reading audio files *)
+    {1 Audio Metadata}
+
+    This module contains the metadata of an audio file, which is used to store
+    information about the audio file when reading it from the filesystem. *)
+
+module Metadata : sig
+  type t
+
+  val create : ?name:string -> int -> int -> int -> int -> t
+  (**
+      [create ?name channels sample_width sample_rate bit_rate] creates a new metadata with the given parameters *)
+
+  val name : t -> string
+  (**
+      [name meta] returns the name of the file represented by the metadata *)
+
+  val channels : t -> int
+  (**
+      [channels meta] returns the number of channels of the audio file *)
+
+  val sample_width : t -> int
+  (**
+      [sample_width meta] returns the sample width of the audio file *)
+
+  val sample_rate : t -> int
+  (**
+      [sample_rate meta] returns the sample rate of the audio file *)
+
+  val bit_rate : t -> int
+  (**
+      [bit_rate meta] returns the bit rate of the audio file *)
+end
+
+(**
+    {1 Audio File Data}
+    High level representation of an audio file data, used to store data when reading audio files. *)
 type audio
 
 val create :
-     name:string
-  -> data:(float, Bigarray.float64_elt) G.t
-  -> sampling:int
-  -> codec:Avutil.audio Avcodec.params
+     Metadata.t
+  -> Avutil.audio Avcodec.params
+  -> (float, Bigarray.float64_elt) G.t
   -> audio
 (**
-    [create ~name ~data ~sampling] creates a new audio data element with the given name, data and sampling rate *)
+    [create metadata icodec data] creates a new audio with the given name and metadata *)
 
-val name : audio -> string
+val meta : audio -> Metadata.t
 (**
-    [name audio] returns the name (as it was read on the filesystem) of the given audio data element *)
+    [meta audio] returns the metadata attached to the given audio element *)
+
+val rawsize : audio -> int
+(**
+    [rawsize audio] returns the raw size of the given audio element *)
+
+val length : audio -> int
+(**
+    [length audio] returns the length (in milliseconds) of the given audio element *)
 
 val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
 (**
-    [data audio] returns the data of the given audio data element *)
+    [data audio] returns the data of the given audio element *)
 
 val set_data :
   audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t -> audio
 (**
-    [set_data audio data] sets the data of the given audio data element *)
-
-val size : audio -> int
-(**
-    [size audio] returns the size (in bytes) of the given audio data element *)
-
-val sampling : audio -> int
-(**
-    [sampling audio] returns the sampling rate of the given audio data element *)
+    [set_data audio data] sets the data of the given audio element *)
 
 val codec : audio -> Avutil.audio Avcodec.params
 (**
-    [codec audio] returns the codec of the given audio data element *)
+    [codec audio] returns the codec of the given audio element *)
 
 val normalise : audio -> unit
 (**
-    [normalise audio] normalises the data of the given audio data element.
-    The operation is performed in place (impure function) *)
+    [normalise audio] normalises the data of the given audio data element by
+    the maximum value of an int32.
+
+    Use this function when you did not normalized you audio and you need to
+    either plot the data or write it back to an audio file.
+    
+    If you forgot to normalize the data, you might get some values that goes
+    beyond 1.0 or under -1.0, which will surely make the audio sound distorted.
+
+    We recommend to always normalize your audio once you first read it from a source
+    file.
+
+    The operation is performed in place (impure function)
+
+    Example:
+
+    {[
+        let audio = Audio.read "audio.wav" in
+        (* you can perform any operation here *)
+        (* ... *)
+        Audio.normalise audio; (* normalizing before writing *)
+        Audio.write audio "audio.wav"
+    ]} *)

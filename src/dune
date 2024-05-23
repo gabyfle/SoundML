@@ -1,8 +1,29 @@
 (library
+ (name audio)
+ (package soundml)
+ (libraries ffmpeg-av owl)
+ (modules audio)
+ (wrapped false))
+
+(library
+ (name analysis)
+ (package soundml)
+ (modules analysis)
+ (libraries audio owl)
+ (wrapped false))
+
+(library
+ (name io)
+ (package soundml)
+ (modules io)
+ (libraries ffmpeg-av ffmpeg-swresample audio)
+ (wrapped false))
+
+(library
  (name soundml)
  (public_name soundml)
- (modules audio analysis io)
- (libraries ffmpeg-av ffmpeg-swresample owl))
+ (modules soundml)
+ (libraries owl audio analysis io))
 
 (executable ; for testing purpose only, have to be removed
  (name test)

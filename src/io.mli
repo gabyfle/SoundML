@@ -21,6 +21,20 @@
 
 open Audio
 
+val read_metadata : string -> string -> Metadata.t
+(**
+    [read_metadata filename format] reads the metadata of an audio file and returns [Metadata.t] type.
+    
+    Example usage:
+    
+    {[
+    let () =
+        let src = Io.read_metadata file.wav wav in
+        let open Audio in
+        Printf.fprintf "Sample rate: %d\n" (Metadata.sample_rate src);
+        (* ... *)
+    ]} *)
+
 val read_audio : string -> string -> audio
 (**
     [read_audio filename format] reads an audio file returns a representation of the file.
