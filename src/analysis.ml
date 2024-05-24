@@ -23,8 +23,7 @@ open Owl
 open Audio
 
 let fft ?(norm = false) (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
-  let norm = if norm then fun _ -> () else normalise in
-  norm a ;
+  if norm then normalize a ;
   Owl.Fft.D.rfft (data a)
 
 let ifft (ft : (Complex.t, Bigarray.complex64_elt) G.t) :

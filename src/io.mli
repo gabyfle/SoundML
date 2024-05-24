@@ -19,7 +19,14 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+(**
+    The {!Io} (in/out) module is the entry point for reading and writing audio
+    data from and to the filesystem. *)
+
 open Audio
+
+(**
+    {1 Reading data} *)
 
 val read_metadata : string -> string -> Metadata.t
 (**
@@ -54,6 +61,9 @@ val read_audio : string -> string -> audio
         let src = read_audio `Stereo file.wav wav in
         (* ... *)
     ]} *)
+
+(**
+    {1 Writing data} *)
 
 val write_audio : audio -> string -> string -> unit
 (**

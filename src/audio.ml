@@ -72,6 +72,5 @@ let set_data (a : audio) (d : (float, Bigarray.float64_elt) G.t) =
 
 let codec (a : audio) = a.icodec
 
-let normalise (a : audio) : unit =
-  let c = 2147483648 in
-  G.scalar_mul_ (1. /. float_of_int c) a.data
+let normalize ?(factor : float = 2147483648.) (a : audio) : unit =
+  G.scalar_mul_ (1. /. factor) a.data
