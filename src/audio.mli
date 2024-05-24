@@ -19,7 +19,17 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+(**
+    The {!Audio} module defines the needed types around the representation of 
+    an audio file and more precisely an audio data. Most of the things here are
+    used internally, but can still be usefull if you want, for example, to create
+    your audio data directly from OCaml (instead of reading it from a file). *)
+
 open Owl
+
+(**
+    Alias of the generic [Ndarray] datastructure from [Owl]. This is used
+    internally to make the computations around the audio data *)
 module G = Dense.Ndarray.Generic
 
 (**
@@ -57,7 +67,12 @@ module Metadata : sig
 end
 
 (**
-    {1 Audio File Data}
+    {1 Audio manipulation}
+
+    Most of these functions are used internally, and you'll probably just use the {!Audio.normalise}
+    function to normalize the audio data before writing it back to a file. *)
+
+(**
     High level representation of an audio file data, used to store data when reading audio files. *)
 type audio
 
@@ -94,9 +109,9 @@ val codec : audio -> Avutil.audio Avcodec.params
 (**
     [codec audio] returns the codec of the given audio element *)
 
-val normalise : audio -> unit
+val normalize : ?factor:float -> audio -> unit
 (**
-    [normalise audio] normalises the data of the given audio data element by
+    [normalise ?factor audio] normalises the data of the given audio data element by
     the maximum value of an int32.
 
     Use this function when you did not normalized you audio and you need to
@@ -108,7 +123,7 @@ val normalise : audio -> unit
     We recommend to always normalize your audio once you first read it from a source
     file.
 
-    The operation is performed in place (impure function)
+    The operation is performed in place (impure function).
 
     Example:
 

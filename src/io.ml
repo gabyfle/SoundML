@@ -31,6 +31,97 @@ module FrameToS32Bytes =
 module FloatArrayToFrame =
   Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
 
+module WavWriter = struct
+  (* see https://docs.fileformat.com/audio/wav/ *)
+  (* see http://soundfile.sapp.org/doc/WaveFormat/ *)
+  type header =
+    { num_channels: int
+    ; sample_rate: int
+    ; byte_rate: int
+    ; block_align: int
+    ; bits_per_sample: int }
+
+  type t = {header: header; converter: float array -> Bytes.t}
+
+  let create_converter (format : Avutil.Sample_format.t) =
+    let func (to_bytes : float -> Bytes.t) (slice : float array) =
+      let bytes = ref Bytes.empty in
+      for i = 0 to Array.length slice - 1 do
+        let data = slice.(i) in
+        let conv = to_bytes data in
+        bytes := Bytes.cat !bytes conv
+      done ;
+      !bytes
+    in
+    match format with
+    | `Dbl | `Dblp | `Flt | `Fltp | `None ->
+        raise (Invalid_argument "Unsupported format")
+    | `S16 | `S16p ->
+        let to_bytes (data : float) =
+          let data = int_of_float (data *. (Float.pow 2. 15. -. 1.)) in
+          let bytes = Bytes.create 2 in
+          Bytes.set_int16_ne bytes 0 data ;
+          bytes
+        in
+        (func to_bytes, 16)
+    | `S32 | `S32p ->
+        let to_bytes (data : float) =
+          let data = Int32.of_float (data *. (Float.pow 2. 31. -. 1.)) in
+          let bytes = Bytes.create 4 in
+          Bytes.set_int32_ne bytes 0 data ;
+          bytes
+        in
+        (func to_bytes, 32)
+    | `S64 | `S64p ->
+        let to_bytes (data : float) =
+          let data = Int64.of_float (data *. (Float.pow 2. 63. -. 1.)) in
+          let bytes = Bytes.create 8 in
+          Bytes.set_int64_ne bytes 0 data ;
+          bytes
+        in
+        (func to_bytes, 64)
+    | `U8 | `U8p ->
+        let to_bytes (data : float) =
+          let data = int_of_float data in
+          let bytes = Bytes.create 1 in
+          Bytes.set_int8 bytes 0 data ;
+          bytes
+        in
+        (func to_bytes, 8)
+
+  let create (format : Avutil.Sample_format.t) num_channels sample_rate =
+    let converter, bits_per_sample = create_converter format in
+    let block_align = num_channels * bits_per_sample / 8 in
+    let byte_rate = sample_rate * block_align in
+    let header =
+      {num_channels; sample_rate; byte_rate; block_align; bits_per_sample}
+    in
+    {header; converter}
+
+  let convert (t : t) (slice : float array) : Bytes.t = t.converter slice
+
+  let get_header (t : t) (data_size : int) : Bytes.t =
+    (* Note: these values are only for PCM *)
+    (* TODO: investigate other lossless formats for Wav in case it exists *)
+    let header = Bytes.create 44 in
+    Bytes.blit_string "RIFF" 0 header 0 4 ;
+    Bytes.set_int32_ne header 4 (Int32.of_int (data_size - 8)) ;
+    Bytes.blit_string "WAVE" 0 header 8 4 ;
+    Bytes.blit_string "fmt " 0 header 12 4 ;
+    Bytes.set_int32_ne header 16 (Int32.of_int 16) ;
+    Bytes.set_int16_ne header 20 1 ;
+    Bytes.set_int16_ne header 22 t.header.num_channels ;
+    Printf.printf "Sample rate (header): %d\n" t.header.sample_rate ;
+    Bytes.set_int32_ne header 24 (Int32.of_int t.header.sample_rate) ;
+    Bytes.set_int32_ne header 28 (Int32.of_int t.header.byte_rate) ;
+    Printf.printf "Block align (header): %d\n" t.header.block_align ;
+    Bytes.set_int16_ne header 32 t.header.block_align ;
+    Bytes.set_int16_ne header 34 t.header.bits_per_sample ;
+    Bytes.blit_string "data" 0 header 36 4 ;
+    Bytes.set_int32_ne header 40 (Int32.of_int data_size) ;
+    header
+end
+
 let read_metadata (filename : string) (format : string) : Metadata.t =
   let open Avcodec in
   let format =
@@ -132,23 +223,46 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
     if List.mem `Variable_frame_size (capabilities ocodec) then 512
     else Audio.frame_size encoder
   in
+  let compressed, frame_size =
+    if frame_size = 0 then (false, 512) else (true, frame_size)
+  in
   let out_file = open_out_bin filename in
-  let values = data a |> G.to_array in
-  let length = Array.length values in
+  let values = data a in
+  let length = G.numel values in
   let rsp =
     FloatArrayToFrame.create in_cl ~in_sample_format in_sample_rate in_cl
       ~out_sample_format out_sample_rate
   in
+  (* if we're writing out a PCM format, we reserve the first 44 bytes *)
+  if not compressed then output_bytes out_file (Bytes.create 44) ;
+  let channels = Metadata.channels (meta a) in
+  let raw_writer = WavWriter.create out_sample_format channels in_sample_rate in
+  let values = data a |> G.to_array in
+  let data_size = ref 44 in
   for i = 0 to length / frame_size do
     let start = i * frame_size in
     let finish = min (start + frame_size) length in
     let slice = Array.sub values start (finish - start) in
     try
-      let frame = FloatArrayToFrame.convert rsp slice in
-      encode encoder (Packet.to_bytes %> output_bytes out_file) frame
-    with _ -> ()
+      if compressed then
+        let frame = FloatArrayToFrame.convert rsp slice in
+        encode encoder (Packet.to_bytes %> output_bytes out_file) frame
+      else
+        let bytes = WavWriter.convert raw_writer slice in
+        output_bytes out_file bytes ;
+        data_size := !data_size + Bytes.length bytes
+    with Avutil.Error e ->
+      Printf.eprintf "Error while encoding data: %s\n"
+        (Avutil.string_of_error e) ;
+      flush stderr ;
+      Gc.full_major () ;
+      Gc.full_major ()
   done ;
-  flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
+  if not compressed then (
+    let header = WavWriter.get_header raw_writer !data_size in
+    seek_out out_file 0 ;
+    output_bytes out_file header )
+  else flush_encoder encoder (Packet.to_bytes %> output_bytes out_file) ;
   close_out out_file ;
   Gc.full_major () ;
   Gc.full_major ()
