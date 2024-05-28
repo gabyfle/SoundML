@@ -54,5 +54,5 @@ val fftfreq : Audio.audio -> (float, Bigarray.float64_elt) Audio.G.t
 (**
     [fftfreq audio] return the FT sample frequencies.
     
-    Inspired from: np.fft.fft.
+    Implementation and inspiration from: {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html} np.fft.fftfreq}.
     @see <https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html> Numpy Documentation *)
