@@ -26,6 +26,26 @@
 open Audio
 
 (**
+    {1 Supported formats}
+    
+    {!Soundml} supports the following formats for reading and writing audio data.
+
+    {2 Reading}
+    
+    - WAV
+    - MP3
+    - FLAC
+    - OGG
+    - AIFF
+    - AU
+    - RAW
+
+    {2 Writing}
+
+    - WAV
+    - MP3 *)
+
+(**
     {1 Reading data} *)
 
 val read_metadata : string -> string -> Metadata.t
