@@ -19,6 +19,14 @@ let () =
   Audio.normalize audio ;
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
   flush stdout ;
+  let start = Sys.time () in
+  Printf.printf "Starting to get slice of audio file\n" ;
+  let audio = Audio.(audio.${-20, 180}) in
+  Printf.printf "Done in %f; Length %d\n"
+    (Sys.time () -. start)
+    (Audio.length audio) ;
+  Printf.printf "Starting to write audio file\n" ;
+  let start = Sys.time () in
   Io.write_audio audio "output.wav" "wav" ;
   Printf.printf "Done in %f; Total time: %f\n"
     (Sys.time () -. start)

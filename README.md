@@ -22,14 +22,13 @@ This project uses Opam as a package manager
 opam install soundml
 ```
 
-
 ## Roadmap
 
 * [x] Read and Write audio
 * [x] Compute the FFT of an audio signal
 * [x] Compute the IFFT of an FFT
 * [ ] Compute the spectrogram of an audio file
-* [ ] Audio slicing (in a similar way to Owl's slicing)
+* [x] Audio slicing (in a similar way to Owl's slicing)
 * [ ] Output spectrogram as an image (PNG, JPG) (* maybe & if I find any ocaml plotting library up-to-date *)
 * [ ] Basic tempo detection
 * [ ] RMS, LUFS, DBFS computation
@@ -48,6 +47,22 @@ This library heavily relies on the Owl and ocaml-ffmpeg libraries.
 | [**ocaml-ffmpeg**](https://github.com/savonet/ocaml-ffmpeg) - *OCaml bindings to the FFmpeg library.* | `>= 1.1.11` | OCaml bindings for FFmpeg. Used to read and write audio data.                                      |
 
 </div>
+
+## Inspirations
+
+This project is heavily inspired by other amazing open-source libraries such as:
+
+
+<div align=center>
+
+| Name                                              | Inspiration                                                    | Reference                                                                                                                                                                                                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**librosa**](https://github.com/librosa/librosa) | General functionalities for audio signal processing            | McFee, Brian, Colin Raffel, Dawen Liang, Daniel PW Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto. "librosa: Audio and music signal analysis in python." In Proceedings of the 14th python in science conference, pp. 18-25. 2015. |
+| [**pydub**](https://github.com/jiaaro/pydub)      | Ease of use, audio slicing using milliseconds and manipulation | -                                                                                                                                                                                                                                         |
+
+</div>
+
+Don't hesitate to check the amazing work done by the authors and contributors of these libraries!
 
 ## License
 

@@ -72,5 +72,49 @@ let set_data (a : audio) (d : (float, Bigarray.float64_elt) G.t) =
 
 let codec (a : audio) = a.icodec
 
+let sample_pos (a : audio) (x : int) =
+  Int.of_float
+    ( float_of_int x /. 1000.
+    *. float_of_int (Metadata.sample_rate (meta a))
+    *. float_of_int (Metadata.channels (meta a)) )
+
+let get_slice (slice : int * int) (a : audio) : audio =
+  let x, y = slice in
+  let x, y =
+    match (sample_pos a x, sample_pos a y) with
+    | x, y when x < 0 ->
+        (rawsize a + x, y)
+    | x, y when y < 0 ->
+        (x, rawsize a + y)
+    | x, y when x < 0 && y < 0 ->
+        (rawsize a + x, rawsize a + y)
+    | x, y ->
+        (x, y)
+  in
+  let x, y = if x < y then (x, y) else (y, x) in
+  if x < 0 || y < 0 then
+    raise
+      (Invalid_argument "Audio.get_slice: slice out of bounds, negative values")
+  else if x >= rawsize a || y >= rawsize a then
+    raise
+      (Invalid_argument
+         "Audio.get_slice: slice out of bounds, values greater than rawsize" )
+  else
+    let data = G.get_slice [[x; y]] a.data in
+    {a with data}
+
+let get (x : int) (a : audio) : float array =
+  let x = sample_pos a x in
+  let y = sample_pos a (x + 1) in
+  get_slice (x, y) a |> data |> G.to_array
+
 let normalize ?(factor : float = 2147483648.) (a : audio) : unit =
   G.scalar_mul_ (1. /. factor) a.data
+
+let ( .${} ) x s = get_slice s x
+
+let ( .%{} ) i x = get x i
+
+let ( $* ) x f = normalize ~factor:f x
+
+let ( *$ ) f x = normalize ~factor:f x

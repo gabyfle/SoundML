@@ -21,9 +21,7 @@
 
 (**
     The {!Audio} module defines the needed types around the representation of 
-    an audio file and more precisely an audio data. Most of the things here are
-    used internally, but can still be usefull if you want, for example, to create
-    your audio data directly from OCaml (instead of reading it from a file). *)
+    an audio file and more precisely an audio data. *)
 
 open Owl
 
@@ -115,6 +113,35 @@ val codec : audio -> Avutil.audio Avcodec.params
 (**
     [codec audio] returns the codec of the given audio element *)
 
+val get : int -> audio -> float array
+(**
+    [get x audio] returns the sample located at the position [x] in milliseconds.
+
+    The position [x] must be between 0 and the length of the audio element.
+    
+    Example:
+
+    {[
+        let audio = Audio.read "audio.wav" in
+        let sample = Audio.get 1000 audio in (* get the sample at 1 second *)
+    ]} *)
+
+val get_slice : int * int -> audio -> audio
+(**
+    [get_slice (start, stop) audio] returns a slice of the audio element from the position [start] to [stop].
+
+    The position [start] and [stop] must be between 0 and the length of the audio element.
+
+    This function works like Owl's slicing. Giving negative values to [start] and [stop] will slice the audio
+    element from the end of the audio element.
+
+    Example:
+
+    {[
+        let audio = Audio.read "audio.wav" in
+        let slice = Audio.get_slice audio 1000 2000 in (* get the slice from 1 to 2 seconds *)
+    ]} *)
+
 val normalize : ?factor:float -> audio -> unit
 (**
     [normalize ?factor audio] normalizes the data of the given audio data element by
@@ -140,3 +167,22 @@ val normalize : ?factor:float -> audio -> unit
         Audio.normalize audio; (* normalizing before writing *)
         Audio.write audio "audio.wav"
     ]} *)
+
+(**
+    {2 Operators on audio data}
+
+    Following the Owl's conventions, few operators are available to deal with
+    audio data. You can use them to make the code more concise and more readable.
+    They are just syntaxic sugar on functions over the {!Audio.audio} type. *)
+
+val ( .%{} ) : audio -> int -> float array
+(** Operator of {!Audio.get} *)
+
+val ( .${} ) : audio -> int * int -> audio
+(** Operator of {!Audio.get_slice} *)
+
+val ( $* ) : audio -> float -> unit
+(** Operator of {!Audio.normalize} *)
+
+val ( *$ ) : float -> audio -> unit
+(** Operator of {!Audio.normalize} *)
