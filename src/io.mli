@@ -50,7 +50,7 @@ val read_audio : string -> string -> audio
     
     {[
     let () =
-        let src = read_audio file.wav wav in
+        let src = Io.read_audio file.wav wav in
         (* ... *)
     ]}
 
@@ -58,7 +58,7 @@ val read_audio : string -> string -> audio
 
     {[
     let () =
-        let src = read_audio `Stereo file.wav wav in
+        let src = Io.read_audio `Stereo file.wav wav in
         (* ... *)
     ]} *)
 
@@ -72,7 +72,8 @@ val write_audio : audio -> string -> string -> unit
     Example usage:
     
     {[
+    (* Converting an MP3 file into a WAV file *)
     let () =
-        let src = read_audio "file.wav" "wav" in
-        write_audio src "file.wav" "aac"
+        let src = Io.read_audio "file.mp3" "mp3" in
+        Io.write_audio src "file.wav" "wav"
     ]} *)

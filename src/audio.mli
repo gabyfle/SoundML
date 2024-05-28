@@ -36,7 +36,13 @@ module G = Dense.Ndarray.Generic
     {1 Audio Metadata}
 
     This module contains the metadata of an audio file, which is used to store
-    information about the audio file when reading it from the filesystem. *)
+    information about the audio file when reading it from the filesystem.
+    
+    Note: {!Metadata} in {!Soundml} isn't the same thing as the metadata attached
+    to audio files. In {!Soundml}, we refer to {!Metadata} all the data describing
+    the audio file in itself (sample rate, number of channels, etc...). If you are
+    interested in dealing with author name, label and other metadata, we recommend
+    using the {{:https://github.com/savonet/ocaml-mm} ocaml-mm} library instead. *)
 
 module Metadata : sig
   type t
@@ -69,7 +75,7 @@ end
 (**
     {1 Audio manipulation}
 
-    Most of these functions are used internally, and you'll probably just use the {!Audio.normalise}
+    Most of these functions are used internally, and you'll probably just use the {!Audio.normalize}
     function to normalize the audio data before writing it back to a file. *)
 
 (**
@@ -111,7 +117,7 @@ val codec : audio -> Avutil.audio Avcodec.params
 
 val normalize : ?factor:float -> audio -> unit
 (**
-    [normalise ?factor audio] normalises the data of the given audio data element by
+    [normalize ?factor audio] normalizes the data of the given audio data element by
     the maximum value of an int32.
 
     Use this function when you did not normalized you audio and you need to
@@ -131,6 +137,6 @@ val normalize : ?factor:float -> audio -> unit
         let audio = Audio.read "audio.wav" in
         (* you can perform any operation here *)
         (* ... *)
-        Audio.normalise audio; (* normalizing before writing *)
+        Audio.normalize audio; (* normalizing before writing *)
         Audio.write audio "audio.wav"
     ]} *)

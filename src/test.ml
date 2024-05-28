@@ -4,7 +4,7 @@ let () =
   let beg = Sys.time () in
   Printf.printf "Starting to read audio file\n" ;
   let start = Sys.time () in
-  let audio = Io.read_audio "music.mp3" "mp3" in
+  let audio = Io.read_audio "test/sin_1k.wav" "wav" in
   let meta = Audio.meta audio in
   Printf.printf "Rawsize: %d\n" (Audio.rawsize audio) ;
   Printf.printf "Sample rate %d\n" (Audio.Metadata.sample_rate meta) ;
@@ -13,10 +13,12 @@ let () =
   Printf.printf "Done in %f; Length %d\n"
     (Sys.time () -. start)
     (Audio.length audio) ;
+  flush stdout ;
   Printf.printf "Starting to normalize audio file\n" ;
   let start = Sys.time () in
   Audio.normalize audio ;
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
+  flush stdout ;
   Io.write_audio audio "output.wav" "wav" ;
   Printf.printf "Done in %f; Total time: %f\n"
     (Sys.time () -. start)

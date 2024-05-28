@@ -31,7 +31,30 @@ module FrameToS32Bytes =
 module FloatArrayToFrame =
   Swresample.Make (Swresample.FloatArray) (Swresample.Frame)
 
-module WavWriter = struct
+module type Writer = sig
+  type header
+
+  type t = {header: header; converter: float array -> Bytes.t}
+
+  val header_size : int
+
+  val create : Avutil.Sample_format.t -> int -> int -> t
+
+  val convert : t -> float array -> Bytes.t
+
+  val get_header : t -> int -> Bytes.t
+end
+
+(* TODO: Write a "generic" writer for compressed files directly handled by
+   ffmpeg.
+
+   This generic writer have a header of size zero since it's handled by ffmpeg
+   and should use an encoder from ocaml-ffmpeg for the data. *)
+
+(* These Writer modules are private since the goal of the library isn't to deal
+   with audio input and output but rather compute analytics on the audio data *)
+
+module WavWriter : Writer = struct
   (* see https://docs.fileformat.com/audio/wav/ *)
   (* see http://soundfile.sapp.org/doc/WaveFormat/ *)
   type header =
@@ -42,6 +65,8 @@ module WavWriter = struct
     ; bits_per_sample: int }
 
   type t = {header: header; converter: float array -> Bytes.t}
+
+  let header_size = 44
 
   let create_converter (format : Avutil.Sample_format.t) =
     let func (to_bytes : float -> Bytes.t) (slice : float array) =
@@ -102,7 +127,6 @@ module WavWriter = struct
 
   let get_header (t : t) (data_size : int) : Bytes.t =
     (* Note: these values are only for PCM *)
-    (* TODO: investigate other lossless formats for Wav in case it exists *)
     let header = Bytes.create 44 in
     Bytes.blit_string "RIFF" 0 header 0 4 ;
     Bytes.set_int32_ne header 4 (Int32.of_int (data_size - 8)) ;
@@ -111,16 +135,18 @@ module WavWriter = struct
     Bytes.set_int32_ne header 16 (Int32.of_int 16) ;
     Bytes.set_int16_ne header 20 1 ;
     Bytes.set_int16_ne header 22 t.header.num_channels ;
-    Printf.printf "Sample rate (header): %d\n" t.header.sample_rate ;
     Bytes.set_int32_ne header 24 (Int32.of_int t.header.sample_rate) ;
     Bytes.set_int32_ne header 28 (Int32.of_int t.header.byte_rate) ;
-    Printf.printf "Block align (header): %d\n" t.header.block_align ;
     Bytes.set_int16_ne header 32 t.header.block_align ;
     Bytes.set_int16_ne header 34 t.header.bits_per_sample ;
     Bytes.blit_string "data" 0 header 36 4 ;
     Bytes.set_int32_ne header 40 (Int32.of_int data_size) ;
     header
 end
+
+(* TODO: Return a first class module representing a writer *)
+let get_writer (format : string) : bool =
+  match format with "wav" -> true | _ -> false
 
 let read_metadata (filename : string) (format : string) : Metadata.t =
   let open Avcodec in
@@ -129,7 +155,7 @@ let read_metadata (filename : string) (format : string) : Metadata.t =
     | Some f ->
         f
     | None ->
-        failwith ("Could not find format: " ^ format)
+        raise (Invalid_argument ("Could not find format: " ^ format))
   in
   let input = Av.open_input ~format filename in
   let _, _, icodec = Av.find_best_audio_stream input in
@@ -149,7 +175,7 @@ let read_audio (filename : string) (format : string) : audio =
     | Some f ->
         f
     | None ->
-        failwith ("Could not find format: " ^ format)
+        raise (Invalid_argument ("Could not find format: " ^ format))
   in
   let input = Av.open_input ~format filename in
   let idx, istream, icodec = Av.find_best_audio_stream input in
@@ -203,7 +229,7 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
     | Some f ->
         f
     | None ->
-        failwith ("Could not find format: " ^ format)
+        raise (Invalid_argument ("Could not find format: " ^ format))
   in
   let ocodec = Av.Format.get_audio_codec_id format |> Audio.find_encoder in
   (* we first need to gather data about the codec used to decode the file *)
@@ -224,7 +250,7 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
     else Audio.frame_size encoder
   in
   let compressed, frame_size =
-    if frame_size = 0 then (false, 512) else (true, frame_size)
+    if frame_size = 0 then (false, 1024) else (true, frame_size)
   in
   let out_file = open_out_bin filename in
   let values = data a in
@@ -237,12 +263,12 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
   if not compressed then output_bytes out_file (Bytes.create 44) ;
   let channels = Metadata.channels (meta a) in
   let raw_writer = WavWriter.create out_sample_format channels in_sample_rate in
-  let values = data a |> G.to_array in
+  let values = data a in
   let data_size = ref 44 in
   for i = 0 to length / frame_size do
     let start = i * frame_size in
     let finish = min (start + frame_size) length in
-    let slice = Array.sub values start (finish - start) in
+    let slice = values |> G.get_slice [[start; finish - 1]] |> G.to_array in
     try
       if compressed then
         let frame = FloatArrayToFrame.convert rsp slice in
@@ -251,12 +277,20 @@ let write_audio (a : audio) (filename : string) (format : string) : unit =
         let bytes = WavWriter.convert raw_writer slice in
         output_bytes out_file bytes ;
         data_size := !data_size + Bytes.length bytes
-    with Avutil.Error e ->
-      Printf.eprintf "Error while encoding data: %s\n"
-        (Avutil.string_of_error e) ;
-      flush stderr ;
-      Gc.full_major () ;
-      Gc.full_major ()
+    with
+    | Avutil.Error e ->
+        Printf.eprintf "Error while encoding data: %s\n"
+          (Avutil.string_of_error e) ;
+        flush stderr ;
+        Gc.full_major () ;
+        Gc.full_major () ;
+        exit 1
+    | _ ->
+        Printf.eprintf "An unknown error occured while encoding the file.\n" ;
+        flush stderr ;
+        Gc.full_major () ;
+        Gc.full_major () ;
+        exit 1
   done ;
   if not compressed then (
     let header = WavWriter.get_header raw_writer !data_size in
