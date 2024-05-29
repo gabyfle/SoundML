@@ -1,5 +1,7 @@
 <div align='center'>
 
+<img src="soundml_logo.svg" width="140px" alt="SoundML Logo">
+
 <h1>SoundML</h1>
 <p>A little and very high level library to perform basic operations on audio files in the OCaml language</p>
 
@@ -67,3 +69,7 @@ Don't hesitate to check the amazing work done by the authors and contributors of
 ## License
 
 Distributed under the Apache License Version 2.0. See LICENSE for more information.
+
+## Acknowledgements
+
+* Logo generated with DALL-E by OpenAI
