@@ -19,11 +19,9 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-val fft :
-  ?norm:bool -> Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
+val fft : Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
 (**
-    [fft ?norm audio] computes an FFT on the slice [start; finish] of the given audio data.
-    By default, [norm] is set to [true]. This will normalise the audio data before computing the FFT.
+    [fft audio] computes an FFT on the the given audio data.
     
     Examples:
 
@@ -56,3 +54,29 @@ val fftfreq : Audio.audio -> (float, Bigarray.float64_elt) Audio.G.t
     
     Implementation and inspiration from: {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html} np.fft.fftfreq}.
     @see <https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html> Numpy Documentation *)
+
+val spectrogram :
+     ?window:(int -> Owl_dense_ndarray.D.arr)
+  -> ?nfft:int
+  -> ?window_size:int option
+  -> Audio.audio
+  -> int
+  -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
+(**
+    [spectrogram ?window ?nfft ?window_size audio n] computes the spectrogram of the given audio data.
+
+    [?window] is the window function to apply to the audio data. The default window function is the hamming function
+    from {!Owl.Signal.hamming}.
+    [?nfft] is the number of points to use for the FFT. Default is [2048].
+    [?window_size] is the size of the window to apply to the audio data. Default is [None].
+    [audio] is the audio data.
+    [n] is the number of points to use for the FFT.
+    
+    Examples:
+
+    {[
+        let () =
+            let src = read_audio file.wav wav in
+            let spec = spectrogram src 1024 in
+            (* ... *)
+    ]} *)

@@ -145,16 +145,12 @@ val get_slice : int * int -> audio -> audio
 val normalize : ?factor:float -> audio -> unit
 (**
     [normalize ?factor audio] normalizes the data of the given audio data element by
-    the maximum value of an int32.
+    the [?factor] parameter, by default equal to $2^31 - 1$.
 
-    Use this function when you did not normalized you audio and you need to
-    either plot the data or write it back to an audio file.
+    Use this function when you need to normalize the audio data by a certain factor.
     
-    If you forgot to normalize the data, you might get some values that goes
-    beyond 1.0 or under -1.0, which will surely make the audio sound distorted.
-
-    We recommend to always normalize your audio once you first read it from a source
-    file.
+    Warning: if you normalize the data and end up getting values that goes
+    beyond 1.0 or under -1.0, it will surely make the audio sound distorted.
 
     The operation is performed in place (impure function).
 
@@ -164,7 +160,8 @@ val normalize : ?factor:float -> audio -> unit
         let audio = Audio.read "audio.wav" in
         (* you can perform any operation here *)
         (* ... *)
-        Audio.normalize audio; (* normalizing before writing *)
+        let factor = (* ... *) in
+        Audio.normalize ?factor audio; (* normalizing before writing *)
         Audio.write audio "audio.wav"
     ]} *)
 
@@ -181,8 +178,8 @@ val ( .%{} ) : audio -> int -> float array
 val ( .${} ) : audio -> int * int -> audio
 (** Operator of {!Audio.get_slice} *)
 
-val ( $* ) : audio -> float -> unit
+val ( $/ ) : audio -> float -> unit
 (** Operator of {!Audio.normalize} *)
 
-val ( *$ ) : float -> audio -> unit
+val ( /$ ) : float -> audio -> unit
 (** Operator of {!Audio.normalize} *)

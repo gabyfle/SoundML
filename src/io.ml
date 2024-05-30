@@ -68,6 +68,9 @@ let read_audio (filename : string) (format : string) : audio =
   let duration = Av.get_duration ~format:`Millisecond istream in
   let bit_rate = Audio.get_bit_rate icodec in
   let sample_width = Audio.get_bit_rate icodec / (nb_channels * out_sr) in
+  let bit_depth = bit_rate / (out_sr * nb_channels) in
+  Printf.printf "Bit rate: %d\n" bit_rate ;
+  Printf.printf "Bit depth: %d\n" bit_depth ;
   let nsamples =
     Int64.to_float duration *. float_of_int out_sr *. Float.pow 10. (-3.)
     *. float_of_int nb_channels
@@ -83,7 +86,10 @@ let read_audio (filename : string) (format : string) : audio =
         for i = 0 to length / 4 do
           let offset = i * 4 in
           if offset + 4 <= length then (
-            let value = Int32.to_float (Bytes.get_int32_ne bytes offset) in
+            let value =
+              (* we divide by 2^31 - 1 since it's an int32 value *)
+              Int32.to_float (Bytes.get_int32_ne bytes offset) /. 2147483647.
+            in
             G.set data [|!rsamples|] value ;
             rsamples := !rsamples + 1 )
         done ;
