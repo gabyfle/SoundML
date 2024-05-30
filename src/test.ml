@@ -1,10 +1,48 @@
+(*let () = let mat = Owl.Dense.Ndarray.D.zeros [|6; 6|] in let vector =
+  Owl.Dense.Ndarray.D.ones [|6|] in let vector = Owl.Dense.Ndarray.D.reshape
+  vector [|6; 1|] in Owl.Dense.Ndarray.D.print mat ;
+  Owl.Dense.Ndarray.D.set_slice [[]; [0]] mat vector ; Owl.Dense.Ndarray.D.print
+  mat*)
+
+let value_to_color value =
+  let normalized_value = min 1.0 (max 0.0 value) in
+  let g = int_of_float (255. *. (1. -. normalized_value)) in
+  Graphics.rgb g g g
+
+let _plot_spectrogram f t spectrogram =
+  let spectrogram = Audio.G.abs spectrogram |> Audio.G.re_z2d in
+  let width = 1280 in
+  let height = 720 in
+  let spec_width = Array.length t in
+  let spec_height = Array.length f in
+  Graphics.open_graph (Printf.sprintf " %dx%d" width height) ;
+  let min_db = -120. in
+  let max_db = 0. in
+  for i = 0 to spec_width - 1 do
+    for j = 0 to spec_height - 1 do
+      let value =
+        Audio.G.get spectrogram [|j; i|] |> log10 |> fun x -> 10. *. x
+      in
+      let normalized_value = (value -. min_db) /. (max_db -. min_db) in
+      Graphics.set_color (value_to_color normalized_value) ;
+      let x = i * width / spec_width in
+      let y = j * height / spec_height in
+      Graphics.fill_rect x y (width / spec_width) (height / spec_height)
+    done
+  done ;
+  try
+    let key_pressed = Graphics.wait_next_event [Graphics.Key_pressed] in
+    if key_pressed.Graphics.keypressed then
+      match key_pressed.Graphics.key with 'q' -> raise Exit | _ -> ()
+  with Exit | Graphics.Graphic_failure _ -> Graphics.close_graph () ; exit 0
+
 let () =
   Printexc.record_backtrace true ;
   let open Soundml in
   let beg = Sys.time () in
   Printf.printf "Starting to read audio file\n" ;
   let start = Sys.time () in
-  let audio = Io.read_audio "music.wav" "wav" in
+  let audio = Io.read_audio "test/sin_1k.wav" "wav" in
   let meta = Audio.meta audio in
   Printf.printf "Rawsize: %d\n" (Audio.rawsize audio) ;
   Printf.printf "Sample rate %d\n" (Audio.Metadata.sample_rate meta) ;
@@ -16,15 +54,21 @@ let () =
   flush stdout ;
   Printf.printf "Starting to normalize audio file\n" ;
   let start = Sys.time () in
-  Audio.normalize audio ;
+  (*Audio.normalize audio ;*)
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
   flush stdout ;
+  Printf.printf "Starting to compute spectrogram audio file\n" ;
   let start = Sys.time () in
-  Printf.printf "Starting to get slice of audio file\n" ;
-  let audio = Audio.(audio.${-20, 180}) in
-  Printf.printf "Done in %f; Length %d\n"
-    (Sys.time () -. start)
-    (Audio.length audio) ;
+  let spectrogram = Analysis.spectrogram ~nfft:1024 audio 512 in
+  let testing = Audio.(audio.${0, 1}) in
+  Audio.G.print (Audio.data testing) ~max_col:10 ;
+  Printf.printf "Value at x=2000: %f\n"
+    (Audio.G.get (Audio.data audio) [|2000|]) ;
+  Printf.printf "Done in %f\n" (Sys.time () -. start) ;
+  flush stdout ;
+  Npy.write (spectrogram |> Audio.G.re_z2d |> Audio.G.abs) "spectrogram.npy" ;
   Printf.printf "Starting to write audio file\n" ;
   let start = Sys.time () in
-  Io.write_audio audio "output.mp3" "wav"
+  Io.write_audio audio "output.mp3" "wav" ;
+  Printf.printf "Done in %f\n" (Sys.time () -. start) ;
+  Printf.printf "Total time: %f\n" (Sys.time () -. beg)
