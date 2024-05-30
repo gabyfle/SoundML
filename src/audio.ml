@@ -108,13 +108,13 @@ let get (x : int) (a : audio) : float array =
   let y = sample_pos a (x + 1) in
   get_slice (x, y) a |> data |> G.to_array
 
-let normalize ?(factor : float = 2147483648.) (a : audio) : unit =
+let normalize ?(factor : float = 2147483647.) (a : audio) : unit =
   G.scalar_mul_ (1. /. factor) a.data
 
 let ( .${} ) x s = get_slice s x
 
 let ( .%{} ) i x = get x i
 
-let ( $* ) x f = normalize ~factor:f x
+let ( $/ ) x f = normalize ~factor:f x
 
-let ( *$ ) f x = normalize ~factor:f x
+let ( /$ ) f x = normalize ~factor:f x
