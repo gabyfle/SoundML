@@ -47,7 +47,9 @@ let spectrogram ?(window = Owl.Signal.hamming) ?(nfft = 2048)
   let window = window window_size in
   let hop_size = window_size - noverlap in
   let nframes = ((rawsize a - window_size) / hop_size) + 1 in
+  let fs = float_of_int (Metadata.sample_rate (meta a)) in
   let spectrogram = G.zeros Bigarray.Complex64 [|(nfft / 2) + 1; nframes|] in
+  let scale = 1.0 /. (fs *. G.sum' G.(window * window)) in
   for i = 0 to nframes - 1 do
     let start = i * hop_size in
     let stop = start + window_size in
@@ -57,4 +59,4 @@ let spectrogram ?(window = Owl.Signal.hamming) ?(nfft = 2048)
     let ft = G.reshape ft [|(G.shape ft).(0); 1|] in
     G.set_slice [[]; [i]] spectrogram ft
   done ;
-  spectrogram
+  G.(Complex.{re= scale; im= 0.} $* spectrogram)

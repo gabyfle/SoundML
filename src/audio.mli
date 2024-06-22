@@ -113,7 +113,7 @@ val codec : audio -> Avutil.audio Avcodec.params
 (**
     [codec audio] returns the codec of the given audio element *)
 
-val get : int -> audio -> float array
+val get : int -> audio -> float
 (**
     [get x audio] returns the sample located at the position [x] in milliseconds.
 
@@ -172,7 +172,7 @@ val normalize : ?factor:float -> audio -> unit
     audio data. You can use them to make the code more concise and more readable.
     They are just syntaxic sugar on functions over the {!Audio.audio} type. *)
 
-val ( .%{} ) : audio -> int -> float array
+val ( .%{} ) : audio -> int -> float
 (** Operator of {!Audio.get} *)
 
 val ( .${} ) : audio -> int * int -> audio
