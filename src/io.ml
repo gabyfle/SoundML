@@ -75,6 +75,8 @@ let read_audio (filename : string) (format : string) : audio =
     Int64.to_float duration *. float_of_int out_sr *. Float.pow 10. (-3.)
     *. float_of_int nb_channels
   in
+  (* we're a bit over-evaluating the size of the number of samples to alloc
+     enought memory just before starting the reading process *)
   let data = G.create Bigarray.Float64 [|int_of_float (nsamples *. 1.01)|] 0. in
   let rsamples = ref 0 in
   (* number of read samples during the process *)
@@ -87,8 +89,8 @@ let read_audio (filename : string) (format : string) : audio =
           let offset = i * 4 in
           if offset + 4 <= length then (
             let value =
-              (* we divide by 2^31 - 1 since it's an int32 value *)
-              Int32.to_float (Bytes.get_int32_ne bytes offset) /. 2147483647.
+              Int32.to_float (Bytes.get_int32_ne bytes offset)
+              /. (Float.pow 2. (float_of_int bit_depth) -. 1.)
             in
             G.set data [|!rsamples|] value ;
             rsamples := !rsamples + 1 )

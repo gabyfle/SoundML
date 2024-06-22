@@ -42,7 +42,7 @@ let () =
   let beg = Sys.time () in
   Printf.printf "Starting to read audio file\n" ;
   let start = Sys.time () in
-  let audio = Io.read_audio "test/sin_1k.wav" "wav" in
+  let audio = Io.read_audio "test/noise.wav" "wav" in
   let meta = Audio.meta audio in
   Printf.printf "Rawsize: %d\n" (Audio.rawsize audio) ;
   Printf.printf "Sample rate %d\n" (Audio.Metadata.sample_rate meta) ;
@@ -52,23 +52,17 @@ let () =
     (Sys.time () -. start)
     (Audio.length audio) ;
   flush stdout ;
-  Printf.printf "Starting to normalize audio file\n" ;
-  let start = Sys.time () in
-  (*Audio.normalize audio ;*)
-  Printf.printf "Done in %f\n" (Sys.time () -. start) ;
-  flush stdout ;
   Printf.printf "Starting to compute spectrogram audio file\n" ;
   let start = Sys.time () in
   let spectrogram = Analysis.spectrogram ~nfft:1024 audio 512 in
   let testing = Audio.(audio.${0, 1}) in
   Audio.G.print (Audio.data testing) ~max_col:10 ;
-  Printf.printf "Value at x=2000: %f\n"
-    (Audio.G.get (Audio.data audio) [|2000|]) ;
+  Printf.printf "Value at x=2000: %f\n" Audio.(audio.%{2000}) ;
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
   flush stdout ;
   Npy.write (spectrogram |> Audio.G.re_z2d |> Audio.G.abs) "spectrogram.npy" ;
   Printf.printf "Starting to write audio file\n" ;
   let start = Sys.time () in
-  Io.write_audio audio "output.mp3" "wav" ;
+  Io.write_audio audio "output.mp3" "mp3" ;
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
   Printf.printf "Total time: %f\n" (Sys.time () -. beg)
