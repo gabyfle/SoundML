@@ -69,8 +69,6 @@ let read_audio (filename : string) (format : string) : audio =
   let bit_rate = Audio.get_bit_rate icodec in
   let sample_width = Audio.get_bit_rate icodec / (nb_channels * out_sr) in
   let bit_depth = bit_rate / (out_sr * nb_channels) in
-  Printf.printf "Bit rate: %d\n" bit_rate ;
-  Printf.printf "Bit depth: %d\n" bit_depth ;
   let nsamples =
     Int64.to_float duration *. float_of_int out_sr *. Float.pow 10. (-3.)
     *. float_of_int nb_channels
