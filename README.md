@@ -30,10 +30,13 @@ opam install soundml
 * [x] Compute the FFT of an audio signal
 * [x] Compute the IFFT of an FFT
 * [ ] Compute the spectrogram of an audio file
+  * [ ] Use a generic spectral function (similar to `matplotlib.mlab`) to compute the spectrogram
+  * [ ] Allow different types of specgram computation (mel, mag, etc...)
 * [x] Audio slicing (in a similar way to Owl's slicing)
-* [ ] Output spectrogram as an image (PNG, JPG) (* maybe & if I find any ocaml plotting library up-to-date *)
-* [ ] Basic tempo detection
-* [ ] RMS, LUFS, DBFS computation
+* [ ] Output spectrograms and ffts as an image (PNG) (using FFMPEG's library to output a PNG out of Owl's NDarray)
+* [ ] Basic onset detection algorithms
+* [ ] RMS
+  * [ ] LUFS and DBSF are left for further version (LUFS algorithm might require in-depth review of the standards) 
 
 ## Requirements
 
