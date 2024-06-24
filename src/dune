@@ -23,7 +23,7 @@
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries owl audio analysis io))
+ (libraries owl audio analysis io feature))
 
 (executable ; for testing purpose only, have to be removed
  (name test)
