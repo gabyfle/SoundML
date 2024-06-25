@@ -18,3 +18,15 @@
 (*  limitations under the License.                                           *)
 (*                                                                           *)
 (*****************************************************************************)
+
+type spectral_mode = PSD | Angle | Phase | Magnitude | Complex | Default
+
+type spectral_side = OneSided | TwoSided
+
+val specgram :
+     ?nfft:int
+  -> ?fs:int
+  -> ?noverlap:int
+  -> Audio.audio
+  -> (float, Bigarray.float64_elt) Audio.G.t
+     * (float, Bigarray.float64_elt) Owl_dense_ndarray_generic.t

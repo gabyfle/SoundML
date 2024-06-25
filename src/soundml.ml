@@ -22,3 +22,7 @@
 module Audio = Audio
 module Io = Io
 module Analysis = Analysis
+
+module Feature = struct
+  module Specgram = Specgram
+end
