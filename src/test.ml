@@ -53,14 +53,19 @@ let () =
     (Audio.length audio) ;
   flush stdout ;
   Printf.printf "Starting to compute spectrogram audio file\n" ;
-  let start = Sys.time () in
-  let spectrogram = Analysis.spectrogram ~nfft:1024 audio 512 in
-  let testing = Audio.(audio.${0, 1}) in
-  Audio.G.print (Audio.data testing) ~max_col:10 ;
-  Printf.printf "Value at x=2000: %f\n" Audio.(audio.%{2000}) ;
+  let ttime = ref 0. in
+  for _ = 0 to 1000 do
+    let start = Sys.time () in
+    let _specgram, _ = Specgram.specgram audio in
+    ttime := !ttime +. (Sys.time () -. start)
+  done ;
+  Printf.printf "Average time: %f\n" (!ttime /. 1000.) ;
+  let spectrogram, freqs = Specgram.specgram audio in
   Printf.printf "Done in %f\n" (Sys.time () -. start) ;
   flush stdout ;
-  Npy.write (spectrogram |> Audio.G.re_z2d |> Audio.G.abs) "spectrogram.npy" ;
+  Npy.write (Audio.data audio) "audio.npy" ;
+  Npy.write spectrogram "spectrogram.npy" ;
+  Npy.write freqs "freqs.npy" ;
   Printf.printf "Starting to write audio file\n" ;
   let start = Sys.time () in
   Io.write_audio audio "output.mp3" "mp3" ;

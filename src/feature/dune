@@ -1,6 +1,6 @@
 (library
- (name spectral)
+ (name feature)
  (package soundml)
  (modules fft specgram)
  (libraries audio owl analysis)
- (wrapped true))
+ (wrapped false))
