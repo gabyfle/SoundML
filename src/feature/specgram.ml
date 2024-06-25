@@ -38,12 +38,12 @@ let fftfreq (n : int) (d : float) =
 
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
-let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
-    ?(window = Signal.hamming) ?(detrend = Detrend.none) ?(noverlap : int = 0)
-    ?(side = OneSided) ?(y : Audio.audio option = None) ?(mode = Default)
-    ?(pad_to = None) ?(scale_by_freq = None) (x : Audio.audio) =
+let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
+    ?(detrend = Detrend.none) ?(noverlap : int = 0) ?(side = OneSided)
+    ?(mode = Default) ?(pad_to = None) ?(scale_by_freq = None)
+    ?(y : Audio.audio option = None) (x : Audio.audio) =
   let same_data =
-    match y with Some y -> Audio.data x = Audio.data y | None -> false
+    match y with Some y -> Audio.data x = Audio.data y | None -> true
   in
   let pad_to = match pad_to with Some x -> x | None -> nfft in
   assert (pad_to >= nfft) ;
@@ -75,39 +75,37 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
         Audio.G.pad_ ~out:y ~v:0. [[0; delta - 1]; [0; 0]] y ) ;
   let scale_by_freq =
     match mode with
-    | PSD ->
-        false
-    | _ -> (
+    | PSD -> (
       match scale_by_freq with Some x -> x | None -> true )
+    | _ -> (
+      match scale_by_freq with Some x -> x | None -> false )
   in
-  let num_freqs, scaling_factor, freq_center =
+  let num_freqs, scaling_factor, _freq_center =
     match (side, pad_to mod 2) with
-    | OneSided, 0 ->
+    | OneSided, 1 ->
         ((pad_to / 2) + 1, 2., 0)
     | OneSided, _ ->
         ((pad_to + 1) / 2, 2., 0)
-    | TwoSided, 0 ->
+    | TwoSided, 1 ->
         (pad_to, 1., pad_to / 2)
     | TwoSided, _ ->
         (pad_to, 1., (pad_to - 1) / 2)
   in
   let window = window nfft in
-  (* reshaped window, we'll need the original one later *)
-  let rwindow = Audio.G.reshape window [|-1; 1|] in
-  let res = Audio.G.slide ~axis:0 ~window:nfft ~step:(nfft - noverlap) x in
-  Audio.G.transpose_ ~out:res res ;
+  let window =
+    Audio.G.reshape Audio.G.(window * ones Bigarray.float64 [|nfft|]) [|-1; 1|]
+  in
+  let res =
+    Audio.G.slide ~window:nfft ~step:(nfft - noverlap) x |> Audio.G.transpose
+  in
   let res = detrend res in
-  let res = Audio.G.(res * rwindow) in
+  let res = Audio.G.(res * window) in
   let res = Fft.D.rfft res ~axis:0 in
-  let len = Array.get (Audio.G.shape res) 0 in
-  Audio.G.pad_ ~out:res ~v:Complex.zero [[0; pad_to - len]; [0; 0]] res ;
-  Audio.G.get_slice_ ~out:res [[0; num_freqs - 1]; []] res ;
+  Audio.G.get_slice_ ~out:res [[]; [num_freqs]] res ;
   let freqs = fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
-      let res_y =
-        Audio.G.slide ~axis:0 ~window:nfft ~step:(nfft - noverlap) y
-      in
-      Audio.G.transpose_ ~out:res_y res_y ;
+      let res_y = Audio.G.slide ~window:nfft ~step:(nfft - noverlap) y in
+      let res_y = Audio.G.transpose res_y in
       let res_y = detrend res_y in
       let res_y = Audio.G.(res_y * window) in
       let res_y = Fft.D.rfft res_y ~axis:0 in
@@ -119,31 +117,35 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
     else
       match mode with
       | PSD | Default ->
-          Audio.G.conj_ ~out:res res ;
-          Audio.G.mul_ ~out:res res res
+          let conj = Audio.G.conj res in
+          Audio.G.mul_ ~out:res conj res
       | Magnitude ->
-          Audio.G.abs_ ~out:res res ;
-          Audio.G.scalar_mul_ ~out:res
-            Complex.{re= Audio.G.sum' window; im= 0.}
-            res
+          Audio.G.abs_ res ;
+          Audio.G.scalar_mul_ Complex.{re= Audio.G.sum' window; im= 0.} res
       | Phase | Angle ->
           let angle = Audio.G.angle res in
           Audio.G.set_slice_ ~out:res [[0; num_freqs - 1]; []] angle res
       | Complex ->
-          Audio.G.scalar_div_ ~out:res
-            Complex.{re= Audio.G.sum' window; im= 0.}
-            res ) ;
+          Audio.G.scalar_div_ Complex.{re= Audio.G.sum' window; im= 0.} res ) ;
   if mode = PSD then (
-    let slice = if nfft mod 2 = 0 then [[1]; [-1]] else [[1]; []] in
+    let slice = if nfft mod 2 = 0 then [[1; -1]; []] else [[1]; []] in
     let gslice = Audio.G.get_slice slice res in
-    Audio.G.scalar_mul_ ~out:gslice Complex.{re= scaling_factor; im= 0.} gslice ;
-    Audio.G.set_slice_ ~out:res slice gslice res ;
+    Audio.G.mul_scalar_ ~out:gslice gslice Complex.{re= scaling_factor; im= 0.} ;
+    Audio.G.set_slice slice res gslice ;
     if scale_by_freq then (
-      Audio.G.scalar_div_ ~out:res Complex.{re= float_of_int fs; im= 0.} res ;
-      let n = Audio.G.sum' (Audio.G.scalar_pow (float_of_int 2) window) in
-      Audio.G.scalar_div_ ~out:res Complex.{re= n; im= 0.} res )
+      let window = Audio.G.abs window in
+      Audio.G.div_scalar_ ~out:res res Complex.{re= float_of_int fs; im= 0.} ;
+      let n = Audio.G.sum' (Audio.G.pow_scalar window (float_of_int 2)) in
+      Audio.G.div_scalar_ ~out:res res Complex.{re= n; im= 0.} )
     else
+      let window = Audio.G.abs window in
       let n = Float.pow (Audio.G.sum' window) 2. in
-      Audio.G.scalar_div_ ~out:res Complex.{re= n; im= 0.} res ) ;
+      Audio.G.div_scalar_ ~out:res res Complex.{re= n; im= 0.} ) ;
   (* TODO: Adjust the frequency range and the result wth a roll *)
+  (res, freqs)
+
+let specgram ?(nfft : int = 256) ?(fs : int = 2) ?(noverlap : int = 128)
+    (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~noverlap x in
+  let res = Audio.G.re_z2d res in
   (res, freqs)
