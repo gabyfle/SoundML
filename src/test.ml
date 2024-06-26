@@ -40,22 +40,18 @@ let () =
   Owl.Log.set_level Owl.Log.DEBUG ;
   Printexc.record_backtrace true ;
   let open Soundml in
-  let beg = Sys.time () in
   Owl.Log.debug "Starting to read audio file" ;
   let start = Sys.time () in
-  let audio = Io.read_audio "test.wav" "wav" in
+  let audio = Io.read "test/noise.wav" "wav" in
   Owl.Log.debug "Done in %f;\n" (Sys.time () -. start) ;
   flush stdout ;
   Owl.Log.debug "Starting to compute spectrogram audio file" ;
   let start = Sys.time () in
-  let spectrogram, _freqs = Specgram.specgram audio in
+  let _spectrogram, _freqs = Feature.Spectral.specgram audio in
   Owl.Log.debug "Done in %f\n" (Sys.time () -. start) ;
-  flush stdout ;
-  (*Npy.write (Audio.data audio) "audio.npy" ;*)
-  Npy.write spectrogram "spectrogram.npy" ;
-  (*Npy.write freqs "freqs.npy" ;*)
-  Owl.Log.debug "Starting to write audio file" ;
-  let start = Sys.time () in
-  Io.write_audio audio "output.mp3" "mp3" ;
-  Owl.Log.debug "Done in %f\n" (Sys.time () -. start) ;
-  Owl.Log.debug "Total time: %f\n" (Sys.time () -. beg)
+  flush stdout
+(*Npy.write (Audio.data audio) "audio.npy" ; Npy.write spectrogram
+  "spectrogram.npy" ; (*Npy.write freqs "freqs.npy" ;*) Owl.Log.debug "Starting
+  to write audio file" ; let start = Sys.time () in Io.write_audio audio
+  "output.mp3" "mp3" ; Owl.Log.debug "Done in %f\n" (Sys.time () -. start) ;
+  Owl.Log.debug "Total time: %f\n" (Sys.time () -. beg)*)

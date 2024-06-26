@@ -48,7 +48,7 @@ let read_metadata (filename : string) (format : string) : Metadata.t =
   Gc.full_major () ;
   Metadata.create ~name:filename channels sample_width sr bit_rate
 
-let read_audio (filename : string) (format : string) : audio =
+let read (filename : string) (format : string) : audio =
   let open Avcodec in
   let format =
     match Av.Format.find_input_format format with
@@ -295,7 +295,7 @@ let get_writer (format : string) : (module Writer) =
   | _ ->
       (module GenericWriter : Writer)
 
-let write_audio (a : audio) (filename : string) (ext : string) : unit =
+let write (a : audio) (filename : string) (ext : string) : unit =
   let open Avcodec in
   let format =
     match Av.Format.guess_output_format ~short_name:ext ~filename () with
