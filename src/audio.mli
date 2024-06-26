@@ -83,7 +83,7 @@ type audio
 val create :
      Metadata.t
   -> Avutil.audio Avcodec.params
-  -> (float, Bigarray.float64_elt) G.t
+  -> (float, Bigarray.float32_elt) G.t
   -> audio
 (**
     [create metadata icodec data] creates a new audio with the given name and metadata *)
@@ -100,12 +100,12 @@ val length : audio -> int
 (**
     [length audio] returns the length (in milliseconds) of the given audio element *)
 
-val data : audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
+val data : audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio element *)
 
 val set_data :
-  audio -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t -> audio
+  audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t -> audio
 (**
     [set_data audio data] sets the data of the given audio element *)
 

@@ -50,7 +50,7 @@ end
 type audio =
   { meta: Metadata.t
   ; icodec: Avutil.audio Avcodec.params
-  ; data: (float, Bigarray.float64_elt) G.t }
+  ; data: (float, Bigarray.float32_elt) G.t }
 
 let create (meta : Metadata.t) icodec data = {meta; icodec; data}
 
@@ -67,7 +67,7 @@ let length (a : audio) : int =
 
 let data (a : audio) = a.data
 
-let set_data (a : audio) (d : (float, Bigarray.float64_elt) G.t) =
+let set_data (a : audio) (d : (float, Bigarray.float32_elt) G.t) =
   {a with data= d}
 
 let codec (a : audio) = a.icodec

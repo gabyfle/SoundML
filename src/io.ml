@@ -75,7 +75,7 @@ let read_audio (filename : string) (format : string) : audio =
   in
   (* we're a bit over-evaluating the size of the number of samples to alloc
      enought memory just before starting the reading process *)
-  let data = G.create Bigarray.Float64 [|int_of_float (nsamples *. 1.01)|] 0. in
+  let data = G.create Bigarray.Float32 [|int_of_float (nsamples *. 1.01)|] 0. in
   let rsamples = ref 0 in
   (* number of read samples during the process *)
   let rec f () =

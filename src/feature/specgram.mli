@@ -28,5 +28,5 @@ val specgram :
   -> ?fs:int
   -> ?noverlap:int
   -> Audio.audio
-  -> (float, Bigarray.float64_elt) Audio.G.t
-     * (float, Bigarray.float64_elt) Owl_dense_ndarray_generic.t
+  -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
+     * (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t

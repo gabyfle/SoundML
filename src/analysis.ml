@@ -22,12 +22,12 @@
 open Owl
 open Audio
 
-let fft (a : audio) : (Complex.t, Bigarray.complex64_elt) G.t =
-  Owl.Fft.D.rfft (data a)
+let fft (a : audio) : (Complex.t, Bigarray.complex32_elt) G.t =
+  Owl.Fft.S.rfft (data a)
 
-let ifft (ft : (Complex.t, Bigarray.complex64_elt) G.t) :
-    (float, Bigarray.float64_elt) G.t =
-  Owl.Fft.D.irfft ft
+let ifft (ft : (Complex.t, Bigarray.complex32_elt) G.t) :
+    (float, Bigarray.float32_elt) G.t =
+  Owl.Fft.S.irfft ft
 
 let fftfreq (a : audio) =
   let meta = meta a in
@@ -44,18 +44,18 @@ let fftfreq (a : audio) =
 let spectrogram ?(window = Owl.Signal.hamming) ?(nfft = 2048)
     ?(window_size = None) (a : audio) (noverlap : int) =
   let window_size = match window_size with Some x -> x | None -> nfft in
-  let window = window window_size in
+  let window = window window_size |> Audio.G.cast_d2s in
   let hop_size = window_size - noverlap in
   let nframes = ((rawsize a - window_size) / hop_size) + 1 in
   let fs = float_of_int (Metadata.sample_rate (meta a)) in
-  let spectrogram = G.zeros Bigarray.Complex64 [|(nfft / 2) + 1; nframes|] in
+  let spectrogram = G.zeros Bigarray.Complex32 [|(nfft / 2) + 1; nframes|] in
   let scale = 1.0 /. (fs *. G.sum' G.(window * window)) in
   for i = 0 to nframes - 1 do
     let start = i * hop_size in
     let stop = start + window_size in
     let frame = G.get_slice [[start; stop - 1]] (data a) in
     G.(frame *= window) ;
-    let ft = Owl.Fft.D.rfft frame in
+    let ft = Owl.Fft.S.rfft frame in
     let ft = G.reshape ft [|(G.shape ft).(0); 1|] in
     G.set_slice [[]; [i]] spectrogram ft
   done ;
