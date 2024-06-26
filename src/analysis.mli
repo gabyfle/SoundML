@@ -19,7 +19,7 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-val fft : Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
+val fft : Audio.audio -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
 (**
     [fft audio] computes an FFT on the the given audio data.
     
@@ -33,8 +33,8 @@ val fft : Audio.audio -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
     ]} *)
 
 val ifft :
-     (Complex.t, Bigarray.complex64_elt) Audio.G.t
-  -> (float, Bigarray.float64_elt) Audio.G.t
+     (Complex.t, Bigarray.complex32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
 (**
     [ifft fft] computes the inverse FFT of the given FFT data.
     
@@ -61,7 +61,7 @@ val spectrogram :
   -> ?window_size:int option
   -> Audio.audio
   -> int
-  -> (Complex.t, Bigarray.complex64_elt) Audio.G.t
+  -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
 (**
     [spectrogram ?window ?nfft ?window_size audio n] computes the spectrogram of the given audio data.
 

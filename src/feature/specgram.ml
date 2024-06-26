@@ -31,9 +31,13 @@ type spectral_side = OneSided | TwoSided
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
-  let fhalf = Arr.linspace 0. (float_of_int nslice) nslice in
-  let shalf = Arr.linspace (-.float_of_int nslice) (-1.) nslice in
-  let v = Arr.concatenate ~axis:0 [|fhalf; shalf|] in
+  let fhalf =
+    Audio.G.linspace Bigarray.Float32 0. (float_of_int nslice) nslice
+  in
+  let shalf =
+    Audio.G.linspace Bigarray.Float32 (-.float_of_int nslice) (-1.) nslice
+  in
+  let v = Audio.G.concatenate ~axis:0 [|fhalf; shalf|] in
   Arr.(1. /. (d *. float_of_int n) $* v)
 
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
@@ -91,16 +95,16 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
     | TwoSided, _ ->
         (pad_to, 1., (pad_to - 1) / 2)
   in
-  let window = window nfft in
+  let window = window nfft |> Audio.G.cast_d2s in
   let window =
-    Audio.G.reshape Audio.G.(window * ones Bigarray.float64 [|nfft|]) [|-1; 1|]
+    Audio.G.reshape Audio.G.(window * ones Bigarray.float32 [|nfft|]) [|-1; 1|]
   in
   let res =
     Audio.G.slide ~window:nfft ~step:(nfft - noverlap) x |> Audio.G.transpose
   in
   let res = detrend res in
   let res = Audio.G.(res * window) in
-  let res = Fft.D.rfft res ~axis:0 in
+  let res = Fft.S.rfft res ~axis:0 in
   Audio.G.get_slice_ ~out:res [[]; [num_freqs]] res ;
   let freqs = fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
@@ -108,7 +112,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
       let res_y = Audio.G.transpose res_y in
       let res_y = detrend res_y in
       let res_y = Audio.G.(res_y * window) in
-      let res_y = Fft.D.rfft res_y ~axis:0 in
+      let res_y = Fft.S.rfft res_y ~axis:0 in
       let len = Array.get (Audio.G.shape res_y) 0 in
       Audio.G.pad_ ~out:res_y ~v:Complex.zero [[0; pad_to - len]; [0; 0]] res_y ;
       Audio.G.get_slice_ ~out:res_y [[0; num_freqs - 1]; []] res_y ;
@@ -147,5 +151,4 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
 let specgram ?(nfft : int = 256) ?(fs : int = 2) ?(noverlap : int = 128)
     (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~noverlap x in
-  let res = Audio.G.re_z2d res in
   (res, freqs)
