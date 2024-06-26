@@ -21,13 +21,20 @@
 
 open Owl
 
+let fft (a : Audio.audio) : (Complex.t, Bigarray.complex32_elt) Audio.G.t =
+  Owl.Fft.S.rfft (Audio.data a)
+
+let ifft (ft : (Complex.t, Bigarray.complex32_elt) Audio.G.t) :
+    (float, Bigarray.float32_elt) Audio.G.t =
+  Owl.Fft.S.irfft ft
+
 module Detrend = struct
   let none = Fun.id
 end
 
-type spectral_mode = PSD | Angle | Phase | Magnitude | Complex | Default
+type mode = PSD | Angle | Phase | Magnitude | Complex | Default
 
-type spectral_side = OneSided | TwoSided
+type side = OneSided | TwoSided
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
