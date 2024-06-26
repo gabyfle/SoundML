@@ -46,7 +46,6 @@ let read_metadata (filename : string) (format : string) : Metadata.t =
   let sample_width = Audio.get_bit_rate icodec / (channels * sr) in
   Av.close input ;
   Gc.full_major () ;
-  Gc.full_major () ;
   Metadata.create ~name:filename channels sample_width sr bit_rate
 
 let read_audio (filename : string) (format : string) : audio =
@@ -69,6 +68,7 @@ let read_audio (filename : string) (format : string) : audio =
   let bit_rate = Audio.get_bit_rate icodec in
   let sample_width = Audio.get_bit_rate icodec / (nb_channels * out_sr) in
   let bit_depth = bit_rate / (out_sr * nb_channels) in
+  (* number of samples in the audio file *)
   let nsamples =
     Int64.to_float duration *. float_of_int out_sr *. Float.pow 10. (-3.)
     *. float_of_int nb_channels
@@ -76,9 +76,10 @@ let read_audio (filename : string) (format : string) : audio =
   (* we're a bit over-evaluating the size of the number of samples to alloc
      enought memory just before starting the reading process *)
   let data = G.create Bigarray.Float32 [|int_of_float (nsamples *. 1.01)|] 0. in
-  let rsamples = ref 0 in
   (* number of read samples during the process *)
-  let rec f () =
+  let rsamples = ref 0 in
+  (* each recursive call decodes a single frame *)
+  let rec decode_frames () : unit =
     match Av.read_input ~audio_frame:[istream] input with
     | `Audio_frame (i, frame) when i = idx ->
         let bytes = FrameToS32Bytes.convert rsp frame in
@@ -86,24 +87,21 @@ let read_audio (filename : string) (format : string) : audio =
         for i = 0 to length / 4 do
           let offset = i * 4 in
           if offset + 4 <= length then (
-            let value =
-              Int32.to_float (Bytes.get_int32_ne bytes offset)
-              /. (Float.pow 2. (float_of_int bit_depth) -. 1.)
-            in
+            let value = Int32.to_float (Bytes.get_int32_ne bytes offset) in
             G.set data [|!rsamples|] value ;
-            rsamples := !rsamples + 1 )
+            incr rsamples )
         done ;
-        f ()
+        decode_frames ()
     | exception Avutil.Error `Eof ->
         ()
     | _ ->
-        f ()
+        decode_frames ()
   in
-  f () ;
+  decode_frames () ;
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
-  Gc.full_major () ;
   let data = G.resize data [|!rsamples|] in
+  G.div_scalar_ ~out:data data (Float.pow 2. (float_of_int bit_depth) -. 1.) ;
   let meta =
     Metadata.create ~name:filename nb_channels sample_width out_sr bit_rate
   in
