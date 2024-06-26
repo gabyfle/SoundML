@@ -62,15 +62,15 @@ val read_metadata : string -> string -> Metadata.t
         (* ... *)
     ]} *)
 
-val read_audio : string -> string -> audio
+val read : string -> string -> audio
 (**
-    [read_audio filename format] reads an audio file returns a representation of the file.
+    [read filename format] reads an audio file returns a representation of the file.
     
     Example usage:
     
     {[
     let () =
-        let src = Io.read_audio file.wav wav in
+        let src = Io.read file.wav wav in
         (* ... *)
     ]}
 
@@ -78,16 +78,16 @@ val read_audio : string -> string -> audio
 
     {[
     let () =
-        let src = Io.read_audio `Stereo file.wav wav in
+        let src = Io.read `Stereo file.wav wav in
         (* ... *)
     ]} *)
 
 (**
     {1 Writing data} *)
 
-val write_audio : audio -> string -> string -> unit
+val write : audio -> string -> string -> unit
 (**
-    [write_audio audio filename format] writes an audio file from the given audio data element.
+    [write audio filename format] writes an audio file from the given audio data element.
     
     Example usage:
     
@@ -95,5 +95,5 @@ val write_audio : audio -> string -> string -> unit
     (* Converting an MP3 file into a WAV file *)
     let () =
         let src = Io.read_audio "file.mp3" "mp3" in
-        Io.write_audio src "file.wav" "wav"
+        Io.write src "file.wav" "wav"
     ]} *)
