@@ -37,31 +37,25 @@ let _plot_spectrogram f t spectrogram =
   with Exit | Graphics.Graphic_failure _ -> Graphics.close_graph () ; exit 0
 
 let () =
+  Owl.Log.set_level Owl.Log.DEBUG ;
   Printexc.record_backtrace true ;
   let open Soundml in
   let beg = Sys.time () in
-  Printf.printf "Starting to read audio file\n" ;
+  Owl.Log.debug "Starting to read audio file" ;
   let start = Sys.time () in
   let audio = Io.read_audio "test.wav" "wav" in
-  let meta = Audio.meta audio in
-  Printf.printf "Rawsize: %d\n" (Audio.rawsize audio) ;
-  Printf.printf "Sample rate %d\n" (Audio.Metadata.sample_rate meta) ;
-  Printf.printf "Channels %d\n" (Audio.Metadata.channels meta) ;
-  Printf.printf "Sample width %d\n" (Audio.Metadata.sample_width meta) ;
-  Printf.printf "Done in %f; Length %d\n"
-    (Sys.time () -. start)
-    (Audio.length audio) ;
+  Owl.Log.debug "Done in %f;\n" (Sys.time () -. start) ;
   flush stdout ;
-  Printf.printf "Starting to compute spectrogram audio file\n" ;
+  Owl.Log.debug "Starting to compute spectrogram audio file" ;
   let start = Sys.time () in
   let spectrogram, _freqs = Specgram.specgram audio in
-  Printf.printf "Done in %f\n" (Sys.time () -. start) ;
+  Owl.Log.debug "Done in %f\n" (Sys.time () -. start) ;
   flush stdout ;
   (*Npy.write (Audio.data audio) "audio.npy" ;*)
   Npy.write spectrogram "spectrogram.npy" ;
   (*Npy.write freqs "freqs.npy" ;*)
-  Printf.printf "Starting to write audio file\n" ;
+  Owl.Log.debug "Starting to write audio file" ;
   let start = Sys.time () in
   Io.write_audio audio "output.mp3" "mp3" ;
-  Printf.printf "Done in %f\n" (Sys.time () -. start) ;
-  Printf.printf "Total time: %f\n" (Sys.time () -. beg)
+  Owl.Log.debug "Done in %f\n" (Sys.time () -. start) ;
+  Owl.Log.debug "Total time: %f\n" (Sys.time () -. beg)

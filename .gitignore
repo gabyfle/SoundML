@@ -3,3 +3,4 @@ _build
 *.mp3
 *.npy
 *.py
+*.wav
