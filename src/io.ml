@@ -104,9 +104,10 @@ let read (filename : string) (format : string) : audio =
   if bit_depth != 3 then
     G.div_scalar_ ~out:data data (Float.pow 2. (float_of_int bit_depth))
   else
-    (* The data has been read as a int32 strings but it was actually int24
-       string *)
-    G.div_scalar_ ~out:data data (Float.pow 2. (8. +. float_of_int bit_depth)) ;
+    (* Here, the data has been converted from 24-bits to 32-bits and is from a
+       bit depth of 3. *)
+    (*G.div_scalar_ ~out:data data (Float.pow 2. 8.) ;*)
+    () ;
   let meta =
     Metadata.create ~name:filename nb_channels sample_width out_sr bit_rate
   in
@@ -218,7 +219,7 @@ module WavWriter : Writer = struct
         raise (Invalid_argument "Unsupported format")
     | `S16 | `S16p ->
         let to_bytes (data : float) =
-          let data = int_of_float (data *. (Float.pow 2. 15. -. 1.)) in
+          let data = int_of_float data in
           let bytes = Bytes.create 2 in
           Bytes.set_int16_ne bytes 0 data ;
           bytes
@@ -226,7 +227,7 @@ module WavWriter : Writer = struct
         (func to_bytes, 16)
     | `S32 | `S32p ->
         let to_bytes (data : float) =
-          let data = Int32.of_float (data *. (Float.pow 2. 31. -. 1.)) in
+          let data = Int32.of_float data in
           let bytes = Bytes.create 4 in
           Bytes.set_int32_ne bytes 0 data ;
           bytes
@@ -234,7 +235,7 @@ module WavWriter : Writer = struct
         (func to_bytes, 32)
     | `S64 | `S64p ->
         let to_bytes (data : float) =
-          let data = Int64.of_float (data *. (Float.pow 2. 63. -. 1.)) in
+          let data = Int64.of_float data in
           let bytes = Bytes.create 8 in
           Bytes.set_int64_ne bytes 0 data ;
           bytes
@@ -329,35 +330,28 @@ let write (a : audio) (filename : string) (ext : string) : unit =
   let frame_size = W.frame_size writer in
   let out_file = open_out_bin filename in
   let values = data a in
-  let length = G.numel values in
+  let length = Array.get (G.shape values) 0 in
   (* we're going first to prepare the header size inside the file *)
   output_bytes out_file (Bytes.create W.header_size) ;
-  let channels = Metadata.channels (meta a) in
-  let writer =
-    W.create in_cl channels time_base
-      (in_sample_format, out_sample_format)
-      (in_sample_rate, out_sample_rate)
-      ocodec
-  in
-  let values = data a in
   for i = 0 to length / frame_size do
     let start = i * frame_size in
-    let finish = min (start + frame_size) length in
-    let slice = values |> G.get_slice [[start; finish - 1]] |> G.to_array in
-    try W.convert writer slice |> output_bytes out_file with
-    | Avutil.Error e ->
-        Printf.eprintf "Error while encoding data: %s\n"
-          (Avutil.string_of_error e) ;
-        flush stderr ;
-        Gc.full_major () ;
-        Gc.full_major () ;
-        exit 1
-    | _ ->
-        Printf.eprintf "An unknown error occured while encoding the file.\n" ;
-        flush stderr ;
-        Gc.full_major () ;
-        Gc.full_major () ;
-        exit 1
+    if start < length then (
+      let finish = min (start + frame_size) (length - 1) in
+      let slice = values |> G.get_slice [[start; finish]] |> G.to_array in
+      try W.convert writer slice |> output_bytes out_file with
+      | Avutil.Error e ->
+          Printf.eprintf "Error while encoding data: %s\n"
+            (Avutil.string_of_error e) ;
+          flush stderr ;
+          Gc.full_major () ;
+          Gc.full_major () ;
+          exit 1
+      | _ ->
+          Printf.eprintf "An unknown error occured while encoding the file.\n" ;
+          flush stderr ;
+          Gc.full_major () ;
+          Gc.full_major () ;
+          exit 1 )
   done ;
   (* flushing the data *)
   W.flush writer |> output_bytes out_file ;
