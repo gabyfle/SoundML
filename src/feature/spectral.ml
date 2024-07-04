@@ -112,7 +112,6 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
   let res = detrend res in
   let res = Audio.G.(res * window) in
   let res = Fft.S.rfft res ~axis:0 in
-  Audio.G.get_slice_ ~out:res [[]; [num_freqs]] res ;
   let freqs = fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
       let res_y = Audio.G.slide ~window:nfft ~step:(nfft - noverlap) y in
