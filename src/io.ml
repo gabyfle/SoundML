@@ -101,13 +101,7 @@ let read (filename : string) (format : string) : audio =
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
   let data = G.resize data [|!rsamples|] in
-  if bit_depth != 3 then
-    G.div_scalar_ ~out:data data (Float.pow 2. (float_of_int bit_depth))
-  else
-    (* Here, the data has been converted from 24-bits to 32-bits and is from a
-       bit depth of 3. *)
-    (*G.div_scalar_ ~out:data data (Float.pow 2. 8.) ;*)
-    () ;
+  G.div_scalar_ ~out:data data (Float.pow 2. (float_of_int bit_depth)) ;
   let meta =
     Metadata.create ~name:filename nb_channels sample_width out_sr bit_rate
   in
@@ -336,8 +330,8 @@ let write (a : audio) (filename : string) (ext : string) : unit =
   for i = 0 to length / frame_size do
     let start = i * frame_size in
     if start < length then (
-      let finish = min (start + frame_size) (length - 1) in
-      let slice = values |> G.get_slice [[start; finish]] |> G.to_array in
+      let finish = min (start + frame_size) length in
+      let slice = values |> G.get_slice [[start; finish - 1]] |> G.to_array in
       try W.convert writer slice |> output_bytes out_file with
       | Avutil.Error e ->
           Printf.eprintf "Error while encoding data: %s\n"
