@@ -2,5 +2,5 @@
  (name feature)
  (modules spectral)
  (package soundml)
- (libraries audio owl)
+ (libraries audio utils owl)
  (wrapped true))

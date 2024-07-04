@@ -13,6 +13,13 @@
  (wrapped false))
 
 (library
+ (name utils)
+ (package soundml)
+ (modules utils)
+ (libraries audio owl)
+ (wrapped false))
+
+(library
  (name soundml)
  (public_name soundml)
  (modules soundml)

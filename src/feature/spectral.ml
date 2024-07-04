@@ -19,8 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
-
 let fft (a : Audio.audio) : (Complex.t, Bigarray.complex32_elt) Audio.G.t =
   Owl.Fft.S.rfft (Audio.data a)
 
@@ -36,23 +34,12 @@ type mode = PSD | Angle | Phase | Magnitude | Complex | Default
 
 type side = OneSided | TwoSided
 
-let fftfreq (n : int) (d : float) =
-  let nslice = ((n - 1) / 2) + 1 in
-  let fhalf =
-    Audio.G.linspace Bigarray.Float32 0. (float_of_int nslice) nslice
-  in
-  let shalf =
-    Audio.G.linspace Bigarray.Float32 (-.float_of_int nslice) (-1.) nslice
-  in
-  let v = Audio.G.concatenate ~axis:0 [|fhalf; shalf|] in
-  Arr.(1. /. (d *. float_of_int n) $* v)
-
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
-let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
-    ?(detrend = Detrend.none) ?(noverlap : int = 0) ?(side = OneSided)
-    ?(mode = Default) ?(pad_to = None) ?(scale_by_freq = None)
-    ?(y : Audio.audio option = None) (x : Audio.audio) =
+let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
+    ?(window = Owl.Signal.hann) ?(detrend = Detrend.none) ?(noverlap : int = 0)
+    ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
+    ?(scale_by_freq = None) ?(y : Audio.audio option = None) (x : Audio.audio) =
   let same_data =
     match y with Some y -> Audio.data x = Audio.data y | None -> true
   in
@@ -111,14 +98,14 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Signal.hann)
   in
   let res = detrend res in
   let res = Audio.G.(res * window) in
-  let res = Fft.S.rfft res ~axis:0 in
-  let freqs = fftfreq pad_to (1. /. float_of_int fs) in
+  let res = Owl.Fft.S.rfft res ~axis:0 in
+  let freqs = Utils.fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
       let res_y = Audio.G.slide ~window:nfft ~step:(nfft - noverlap) y in
       let res_y = Audio.G.transpose res_y in
       let res_y = detrend res_y in
       let res_y = Audio.G.(res_y * window) in
-      let res_y = Fft.S.rfft res_y ~axis:0 in
+      let res_y = Owl.Fft.S.rfft res_y ~axis:0 in
       let len = Array.get (Audio.G.shape res_y) 0 in
       Audio.G.pad_ ~out:res_y ~v:Complex.zero [[0; pad_to - len]; [0; 0]] res_y ;
       Audio.G.get_slice_ ~out:res_y [[0; num_freqs - 1]; []] res_y ;

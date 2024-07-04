@@ -4,7 +4,7 @@ let () =
   let open Soundml in
   Owl.Log.debug "Starting to read audio file" ;
   let start = Sys.time () in
-  let audio = Io.read "deadly_paradox.wav" "wav" in
+  let audio = Io.read "test/sin_1k.wav" "wav" in
   Owl.Log.debug "Done in %f;\n" (Sys.time () -. start) ;
   flush stdout ;
   Owl.Log.debug "Starting to compute spectrogram audio file" ;
@@ -17,5 +17,5 @@ let () =
   Npy.write (Audio.data audio) "audio.npy" ;
   Owl.Log.debug "Starting to write audio file" ;
   let start = Sys.time () in
-  Io.write audio "output.wav" "wav" ;
+  Io.write audio "output.mp3" "mp3" ;
   Owl.Log.debug "Done in %f\n" (Sys.time () -. start)
