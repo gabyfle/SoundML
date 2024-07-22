@@ -28,3 +28,16 @@ val fftfreq :
 (**
     Implementation of the Numpy's fftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html}numpy.fft.fftfreq} for more information. *)
+
+val roll :
+     (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+  -> int
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+(**
+    Implementation of the Numpy's roll function for 1D arrays.
+    This function is used to shift elements of an array inside the library (as we deal only with 1D arrays) and is exposed
+    as it can be sometimes usefull.
+
+    This function returns a copy of the given ndarray.
+
+    See {{:https://numpy.org/doc/stable/reference/generated/numpy.roll.html}numpy.roll} for more information. *)

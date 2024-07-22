@@ -87,7 +87,7 @@ val specgram :
     [spectrogram ?nfft ?fs ?noverlap audio] computes the spectrogram of the given audio data.
 
     [?window] is the window function to apply to the audio data. The default window function is the hamming function
-    from {!Owl.Signal.hamming}.
+    from [Owl.Signal].
     [?nfft] is the number of points to use for the FFT. Default is [2048].
     [?window_size] is the size of the window to apply to the audio data. Default is [None].
     [audio] is the audio data.
