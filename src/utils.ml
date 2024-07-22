@@ -32,7 +32,7 @@ let fftfreq (n : int) (d : float) =
   let v = Audio.G.concatenate ~axis:0 [|fhalf; shalf|] in
   Arr.(1. /. (d *. float_of_int n) $* v)
 
-let roll (x : (float, Bigarray.float32_elt) Audio.G.t) (shift : int) =
+let roll (x : ('a, 'b) Audio.G.t) (shift : int) =
   let n = Array.get (Owl.Dense.Ndarray.Generic.shape x) 0 in
   let shift = if n = 0 then 0 else shift mod n in
   if shift = 0 then x
@@ -42,9 +42,9 @@ let roll (x : (float, Bigarray.float32_elt) Audio.G.t) (shift : int) =
     Audio.G.set_slice_ ~out:result
       [[shift; n - 1]]
       result
-      (Audio.G.get_slice [[0; n - shift - 1]] x) ;
+      (Audio.G.get_slice [[0; n - shift - 1]; []] x) ;
     Audio.G.set_slice_ ~out:result
       [[0; shift - 1]]
       result
-      (Audio.G.get_slice [[n - shift; n - 1]] x) ;
+      (Audio.G.get_slice [[n - shift; n - 1]; []] x) ;
     result
