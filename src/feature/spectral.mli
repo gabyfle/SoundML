@@ -76,10 +76,21 @@ type mode =
 
 type side = OneSided | TwoSided  (** Side used to compute a spectrogram *)
 
+(**
+   Detrend functions module *)
+module Detrend : sig
+  val none : 'a -> 'a
+  (**
+    Identity function, no detrend *)
+end
+
 val specgram :
      ?nfft:int
   -> ?fs:int
   -> ?noverlap:int
+  -> ?detrend:
+       (   (float, Bigarray.float32_elt) Audio.G.t
+        -> (float, Bigarray.float32_elt) Audio.G.t )
   -> Audio.audio
   -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
      * (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
