@@ -37,8 +37,8 @@ type side = OneSided | TwoSided
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
 let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
-    ?(window = Owl.Signal.hann) ?(detrend = Detrend.none) ?(noverlap : int = 0)
-    ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
+    ?(window = Owl.Signal.hann) ?(detrend : 'a -> 'a = Detrend.none)
+    ?(noverlap : int = 0) ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
     ?(scale_by_freq = None) ?(y : Audio.audio option = None) (x : Audio.audio) =
   let same_data =
     match y with Some y -> Audio.data x = Audio.data y | None -> true
@@ -78,7 +78,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
     | _ -> (
       match scale_by_freq with Some x -> x | None -> false )
   in
-  let num_freqs, scaling_factor, _freq_center =
+  let num_freqs, scaling_factor, freq_center =
     match (side, pad_to mod 2) with
     | OneSided, 1 ->
         ((pad_to / 2) + 1, 2., 0)
@@ -138,10 +138,18 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
       let window = Audio.G.abs window in
       let n = Float.pow (Audio.G.sum' window) 2. in
       Audio.G.div_scalar_ ~out:res res Complex.{re= n; im= 0.} ) ;
-  (* TODO: Adjust the frequency range and the result wth a roll *)
+  let res, freqs =
+    match side with
+    | TwoSided ->
+        (* this will center the freqs range around 0 *)
+        (Utils.roll res (-freq_center), Utils.roll freqs (-freq_center))
+    | OneSided ->
+        (res, freqs)
+  in
+  (* TODO: implement the unwrap function *)
   (res, freqs)
 
 let specgram ?(nfft : int = 256) ?(fs : int = 2) ?(noverlap : int = 128)
-    (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~noverlap x in
+    ?(detrend : 'a -> 'a = Detrend.none) (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~noverlap ~detrend x in
   (res, freqs)
