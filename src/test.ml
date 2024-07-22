@@ -18,4 +18,9 @@ let () =
   Owl.Log.debug "Starting to write audio file" ;
   let start = Sys.time () in
   Io.write audio "output.mp3" "mp3" ;
+  let a = Array.init 10 (float_of_int |> Fun.id) in
+  let a = Owl.Dense.Ndarray.Generic.of_array Bigarray.float32 a [|10|] in
+  let a = Utils.roll a (-10) in
+  let a = Audio.G.to_array a in
+  Array.iter (Printf.printf "%f ") a ;
   Owl.Log.debug "Done in %f\n" (Sys.time () -. start)
