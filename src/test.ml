@@ -5,6 +5,7 @@ let () =
   Owl.Log.debug "Starting to read audio file" ;
   let start = Sys.time () in
   let audio = Io.read "test/sin_1k.wav" "wav" in
+  Npy.write (Feature.Spectral.rms audio) "rms.npy" ;
   Owl.Log.debug "Done in %f;\n" (Sys.time () -. start) ;
   flush stdout ;
   Owl.Log.debug "Starting to compute spectrogram audio file" ;

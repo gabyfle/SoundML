@@ -26,17 +26,27 @@ opam install soundml
 
 ## Roadmap
 
+The project is still work in progress.
+
 * [x] Read and Write audio
 * [x] Compute the FFT of an audio signal
 * [x] Compute the IFFT of an FFT
-* [ ] Compute the spectrogram of an audio file
-  * [ ] Use a generic spectral function (similar to `matplotlib.mlab`) to compute the spectrogram
-  * [ ] Allow different types of specgram computation (mel, mag, etc...)
+* [x] Compute the spectrogram of an audio file
+  * [x] Use a generic spectral function (similar to `matplotlib.mlab`) to compute the spectrogram
+  * [x] Allow different types of specgram computation (mel, mag, etc...)
 * [x] Audio slicing (in a similar way to Owl's slicing)
-* [ ] Output spectrograms and ffts as an image (PNG) (using FFMPEG's library to output a PNG out of Owl's NDarray)
 * [ ] Basic onset detection algorithms
 * [ ] RMS
-  * [ ] LUFS and DBSF are left for further version (LUFS algorithm might require in-depth review of the standards) 
+  * [ ] LUFS and DBSF are left for further version (LUFS algorithm might require in-depth review of the standards)
+
+# Features
+ - Easily read and write audio files in various formats (WAV, MP3, etc...)
+ - Various audio signal processing functions included
+   - FFT, IFFT
+   - Spectrogram computation
+   - Audio slicing
+   - RMS computation
+
 
 ## Requirements
 

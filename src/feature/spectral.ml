@@ -153,3 +153,10 @@ let specgram ?(nfft : int = 256) ?(fs : int = 2) ?(noverlap : int = 128)
     ?(detrend : 'a -> 'a = Detrend.none) (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~noverlap ~detrend x in
   (res, freqs)
+
+let rms ?(window : int = 2048) ?(step : int = 512) (x : Audio.audio) =
+  let x = Audio.data x in
+  let x = Audio.G.slide ~step ~window x in
+  let x = Audio.G.abs2 x in
+  let x = Audio.G.mean x in
+  x
