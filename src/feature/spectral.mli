@@ -115,3 +115,23 @@ val specgram :
             let spec = specgram src in
             (* ... *)
     ]} *)
+
+val rms :
+     ?window:int
+  -> ?step:int
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+(**
+    [rms ~window ~step audio] computes the Root Mean Square (RMS) of the given audio data for each frame.
+
+    [?window] is the window size to use for the RMS computation. Default is [2048].
+    [?step] is the step size to use for the RMS computation. Default is [1024].
+
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let rms = rms src in
+            (* ... *)
+    ]} *)
