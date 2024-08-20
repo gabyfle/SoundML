@@ -110,6 +110,10 @@ let get (x : int) (a : audio) : float =
 let normalize ?(factor : float = 2147483647.) (a : audio) : unit =
   G.scalar_mul_ (1. /. factor) a.data
 
+let reverse (x : audio) : audio =
+  let data = G.reverse x.data in
+  {x with data}
+
 let ( .${} ) x s = get_slice s x
 
 let ( .%{} ) i x = get x i

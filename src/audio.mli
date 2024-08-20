@@ -165,6 +165,19 @@ val normalize : ?factor:float -> audio -> unit
         Audio.write audio "audio.wav"
     ]} *)
 
+val reverse : audio -> audio
+(**
+    [reverse audio] reverses the audio data.
+    This function does not operate in place: a new audio element is created with the reversed data.
+
+    Example:
+
+    {[
+        let audio = Audio.read "audio.wav" in
+        let audio = Audio.reverse audio in
+        Audio.write audio "reversed.wav"
+    ]} *)
+
 (**
     {2 Operators on audio data}
 
