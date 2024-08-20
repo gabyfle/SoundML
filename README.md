@@ -39,7 +39,8 @@ The project is still work in progress.
 * [ ] RMS
   * [ ] LUFS and DBSF are left for further version (LUFS algorithm might require in-depth review of the standards)
 
-# Features
+## Features
+ - Natively written in OCaml for a perfect OCaml developer experience
  - Easily read and write audio files in various formats (WAV, MP3, etc...)
  - Various audio signal processing functions included
    - FFT, IFFT
