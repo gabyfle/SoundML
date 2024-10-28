@@ -7,5 +7,4 @@ let () =
   let phase, _ = Feature.Spectral.phase_specgram audio in
   Printf.printf "Elapsed time for magnitude specgram: %f\n"
     (Unix.gettimeofday () -. time) ;
-  Npy.write phase "phase.npy" ;
-  Io.write audio "output.wav" "wav"
+  Npy.write phase "phase.npy"

@@ -103,21 +103,26 @@ let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Owl.Const.pi)
     (p : (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t) =
   let nd = Audio.G.num_dims p in
   let dd = Audio.G.diff ~axis p in
-  let discont = match discont with Some d -> d | None -> Owl.Const.pi in
-  let slices = Array.init nd (fun _ -> Owl.R [0; -1]) in
+  let discont = match discont with Some d -> d | None -> period /. 2. in
+  let slices = Array.init nd (fun _ -> R [0; -1]) in
   slices.(axis) <- R [1; -1] ;
-  let interval_high, rem = (period /. 2., mod_float period 2.) in
-  let boundary_ambiguous = rem <> 0. in
+  let boundary_ambiguous, interval_high =
+    if Float.is_integer period then (mod_float period 2. = 0., period /. 2.)
+    else (true, period /. 2.)
+  in
   let interval_low = -.interval_high in
-  let ddmod = Audio.G.(((dd +$ interval_high) %$ period) +$ interval_low) in
+  let ddmod = Audio.G.((dd -$ interval_low) %$ period) in
+  let mask = Audio.G.(ddmod <.$ 0.) in
+  Audio.G.(ddmod += (mask *$ period)) ;
+  Audio.G.(ddmod +$= interval_low) ;
   if boundary_ambiguous then (
-    let mask = Audio.G.(ddmod + dd >.$ interval_low) in
+    let mask = Audio.G.((ddmod =.$ interval_low) * (dd >.$ 0.)) in
     Audio.G.(
       ddmod *= (1. $- mask) ;
       ddmod += (mask *$ interval_high) ) ) ;
   let ph_correct = Audio.G.(ddmod - dd) in
-  let mask = Audio.G.(abs dd <.$ discont) in
-  Audio.G.(ph_correct *= mask) ;
+  let mask = Audio.G.(abs dd >.$ discont) in
+  let ph_correct = Audio.G.(ph_correct * mask) in
   let up = Audio.G.copy p in
   Audio.G.set_fancy_ext slices up
     Audio.G.(get_fancy_ext slices p + cumsum ~axis ph_correct) ;
