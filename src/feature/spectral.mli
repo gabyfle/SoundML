@@ -159,9 +159,10 @@ val magnitude_specgram :
 (**
     [magnitude_specgram ?nfft ?fs ?noverlap audio] computes the magnitude spectrogram of the given audio data.
 
+    [?window] is the window function to apply to the audio data. The default window function is the hamming function
+    from [Owl.Signal].
     [?nfft] is the number of points to use for the FFT. Default is [2048].
-    [?fs] is the sampling frequency of the audio data. Default is [2].
-    [?noverlap] is the number of points to overlap between windows. Default is [0].
+    [?window_size] is the size of the window to apply to the audio data. Default is [None].
     [audio] is the audio data.
 
     {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
@@ -177,15 +178,20 @@ val magnitude_specgram :
     ]} *)
 
 val phase_specgram :
-     ?window:Window.t
+     ?nfft:int
+  -> ?window:Window.t
   -> ?fs:int
+  -> ?noverlap:int
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
      * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [phase_specgram ?nfft ?fs ?noverlap audio] computes the phase spectrogram of the given audio data.
 
-    [?fs] is the sampling frequency of the audio data. Default is [2].
+    [?window] is the window function to apply to the audio data. The default window function is the hamming function
+    from [Owl.Signal].
+    [?nfft] is the number of points to use for the FFT. Default is [2048].
+    [?window_size] is the size of the window to apply to the audio data. Default is [None].
     [audio] is the audio data.
 
     {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
