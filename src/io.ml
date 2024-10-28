@@ -140,11 +140,11 @@ module GenericWriter : Writer = struct
   (* everything is handled by ffmpeg *)
   let header_size = 0
 
-  let create channel_layout channels tb (in_sf, out_sf) (in_sr, out_sr) ocodec =
+  let create channel_layout _ tb (in_sf, out_sf) (in_sr, out_sr) ocodec =
     let open Avcodec in
     let encoder =
-      Audio.create_encoder ~channel_layout ~channels ~time_base:tb
-        ~sample_format:out_sf ~sample_rate:out_sr ocodec
+      Audio.create_encoder ~channel_layout ~time_base:tb ~sample_format:out_sf
+        ~sample_rate:out_sr ocodec
     in
     let rsp =
       FloatArrayToFrame.create channel_layout ~in_sample_format:in_sf in_sr

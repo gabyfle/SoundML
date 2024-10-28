@@ -31,13 +31,18 @@ The project is still work in progress.
 * [x] Read and Write audio
 * [x] Compute the FFT of an audio signal
 * [x] Compute the IFFT of an FFT
-* [x] Compute the spectrogram of an audio file
-  * [x] Use a generic spectral function (similar to `matplotlib.mlab`) to compute the spectrogram
-  * [x] Allow different types of specgram computation (mel, mag, etc...)
 * [x] Audio slicing (in a similar way to Owl's slicing)
 * [ ] Basic onset detection algorithms
-* [ ] RMS
-  * [ ] LUFS and DBSF are left for further version (LUFS algorithm might require in-depth review of the standards)
+* [ ] Spectral analysis
+  * [x] Generic spectrogram helper function
+  * [ ] Mel spectrogram
+  * [ ] Chroma spectrogram
+  * [x] Constant and linear detrend
+* [ ] Time domain analysis
+  * [x] RMS computation 
+  * [ ] Zero crossing rate
+  * [ ] Energy
+* [ ] Write test files for the whole library 
 
 ## Features
  - Natively written in OCaml for a perfect OCaml developer experience
@@ -57,10 +62,10 @@ This library heavily relies on the Owl and ocaml-ffmpeg libraries.
 
 <div align=center>
 
-| Name                                                                                                  | Version     | Description                                                                                        |
-| ----------------------------------------------------------------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
-| [**Owl**](https://github.com/owlbarn/owl) - *OCaml Scientific Computing*                              | `>= 1.1`    | Library for scientific computing in OCaml. Used to make the heavy computations (FFT, IFFT, etc...) |
-| [**ocaml-ffmpeg**](https://github.com/savonet/ocaml-ffmpeg) - *OCaml bindings to the FFmpeg library.* | `>= 1.1.11` | OCaml bindings for FFmpeg. Used to read and write audio data.                                      |
+| Name                                                                                                  | Version  | Description                                                                                        |
+| ----------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| [**Owl**](https://github.com/owlbarn/owl) - *OCaml Scientific Computing*                              | `>= 1.1` | Library for scientific computing in OCaml. Used to make the heavy computations (FFT, IFFT, etc...) |
+| [**ocaml-ffmpeg**](https://github.com/savonet/ocaml-ffmpeg) - *OCaml bindings to the FFmpeg library.* | `>= 1.2` | OCaml bindings for FFmpeg. Used to read and write audio data.                                      |
 
 </div>
 
@@ -71,10 +76,12 @@ This project is heavily inspired by other amazing open-source libraries such as:
 
 <div align=center>
 
-| Name                                              | Inspiration                                                    | Reference                                                                                                                                                                                                                                 |
-| ------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**librosa**](https://github.com/librosa/librosa) | General functionalities for audio signal processing            | McFee, Brian, Colin Raffel, Dawen Liang, Daniel PW Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto. "librosa: Audio and music signal analysis in python." In Proceedings of the 14th python in science conference, pp. 18-25. 2015. |
-| [**pydub**](https://github.com/jiaaro/pydub)      | Ease of use, audio slicing using milliseconds and manipulation | -                                                                                                                                                                                                                                         |
+| Name                                              | Inspiration                                                                                                                                                                                                                                              | Reference                                                                                                                                                                                                                                 |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**librosa**](https://github.com/librosa/librosa) | General functionalities for audio signal processing                                                                                                                                                                                                      | McFee, Brian, Colin Raffel, Dawen Liang, Daniel PW Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto. "librosa: Audio and music signal analysis in python." In Proceedings of the 14th python in science conference, pp. 18-25. 2015. |
+| [**pydub**](https://github.com/jiaaro/pydub)      | Ease of use, audio slicing using milliseconds and manipulation                                                                                                                                                                                           | -                                                                                                                                                                                                                                         |
+| [**Numpy**](https://numpy.org/)                   | Numerous implementation of SoundML's algorithms were directly taken from Numpy                                                                                                                                                                           | -                                                                                                                                                                                                                                         |
+| [**Matplotlib**](https://matplotlib.org/)         | The implementation of their spectral helper to compute spectrogram as well as the one of the linear detrend function were took from the [`matplotlib.mlab`](https://github.com/matplotlib/matplotlib/blob/main/lib/matplotlib/mlab.py#L213-L373) module. | -                                                                                                                                                                                                                                         |
 
 </div>
 

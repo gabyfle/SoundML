@@ -24,15 +24,15 @@
     as well outside of it. *)
 
 val fftfreq :
-  int -> float -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+  int -> float -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     Implementation of the Numpy's fftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html}numpy.fft.fftfreq} for more information. *)
 
 val roll :
-     ('a, 'b) Owl_dense_ndarray_generic.t
+     ('a, 'b) Owl.Dense.Ndarray.Generic.t
   -> int
-  -> ('a, 'b) Owl_dense_ndarray_generic.t
+  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
 (**
     Implementation of the Numpy's roll function on the 0th axis of the given ndarray.
     This function is used to shift elements of an array inside the library and is exposed
@@ -41,3 +41,33 @@ val roll :
     This function returns a copy of the given ndarray.
 
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.roll.html}numpy.roll} for more information. *)
+
+val cov : ?b:('a, 'b) Audio.G.t -> a:('a, 'b) Audio.G.t -> ('a, 'b) Audio.G.t
+(**
+    (re)Implementation of the matrix covariance function from Owl.
+    
+    Note: this is temporary and done only because Owl doesn't export any
+    cov function for the [Ndarray] module on which [Audio.G] is based. This function is
+    likely to be deleted when Owl library will export such a cov function for n-dimensional arrays. *)
+
+val unwrap :
+     ?discont:float option
+  -> ?axis:int
+  -> ?period:float
+  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    Implementation of the Numpy's unwrap function.
+    See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)
+
+val real :
+     (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    Filter out the real part of a complex Ndarray. *)
+
+val imag :
+     (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    Filter out the imaginary part of a complex Ndarray. *)
