@@ -91,6 +91,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
     ?(detrend : 'a -> 'a = Detrend.none) ?(noverlap : int = 0)
     ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
     ?(scale_by_freq = None) ?(y : Audio.audio option = None) (x : Audio.audio) =
+  let ttime = Unix.gettimeofday () in
   let window = Window.get_window window in
   let same_data =
     match y with Some y -> Audio.data x = Audio.data y | None -> true
@@ -153,9 +154,9 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
   let freqs = Utils.fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
       let res_y = Audio.G.slide ~window:nfft ~step:(nfft - noverlap) y in
-      let res_y = Audio.G.transpose res_y in
+      Audio.G.transpose_ ~out:res_y res_y ;
       let res_y = detrend res_y in
-      let res_y = Audio.G.(res_y * window) in
+      Audio.G.mul_ ~out:res_y res_y window ;
       let res_y = Owl.Fft.S.rfft res_y ~axis:0 in
       let len = Array.get (Audio.G.shape res_y) 0 in
       Audio.G.pad_ ~out:res_y ~v:Complex.zero [[0; pad_to - len]; [0; 0]] res_y ;
@@ -168,13 +169,17 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
           let conj = Audio.G.conj res in
           Audio.G.mul_ ~out:res conj res
       | Magnitude ->
-          Audio.G.abs_ res ;
-          Audio.G.scalar_div_ Complex.{re= Audio.G.sum' window; im= 0.} res
+          Audio.G.abs_ ~out:res res ;
+          Audio.G.scalar_div_ ~out:res
+            Complex.{re= Audio.G.sum' window; im= 0.}
+            res
       | Phase | Angle ->
           let angle = Audio.G.angle res in
           Audio.G.set_slice_ ~out:res [[0; num_freqs - 1]; []] angle res
       | Complex ->
-          Audio.G.scalar_div_ Complex.{re= Audio.G.sum' window; im= 0.} res ) ;
+          Audio.G.scalar_div_ ~out:res
+            Complex.{re= Audio.G.sum' window; im= 0.}
+            res ) ;
   if mode = PSD then (
     let slice = if nfft mod 2 = 0 then [[1; -1]; []] else [[1]; []] in
     let gslice = Audio.G.get_slice slice res in
@@ -197,6 +202,8 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
     | OneSided ->
         (res, freqs)
   in
+  Owl.Log.debug "Elapsed time for specgram compute: %f"
+    (Unix.gettimeofday () -. ttime) ;
   match mode with
   | Phase | Angle ->
       (Utils.unwrap ~axis:0 res, freqs)
@@ -207,7 +214,8 @@ let specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
     (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
-  (Utils.real res, freqs)
+  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  (res, freqs)
 
 let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
@@ -215,17 +223,16 @@ let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
   (res, freqs)
 
-let phase_specgram ?(window : Window.t = Window.default) ?(fs : int = 2)
-    (x : Audio.audio) =
-  let res, freqs =
-    spectral_helper ~nfft:(Audio.rawsize x) ~fs ~window ~noverlap:0 x
-      ~mode:Phase
-  in
-  (Utils.real res, freqs)
+let phase_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Phase in
+  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  (res, freqs)
 
 let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
   let res, freqs =
     spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Magnitude
   in
-  (Utils.real res, freqs)
+  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  (res, freqs)

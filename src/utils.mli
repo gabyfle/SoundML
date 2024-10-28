@@ -59,15 +59,3 @@ val unwrap :
 (**
     Implementation of the Numpy's unwrap function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)
-
-val real :
-     (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
-  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    Filter out the real part of a complex Ndarray. *)
-
-val imag :
-     (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
-  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-(**
-    Filter out the imaginary part of a complex Ndarray. *)
