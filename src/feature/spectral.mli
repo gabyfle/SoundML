@@ -24,57 +24,44 @@
     of an audio data. *)
 
 (**
-    {1 The Fast Fourier Transform (FFT)}
-
-    SoundML allow you to compute the FFT of an audio data in an efficient and compliant way.
-    The FFTs functions are simple wrappers around the Owl library FFT functions, that are themselves
-    wrappers around the FFTPack library. *)
-
-val fft : Audio.audio -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
-(**
-    [fft audio] computes an FFT on the the given audio data.
-    
-    Examples:
-
-    {[
-        let () =
-            let src = read file.wav wav in
-            let fft = fft src in
-            (* ... *)
-    ]} *)
-
-val ifft :
-     (Complex.t, Bigarray.complex32_elt) Audio.G.t
-  -> (float, Bigarray.float32_elt) Audio.G.t
-(**
-    [ifft fft] computes the inverse FFT of the given FFT data.
-    
-    Example:
-
-    {[
-        let () =
-            let src = read file.wav wav in
-            let fft = fft src in
-            let ifft = ifft fft in
-            (* ... *)
-    ]} *)
-
-(**
-    {1 Spectral representations}
+    {1 Spectral}
 
     Spectrograms are one of the most-used representation of time-frequency audio data.
     SoundML allow you to compute the spectrogram of an {!Audio.audio}. Algorithms are based
     on the work done by the authors and maintainers of the matplotlib.mlab Python module. *)
 
+(** Mode used to compute a spectrogram *)
 type mode =
-  | PSD
-  | Angle
-  | Phase
-  | Magnitude
-  | Complex
-  | Default  (** Mode used to compute a spectrogram *)
+  | PSD  (** Power Spectral Density *)
+  | Angle  (** Phase angle *)
+  | Phase  (** Alias for Angle *)
+  | Magnitude  (** Magnitude spectrum *)
+  | Complex  (** Complex spectrum *)
+  | Default  (** Default to PSD *)
 
 type side = OneSided | TwoSided  (** Side used to compute a spectrogram *)
+
+(**
+    Window functions module *)
+module Window : sig
+  (** Window type *)
+  type t =
+    | Hann  (** Hanning window *)
+    | Hamming  (** Hamming window *)
+    | Blackman  (** Blackman window *)
+    | Rectangle  (** Rectangle window *)
+    | Custom of
+        (int -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t)
+        (** Custom user-defined window *)
+
+  val get_window : t -> int -> Owl.Dense.Ndarray.D.arr
+  (**
+    [get_window window n] returns the window type [window] function of size [n] *)
+
+  val default : t
+  (**
+    Default window: Hann *)
+end
 
 (**
    Detrend functions module *)
@@ -82,18 +69,31 @@ module Detrend : sig
   val none : 'a -> 'a
   (**
     Identity function, no detrend *)
+
+  val constant :
+       (Complex.t, Bigarray.complex32_elt) Audio.G.t
+    -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
+  (**
+    Constant detrend function *)
+
+  val linear :
+       (Complex.t, Bigarray.complex32_elt) Audio.G.t
+    -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
+  (**
+    Linear detrend function *)
 end
 
 val specgram :
      ?nfft:int
+  -> ?window:Window.t
   -> ?fs:int
   -> ?noverlap:int
   -> ?detrend:
-       (   (float, Bigarray.float32_elt) Audio.G.t
-        -> (float, Bigarray.float32_elt) Audio.G.t )
+       (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+        -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
   -> Audio.audio
-  -> (Complex.t, Bigarray.complex32_elt) Audio.G.t
-     * (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [spectrogram ?nfft ?fs ?noverlap audio] computes the spectrogram of the given audio data.
 
@@ -102,7 +102,6 @@ val specgram :
     [?nfft] is the number of points to use for the FFT. Default is [2048].
     [?window_size] is the size of the window to apply to the audio data. Default is [None].
     [audio] is the audio data.
-    [n] is the number of points to use for the FFT.
 
     {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
     especially the matplotlib.mlab module. All the credits go to them.
@@ -116,22 +115,87 @@ val specgram :
             (* ... *)
     ]} *)
 
-val rms :
-     ?window:int
-  -> ?step:int
+val complex_specgram :
+     ?nfft:int
+  -> ?window:Window.t
+  -> ?fs:int
+  -> ?noverlap:int
+  -> ?detrend:
+       (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+        -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
   -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-(**
-    [rms ~window ~step audio] computes the Root Mean Square (RMS) of the given audio data for each frame.
+  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 
-    [?window] is the window size to use for the RMS computation. Default is [2048].
-    [?step] is the step size to use for the RMS computation. Default is [1024].
+(** 
+    [complex_specgram ?nfft ?fs ?noverlap audio] computes the complex spectrogram of the given audio data.
 
+    [?window] is the window function to apply to the audio data. The default window function is the hamming function
+    from [Owl.Signal].
+    [?nfft] is the number of points to use for the FFT. Default is [2048].
+    [?window_size] is the size of the window to apply to the audio data. Default is [None].
+    [audio] is the audio data.
+
+    {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
+    especially the matplotlib.mlab module. All the credits go to them.
+    
     Examples:
 
     {[
         let () =
             let src = read file.wav wav in
-            let rms = rms src in
+            let spec = complex_specgram src in
+            (* ... *)
+    ]} *)
+
+val magnitude_specgram :
+     ?nfft:int
+  -> ?window:Window.t
+  -> ?fs:int
+  -> ?noverlap:int
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    [magnitude_specgram ?nfft ?fs ?noverlap audio] computes the magnitude spectrogram of the given audio data.
+
+    [?nfft] is the number of points to use for the FFT. Default is [2048].
+    [?fs] is the sampling frequency of the audio data. Default is [2].
+    [?noverlap] is the number of points to overlap between windows. Default is [0].
+    [audio] is the audio data.
+
+    {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
+    especially the matplotlib.mlab module. All the credits go to them.
+    
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let spec = magnitude_specgram src in
+            (* ... *)
+    ]} *)
+
+val phase_specgram :
+     ?window:Window.t
+  -> ?fs:int
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    [phase_specgram ?nfft ?fs ?noverlap audio] computes the phase spectrogram of the given audio data.
+
+    [?fs] is the sampling frequency of the audio data. Default is [2].
+    [audio] is the audio data.
+
+    {i Note:} The spectrogram implementation is based on the work from the authors and maintainers of the matplotlib library,
+    especially the matplotlib.mlab module. All the credits go to them.
+    
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let spec = phase_specgram src in
             (* ... *)
     ]} *)

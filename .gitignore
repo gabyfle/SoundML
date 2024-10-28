@@ -1,4 +1,5 @@
 _build
+.venv
 .vscode
 *.mp3
 *.npy
