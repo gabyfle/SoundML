@@ -152,15 +152,3 @@ let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Owl.Const.pi)
   in
   let _ = Audio.G.set_fancy_ext final_slice result corrected_complex in
   result
-
-let real (x : (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t) =
-  let dims = Audio.G.shape x in
-  let re = Audio.G.create Bigarray.Float32 dims 0. in
-  Audio.G.iteri_nd (fun i z -> Audio.G.set re i Complex.(z.re)) x ;
-  re
-
-let imag (x : (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t) =
-  let dims = Audio.G.shape x in
-  let im = Audio.G.create Bigarray.Float32 dims 0. in
-  Audio.G.iteri_nd (fun i z -> Audio.G.set im i Complex.(z.im)) x ;
-  im
