@@ -54,8 +54,8 @@ val unwrap :
      ?discont:float option
   -> ?axis:int
   -> ?period:float
-  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
-  -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     Implementation of the Numpy's unwrap function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)

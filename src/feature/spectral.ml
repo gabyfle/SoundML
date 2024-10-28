@@ -175,7 +175,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
             res
       | Phase | Angle ->
           let angle = Audio.G.angle res in
-          Audio.G.set_slice_ ~out:res [[0; num_freqs - 1]; []] angle res
+          Audio.G.set_slice_ ~out:res [[0; num_freqs]; []] angle res
       | Complex ->
           Audio.G.scalar_div_ ~out:res
             Complex.{re= Audio.G.sum' window; im= 0.}
@@ -204,11 +204,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
   in
   Owl.Log.debug "Elapsed time for specgram compute: %f"
     (Unix.gettimeofday () -. ttime) ;
-  match mode with
-  | Phase | Angle ->
-      (Utils.unwrap ~axis:0 res, freqs)
-  | _ ->
-      (res, freqs)
+  (res, freqs)
 
 let specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
@@ -227,7 +223,7 @@ let phase_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Phase in
   let res = Owl.Dense.Ndarray.Generic.re_c2s res in
-  (res, freqs)
+  (Utils.unwrap ~axis:0 res, freqs)
 
 let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
