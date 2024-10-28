@@ -19,33 +19,84 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-let fft (a : Audio.audio) : (Complex.t, Bigarray.complex32_elt) Audio.G.t =
-  Owl.Fft.S.rfft (Audio.data a)
+type mode =
+  | PSD (* Power Spectral Density *)
+  | Angle (* Phase angle *)
+  | Phase (* Alias for Angle *)
+  | Magnitude (* Magnitude spectrum *)
+  | Complex (* Complex spectrum *)
+  | Default (* Default to PSD *)
 
-let ifft (ft : (Complex.t, Bigarray.complex32_elt) Audio.G.t) :
-    (float, Bigarray.float32_elt) Audio.G.t =
-  Owl.Fft.S.irfft ft
+type side =
+  | OneSided (* Single-sided spectrum *)
+  | TwoSided (* Double-sided spectrum *)
+
+module Window = struct
+  type t =
+    | Hann
+    | Hamming
+    | Blackman
+    | Rectangle
+    | Custom of (int -> (float, Bigarray.float64_elt) Audio.G.t)
+
+  let get_window = function
+    | Hann ->
+        Owl.Signal.hann
+    | Hamming ->
+        Owl.Signal.hamming
+    | Blackman ->
+        Owl.Signal.blackman
+    | Rectangle ->
+        fun n -> Audio.G.ones Bigarray.float64 [|n|]
+    | Custom f ->
+        f
+
+  let default = Hann
+end
 
 module Detrend = struct
   let none = Fun.id
+
+  let constant x =
+    let mean = Audio.G.mean' x in
+    let trend =
+      Audio.G.scalar_mul mean
+        (Audio.G.ones Bigarray.complex32 (Audio.G.shape x))
+    in
+    Audio.G.sub x trend
+
+  let linear x =
+    let dim = (Audio.G.shape x |> Array.get) 0 in
+    assert (dim <= 1) ;
+    (* only works for <=1 dimensional arrays *)
+    match dim with
+    | 0 ->
+        Audio.G.zeros Bigarray.complex32 [|0|]
+    | _ ->
+        let y = Audio.G.linspace Bigarray.float32 0. (float_of_int dim) dim in
+        let y = Audio.G.cast_s2c y in
+        let cov = Utils.cov ?b:(Some y) ~a:x in
+        let b =
+          Complex.div (Audio.G.get cov [|0; 1|]) (Audio.G.get cov [|0; 0|])
+        in
+        let a =
+          Complex.sub (Audio.G.mean' x) (Complex.mul b (Audio.G.mean' y))
+        in
+        Audio.G.sub x (Audio.G.add_scalar (Audio.G.mul_scalar y b) a)
 end
-
-type mode = PSD | Angle | Phase | Magnitude | Complex | Default
-
-type side = OneSided | TwoSided
 
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
-let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
-    ?(window = Owl.Signal.hann) ?(detrend : 'a -> 'a = Detrend.none)
-    ?(noverlap : int = 0) ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
+let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
+    ?(detrend : 'a -> 'a = Detrend.none) ?(noverlap : int = 0)
+    ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
     ?(scale_by_freq = None) ?(y : Audio.audio option = None) (x : Audio.audio) =
+  let window = Window.get_window window in
   let same_data =
     match y with Some y -> Audio.data x = Audio.data y | None -> true
   in
   let pad_to = match pad_to with Some x -> x | None -> nfft in
   assert (pad_to >= nfft) ;
-  (* TODO: make a nice exception system for the whole library *)
   assert (noverlap < nfft) ;
   let mode = match mode with Default -> PSD | _ -> mode in
   if (not same_data) && mode = PSD then assert false ;
@@ -118,7 +169,7 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
           Audio.G.mul_ ~out:res conj res
       | Magnitude ->
           Audio.G.abs_ res ;
-          Audio.G.scalar_mul_ Complex.{re= Audio.G.sum' window; im= 0.} res
+          Audio.G.scalar_div_ Complex.{re= Audio.G.sum' window; im= 0.} res
       | Phase | Angle ->
           let angle = Audio.G.angle res in
           Audio.G.set_slice_ ~out:res [[0; num_freqs - 1]; []] angle res
@@ -146,17 +197,35 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2)
     | OneSided ->
         (res, freqs)
   in
-  (* TODO: implement the unwrap function *)
+  match mode with
+  | Phase | Angle ->
+      (Utils.unwrap ~axis:0 res, freqs)
+  | _ ->
+      (res, freqs)
+
+let specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
+    (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
+  (Utils.real res, freqs)
+
+let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
+    (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
   (res, freqs)
 
-let specgram ?(nfft : int = 256) ?(fs : int = 2) ?(noverlap : int = 128)
-    ?(detrend : 'a -> 'a = Detrend.none) (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~noverlap ~detrend x in
-  (res, freqs)
+let phase_specgram ?(window : Window.t = Window.default) ?(fs : int = 2)
+    (x : Audio.audio) =
+  let res, freqs =
+    spectral_helper ~nfft:(Audio.rawsize x) ~fs ~window ~noverlap:0 x
+      ~mode:Phase
+  in
+  (Utils.real res, freqs)
 
-let rms ?(window : int = 2048) ?(step : int = 512) (x : Audio.audio) =
-  let x = Audio.data x in
-  let x = Audio.G.slide ~step ~window x in
-  let x = Audio.G.abs2 x in
-  let x = Audio.G.mean x in
-  x
+let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
+  let res, freqs =
+    spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Magnitude
+  in
+  (Utils.real res, freqs)

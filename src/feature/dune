@@ -1,6 +1,6 @@
 (library
  (name feature)
- (modules spectral)
+ (modules spectral fft temporal)
  (package soundml)
  (libraries audio utils owl)
  (wrapped true))
