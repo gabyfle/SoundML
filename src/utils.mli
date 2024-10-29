@@ -59,3 +59,22 @@ val unwrap :
 (**
     Implementation of the Numpy's unwrap function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)
+
+module Convert : sig
+  val mel_to_hz :
+       ?htk:bool
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+
+  val hz_to_mel :
+       ?htk:bool
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+
+  val mel_freqs :
+       ?nmels:int
+    -> ?fmin:float
+    -> ?fmax:float
+    -> ?htk:bool
+    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+end
