@@ -85,6 +85,8 @@ module Detrend = struct
         Audio.G.sub x (Audio.G.add_scalar (Audio.G.mul_scalar y b) a)
 end
 
+module Filterbank = Filterbank
+
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
 let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)

@@ -1,6 +1,7 @@
+(include_subdirs qualified)
+
 (library
  (name feature)
- (modules spectral fft temporal)
  (package soundml)
  (libraries audio utils owl)
  (wrapped true))

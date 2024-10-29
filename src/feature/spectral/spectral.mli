@@ -83,6 +83,17 @@ module Detrend : sig
     Linear detrend function *)
 end
 
+module Filterbank : sig
+  val mel :
+       ?fmax:float option
+    -> ?htk:bool
+    -> sample_rate:int
+    -> nfft:int
+    -> nmels:int
+    -> fmin:float
+    -> unit
+end
+
 val specgram :
      ?nfft:int
   -> ?window:Window.t
