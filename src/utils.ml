@@ -110,20 +110,64 @@ let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Owl.Const.pi)
     if Float.is_integer period then (mod_float period 2. = 0., period /. 2.)
     else (true, period /. 2.)
   in
+  let open Audio.G in
   let interval_low = -.interval_high in
-  let ddmod = Audio.G.((dd -$ interval_low) %$ period) in
-  let mask = Audio.G.(ddmod <.$ 0.) in
-  Audio.G.(ddmod += (mask *$ period)) ;
-  Audio.G.(ddmod +$= interval_low) ;
+  let ddmod = (dd -$ interval_low) %$ period in
+  let mask = ddmod <.$ 0. in
+  ddmod += (mask *$ period) ;
+  ddmod +$= interval_low ;
   if boundary_ambiguous then (
-    let mask = Audio.G.((ddmod =.$ interval_low) * (dd >.$ 0.)) in
-    Audio.G.(
-      ddmod *= (1. $- mask) ;
-      ddmod += (mask *$ interval_high) ) ) ;
-  let ph_correct = Audio.G.(ddmod - dd) in
-  let mask = Audio.G.(abs dd >.$ discont) in
-  let ph_correct = Audio.G.(ph_correct * mask) in
-  let up = Audio.G.copy p in
-  Audio.G.set_fancy_ext slices up
-    Audio.G.(get_fancy_ext slices p + cumsum ~axis ph_correct) ;
+    let mask = (ddmod =.$ interval_low) * (dd >.$ 0.) in
+    ddmod *= (1. $- mask) ;
+    ddmod += (mask *$ interval_high) ) ;
+  let ph_correct = ddmod - dd in
+  let mask = abs dd >.$ discont in
+  let ph_correct = ph_correct * mask in
+  let up = copy p in
+  set_fancy_ext slices up (get_fancy_ext slices p + cumsum ~axis ph_correct) ;
   up
+
+module Convert = struct
+  let mel_to_hz ?(htk : bool = false) mels =
+    let open Audio.G in
+    if htk then 700. $* (10. $** (mels /$ 2595.) -$ 1.)
+    else
+      let f_min = 0.0 in
+      let f_sp = 200.0 /. 3. in
+      let freqs = f_min $+ (f_sp $* mels) in
+      let min_log_hz = 1000. in
+      let min_log_mel = (min_log_hz -. f_min) /. f_sp in
+      let logstep = Maths.log 6.4 /. 27.0 in
+      let mask = freqs * (mels >=.$ min_log_mel) in
+      (* we set to zero all the elements that match the mask *)
+      freqs -= mask ;
+      (* so that now we can add back the computed values for the mask *)
+      freqs += (min_log_hz $* exp (logstep $* mask -$ min_log_mel)) ;
+      freqs
+
+  let hz_to_mel ?(htk : bool = false) freqs =
+    let open Audio.G in
+    if htk then 2595. $* log10 (1. $+ freqs /$ 700.)
+    else
+      let f_min = 0.0 in
+      let f_sp = 200.0 /. 3. in
+      let min_log_hz = 1000. in
+      let min_log_mel = (min_log_hz -. f_min) /. f_sp in
+      let logstep = Maths.log 6.4 /. 27.0 in
+      let mask = freqs * (freqs >=.$ min_log_hz) in
+      freqs -= mask ;
+      freqs += ((min_log_mel $+ log (freqs /$ min_log_hz)) /$ logstep) ;
+      freqs
+
+  let mel_freqs ?(nmels : int = 128) ?(fmin : float = 0.)
+      ?(fmax : float = 11025.) ?(htk : bool = false) =
+    let open Audio.G in
+    let bounds =
+      of_array Bigarray.Float32 [|fmin; fmax|] [|2|] |> hz_to_mel ~htk
+    in
+    let mel_f =
+      linspace Bigarray.Float32 (get bounds [|0|]) (get bounds [|1|]) nmels
+    in
+    mel_to_hz mel_f ~htk
+  [@@warning "-unerasable-optional-argument"]
+end
