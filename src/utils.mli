@@ -20,6 +20,22 @@
 (*****************************************************************************)
 
 (**
+   Utility conversion module. *)
+module Convert : sig
+  val mel_to_hz :
+       ?htk:bool
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+  (** Converts mel-scale values to Hz. *)
+
+  val hz_to_mel :
+       ?htk:bool
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl_dense_ndarray_generic.t
+  (** Reverse function of {!mel_to_hz}. *)
+end
+
+(**
     Various utility functions that are used inside the library and that can be usefull
     as well outside of it. *)
 
@@ -28,6 +44,22 @@ val fftfreq :
 (**
     Implementation of the Numpy's fftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html}numpy.fft.fftfreq} for more information. *)
+
+val rfftfreq :
+  int -> float -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+    Implementation of the Numpy's rfftfreq function.
+    See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.rfftfreq.html}numpy.fft.rfftfreq} for more information. *)
+
+val melfreq :
+     ?nmels:int
+  -> ?fmin:float
+  -> ?fmax:float
+  -> ?htk:bool
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(**
+  Implementation of librosa's mel_frequencies. Compute an [Owl.Dense.Ndarray] of acoustic frequencies tuned to the mel scale.
+  See: {{:https://librosa.org/doc/main/generated/librosa.mel_frequencies.html}librosa.mel_frequencies} for more information. *)
 
 val roll :
      ('a, 'b) Owl.Dense.Ndarray.Generic.t
@@ -60,21 +92,12 @@ val unwrap :
     Implementation of the Numpy's unwrap function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)
 
-module Convert : sig
-  val mel_to_hz :
-       ?htk:bool
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-
-  val hz_to_mel :
-       ?htk:bool
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-
-  val mel_freqs :
-       ?nmels:int
-    -> ?fmin:float
-    -> ?fmax:float
-    -> ?htk:bool
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
-end
+val outer :
+     (   ('a, 'b) Owl.Dense.Ndarray.Generic.t
+      -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+      -> ('a, 'b) Owl.Dense.Ndarray.Generic.t )
+  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+(**
+  Generalized outer product of any given operator that supports broadcasting (basically all the common Owl's Ndarray operators.) *)

@@ -93,7 +93,6 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
     ?(detrend : 'a -> 'a = Detrend.none) ?(noverlap : int = 0)
     ?(side = OneSided) ?(mode = Default) ?(pad_to = None)
     ?(scale_by_freq = None) ?(y : Audio.audio option = None) (x : Audio.audio) =
-  let ttime = Unix.gettimeofday () in
   let window = Window.get_window window in
   let same_data =
     match y with Some y -> Audio.data x = Audio.data y | None -> true
@@ -204,15 +203,13 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
     | OneSided ->
         (res, freqs)
   in
-  Owl.Log.debug "Elapsed time for specgram compute: %f"
-    (Unix.gettimeofday () -. ttime) ;
   (res, freqs)
 
 let specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
     (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
-  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  let res = Audio.G.re_c2s res in
   (res, freqs)
 
 let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
@@ -224,7 +221,7 @@ let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
 let phase_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Phase in
-  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  let res = Audio.G.re_c2s res in
   (Utils.unwrap ~axis:0 res, freqs)
 
 let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
@@ -232,5 +229,18 @@ let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
   let res, freqs =
     spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Magnitude
   in
-  let res = Owl.Dense.Ndarray.Generic.re_c2s res in
+  let res = Audio.G.re_c2s res in
+  (res, freqs)
+
+let mel_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
+    ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
+    ?(norm : Filterbank.norm = Filterbank.Slaney) (x : Audio.audio) =
+  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x in
+  let res = Audio.G.re_c2s res in
+  let sample_rate = Audio.meta x |> Audio.Metadata.sample_rate in
+  let weights =
+    Filterbank.mel ~fmax ~htk ~sample_rate ~nfft ~nmels ~fmin ~norm
+  in
+  let res = Audio.G.dot weights res in
   (res, freqs)
