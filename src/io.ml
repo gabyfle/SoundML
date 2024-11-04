@@ -101,7 +101,8 @@ let read (filename : string) (format : string) : audio =
   Av.get_input istream |> Av.close ;
   Gc.full_major () ;
   let data = G.resize data [|!rsamples|] in
-  G.div_scalar_ ~out:data data (Float.pow 2. (float_of_int bit_depth)) ;
+  let power = float_of_int (if bit_depth = 3 then 16 else bit_depth) in
+  G.div_scalar_ ~out:data data (Float.pow 2. power) ;
   let meta =
     Metadata.create ~name:filename nb_channels sample_width out_sr bit_rate
   in

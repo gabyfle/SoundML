@@ -19,15 +19,43 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-let mel ?(fmax : float option = None) ?(htk : bool = false) ~(sample_rate : int)
-    ~(nfft : int) ~(nmels : int) ~fmin =
+type norm = Slaney | PNorm of float
+
+let mel ?(fmax : float option = None) ?(htk : bool = false)
+    ?(norm : norm = Slaney) ~(sample_rate : int) ~(nfft : int) ~(nmels : int)
+    ~fmin =
   let fmax =
     match fmax with Some fmax -> fmax | None -> float_of_int sample_rate /. 2.
   in
-  let weights = Audio.G.zeros Bigarray.Float32 [|nmels; 1 + (nfft / 2)|] in
-  let fftfreqs = Utils.fftfreq nfft (1. /. float_of_int sample_rate) in
-  let mel_freqs = Utils.Convert.mel_freqs ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
+  let fftfreqs = Utils.rfftfreq nfft (1. /. float_of_int sample_rate) in
+  let mel_freqs = Utils.melfreq ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
   let fdiff = Audio.G.diff mel_freqs in
-  (* TODO: add outer product substract *)
-  ()
-[@@warning "-unerasable-optional-argument"] [@@warning "-unused-var"]
+  let ramps = Utils.outer Audio.G.sub mel_freqs fftfreqs in
+  let open Audio.G in
+  let lower =
+    neg ramps.${[0; Int.sub nmels 1]}
+    / reshape fdiff.${[0; Int.sub nmels 1]} [|nmels; 1|]
+  in
+  let upper =
+    ramps.${[2; Int.add nmels 1]} / reshape fdiff.${[1; nmels]} [|nmels; 1|]
+  in
+  (* Intersect slopes *)
+  let weights =
+    max2 (zeros Bigarray.Float32 (shape lower)) (min2 lower upper)
+  in
+  let weights =
+    match norm with
+    | Slaney ->
+        let enorm =
+          2.0
+          $/ sub
+               mel_freqs.${[2; Int.add nmels 1]}
+               mel_freqs.${[0; Int.sub nmels 1]}
+        in
+        let enorm = reshape enorm [|nmels; 1|] in
+        weights * enorm
+    | PNorm p ->
+        Audio.G.vecnorm ~p ~axis:(-1) weights
+  in
+  weights
+[@@warning "-unerasable-optional-argument"]

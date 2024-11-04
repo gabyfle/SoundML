@@ -84,14 +84,17 @@ module Detrend : sig
 end
 
 module Filterbank : sig
+  type norm = Slaney | PNorm of float
+
   val mel :
        ?fmax:float option
     -> ?htk:bool
+    -> ?norm:Filterbank.norm
     -> sample_rate:int
     -> nfft:int
     -> nmels:int
     -> fmin:float
-    -> unit
+    -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 end
 
 val specgram :
@@ -216,3 +219,19 @@ val phase_specgram :
             let spec = phase_specgram src in
             (* ... *)
     ]} *)
+
+val mel_specgram :
+     ?nfft:int
+  -> ?window:Window.t
+  -> ?fs:int
+  -> ?noverlap:int
+  -> ?nmels:int
+  -> ?fmin:float
+  -> ?fmax:float option
+  -> ?htk:bool
+  -> ?norm:Filterbank.norm
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+(** 
+  [mel_specgram] *)
