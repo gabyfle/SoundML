@@ -19,11 +19,14 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+type norm = Slaney | PNorm of float
+
 val mel :
      ?fmax:float option
   -> ?htk:bool
+  -> ?norm:norm
   -> sample_rate:int
   -> nfft:int
   -> nmels:int
   -> fmin:float
-  -> unit
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
