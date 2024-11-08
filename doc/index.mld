@@ -1,0 +1,64 @@
+{0 SoundML}
+
+{%html:
+<center>
+    <img alt="SoundML logo" src="soundml_logo.svg" style="max-width:200px;" />
+</center>
+%}
+
+{!Soundml} is an OCaml library that enables audio processing. It provides tools to read, write, extract features and manipulate audio as time series data.
+The library is built on top of the Owl library and provides a high-level API to work with audio data. It's still in an experimental stage.
+
+Source code: {{: https://github.com/gabyfle/SoundML/}Github}.
+
+{1 Features}
+{ul
+    {- Read and write audio files in various formats (see {!Soundml.Io})}
+    {- Extract features from audio data (see {!Soundml.Feature})
+        {ul
+            {- Spectral features such that mel, PSD and magnitude spectrograms (see {!Soundml.Feature.Spectral})}
+            {- Temporal features such that energy (see {!Soundml.Feature.Temporal})}
+        }
+    }
+    {- Manipulate audio data (see {!Soundml.Audio})
+        {ul
+            {- Get slices of audio data by using milisecond-based indexing}
+            {- Custom operators following the same conventions as Owl}
+        }
+    }
+}
+
+{1 Installing SoundML}
+
+{!Soundml} is not yet available as an [opam] package. For the moment, the only way to install it is to build it from source.
+
+
+{2 Building from source}
+
+{3 Requirements}
+
+In order to build SoundML, you'll need the following OCaml libraries and software:
+
+{ul
+    {- {{: https://github.com/ocaml/dune}dune} version {e 3.12} or greater}
+    {- {{: https://github.com/owlbarn/owl}owl} version {e 1.1} or greater}
+    {- {{: https://github.com/savonet/ocaml-ffmpeg}ffmpeg} version {e 1.1.11} or greater}
+}
+
+{3 Building}
+
+The main SoundML repository is hosted on the Github platform here: {{: https://github.com/gabyfle/SoundML}}. To download the sources, you can either download the latest release of SoundML or clone the repository using the following command:
+
+{v git clone https://github.com/gabyfle/SoundML.git v}
+
+Once downloaded, you can build the project using the following commands:
+
+{v cd SoundML && dune build v}
+
+{1 API Documentation}
+
+To see the developer API documentation for SoundML, you can visit the following link: {{!Soundml}here}.
+
+{1 Author}
+
+{{:https://gabyfle.dev}Gabriel "gabyfle" Santamaria}
