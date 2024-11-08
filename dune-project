@@ -13,20 +13,21 @@
 
 (license Apache-2.0)
 
-(documentation https://github.com/gabyfle/soundml)
+(documentation https://soundml.gabyfle.dev)
 
 (package
  (name soundml)
- (synopsis "A library to play with sound")
+ (synopsis
+  "An OCaml library to embed sound processing in your applications.")
  (description
-  "SoundML is a library built on top of Owl to analyse sounds files.")
+  "SoundML is a library built on top of Owl to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
-   (>= 5.1.0))
+   (>= 5.2.0))
   dune
   (owl
    (>= 1.1))
   (ffmpeg
-   (>= 1.1.11)))
+   (>= 1.2.1)))
  (tags
-  (sound gabyfle)))
+  (sound owl ffmpeg gabyfle)))

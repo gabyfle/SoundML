@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        ocaml-compiler:
+          - "5.2"
+
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install & Verify FFmpeg version
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
+
+            ffmpeg -version
+
+      - name: Install OCaml
+        uses: ocaml/setup-ocaml@v2
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+
+      - name: Install dependencies
+        run: opam install . --deps-only --with-test
+
+      - name: Build SoundML libraries and executables
+        run: opam exec -- dune build
+
+      - name: Run tests
+        run: opam exec -- dune runtest
+
+      - name: Build SoundML documentation
+        run: opam install odoc && opam exec -- dune build @doc
+
+      - name: Upload odoc documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc
+          path: |
+            _build/default/_doc/_html/soundml
+            _build/default/_doc/_html/odoc.support
+
+  lint-fmt:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout tree
+        uses: actions/checkout@v4
+
+      - name: Install OCaml
+        uses: ocaml/setup-ocaml@v2
+        with:
+          ocaml-compiler: "5.2"
+          dune-cache: true
+
+      - uses: ocaml/setup-ocaml/lint-fmt@v2
+
+  deploy-site:
+    needs: [build, lint-fmt]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download odoc documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: doc
+          path: doc/
+
+      - name: Move SoundML root to... root !
+        run: mv -v doc/soundml/* doc/
+      
+      - name: Deploy to VPS Server
+        uses: easingthemes/ssh-deploy@main
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          ARGS: "-rlgoDzvc -i"
+          SOURCE: "/doc/"
+          REMOTE_HOST: ${{ secrets.HOST }}
+          REMOTE_USER: ${{ secrets.USER }}
+          TARGET: ${{ secrets.PATH }}
+          EXCLUDE: "/ocaml/, *.md, dune, *.mld"
