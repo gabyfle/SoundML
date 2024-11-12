@@ -86,6 +86,7 @@ module Detrend = struct
 end
 
 module Filterbank = Filterbank
+module Convert = Convert
 
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
@@ -244,3 +245,41 @@ let mel_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
   in
   let res = Audio.G.dot weights res in
   (res, freqs)
+
+let mfcc ?(n_mfcc : int = 20) ?(window : Window.t = Window.default)
+    ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
+    ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
+    ?(norm : Filterbank.norm = Filterbank.Slaney)
+    ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
+    (x : Audio.audio) =
+  assert (lifter >= 0) ;
+  let x, _ =
+    mel_specgram ~window ~fs ~noverlap ~nmels ~fmin ~fmax ~htk ~norm x
+  in
+  let x = Convert.power_to_db (RefFloat 1.) x in
+  let m = Owl.Fft.Generic.dct ~axis:(-2) ~norm:Ortho ~ttype:dct_type x in
+  let ndims = Audio.G.num_dims m in
+  let slices =
+    let open Owl in
+    List.init ndims (fun i ->
+        (* Second-to-last dimension: take first n_mfcc values *)
+        if i = ndims - 2 then R [0; n_mfcc - 1]
+        else R [] (* All other dimensions: take everything *) )
+  in
+  let m = Audio.G.get_fancy slices m in
+  match lifter with
+  | 0 ->
+      m
+  | n ->
+      let ndims = Audio.G.num_dims m in
+      let pi = Owl.Const.pi in
+      let n = float_of_int n in
+      let li =
+        Audio.G.(
+          let range = linspace (kind m) 1. (1. +. float_of_int n_mfcc) n_mfcc in
+          sin (pi $* range /$ n) )
+      in
+      let li_expanded =
+        Audio.G.(1. $+ (n /. 2. $* Audio.G.expand ~hi:true li ndims))
+      in
+      Audio.G.(m * li_expanded)

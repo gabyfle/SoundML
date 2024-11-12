@@ -1,8 +1,7 @@
 let () =
-  Owl.Log.set_level Owl.Log.DEBUG ;
-  Printexc.record_backtrace true ;
   let open Soundml in
-  let audio = Io.read "test/sin_2k.wav" "wav" in
-  let mel, _ = Feature.Spectral.mel_specgram audio in
-  Npy.write (Audio.data audio) "audio.npy" ;
-  Npy.write mel "mel.npy"
+  let t = Io.read "test/sin_2k.wav" "wav" in
+  let tt = Sys.time () in
+  let mfcc = Feature.Spectral.mfcc t in
+  Printf.printf "Time: %f\n" (Sys.time () -. tt) ;
+  Npy.write mfcc "mfcc.npy"
