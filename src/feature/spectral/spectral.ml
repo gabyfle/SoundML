@@ -86,7 +86,6 @@ module Detrend = struct
 end
 
 module Filterbank = Filterbank
-module Convert = Convert
 
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)

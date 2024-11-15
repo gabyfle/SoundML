@@ -97,25 +97,6 @@ module Filterbank : sig
     -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 end
 
-module Convert : sig
-  type reference =
-    | RefFloat of float
-    | RefFunction of ((float, Bigarray.float32_elt) Audio.G.t -> float)
-
-  val power_to_db :
-       ?amin:float
-    -> ?top_db:float option
-    -> reference
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
-
-  val db_to_power :
-       ?amin:float
-    -> reference
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-end
-
 val specgram :
      ?nfft:int
   -> ?window:Window.t
