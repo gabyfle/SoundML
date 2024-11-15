@@ -256,7 +256,7 @@ let mfcc ?(n_mfcc : int = 20) ?(window : Window.t = Window.default)
   let x, _ =
     mel_specgram ~window ~fs ~noverlap ~nmels ~fmin ~fmax ~htk ~norm x
   in
-  let x = Convert.power_to_db (RefFloat 1.) x in
+  let x = Utils.Convert.power_to_db (RefFloat 1.) x in
   let m = Owl.Fft.Generic.dct ~axis:(-2) ~norm:Ortho ~ttype:dct_type x in
   let ndims = Audio.G.num_dims m in
   let slices =

@@ -55,6 +55,43 @@ module Convert = struct
       (* we need to filter out possible nans here since log can result in
          nans *)
       + map (fun x -> if Float.is_nan x then 0.0 else x) (log_mask * log_result)
+
+  type reference =
+    | RefFloat of float
+    | RefFunction of ((float, Bigarray.float32_elt) Audio.G.t -> float)
+
+  let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.)
+      (ref : reference) (s : ('a, Bigarray.float32_elt) Audio.G.t) =
+    assert (amin > 0.) ;
+    let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
+    let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
+    let ref = Audio.G.(init (kind s) (shape s) (fun _ -> ref)) in
+    let log_spec = Audio.G.(10.0 $* log10 (max2 amin s)) in
+    Audio.G.(log_spec -= (10.0 $* log10 (max2 amin ref))) ;
+    let res =
+      match top_db with
+      | None ->
+          log_spec
+      | Some top_db ->
+          assert (top_db >= 0.0) ;
+          let max_spec = Audio.G.max' log_spec in
+          let max_spec = max_spec -. top_db in
+          let max_spec =
+            Audio.G.(init (kind log_spec) (shape log_spec) (fun _ -> max_spec))
+          in
+          Audio.G.max2 log_spec max_spec
+    in
+    res
+
+  let db_to_power ?(amin = 1e-10) (ref : reference)
+      (s : ('a, Bigarray.float32_elt) Audio.G.t) =
+    assert (amin > 0.) ;
+    let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
+    let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
+    let ref = Audio.G.(init (kind s) (shape s) (fun _ -> ref)) in
+    let spec = Audio.G.(10.0 $* s /$ 10.0) in
+    Audio.G.(spec += (10.0 $* log10 (max2 amin ref))) ;
+    Audio.G.(exp10 spec)
 end
 
 let fftfreq (n : int) (d : float) =
