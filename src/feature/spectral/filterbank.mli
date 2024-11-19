@@ -24,9 +24,9 @@ type norm = Slaney | PNorm of float
 val mel :
      ?fmax:float option
   -> ?htk:bool
-  -> ?norm:norm
+  -> ?norm:norm option
   -> sample_rate:int
   -> nfft:int
   -> nmels:int
   -> fmin:float
-  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t

@@ -235,7 +235,7 @@ let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
 let mel_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
     ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
-    ?(norm : Filterbank.norm = Filterbank.Slaney) (x : Audio.audio) =
+    ?(norm : Filterbank.norm option = None) (x : Audio.audio) =
   let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x in
   let res = Audio.G.re_c2s res in
   let sample_rate = Audio.meta x |> Audio.Metadata.sample_rate in
@@ -248,15 +248,22 @@ let mel_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
 let mfcc ?(n_mfcc : int = 20) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
     ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
-    ?(norm : Filterbank.norm = Filterbank.Slaney)
-    ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
+    ?norm ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
     (x : Audio.audio) =
   assert (lifter >= 0) ;
   let x, _ =
     mel_specgram ~window ~fs ~noverlap ~nmels ~fmin ~fmax ~htk ~norm x
   in
-  let x = Utils.Convert.power_to_db (RefFloat 1.) x in
-  let m = Owl.Fft.Generic.dct ~axis:(-2) ~norm:Ortho ~ttype:dct_type x in
+  let x = Audio.G.cast_s2d x in
+  let x = Utils.Convert.power_to_db (RefFloat 1.0) x in
+  let norm =
+    match dct_type with
+    | II | III ->
+        Owl.Fft.Generic.Ortho
+    | _ ->
+        Owl.Fft.Generic.Backward
+  in
+  let m = Owl.Fft.Generic.dct ~axis:(-2) ~norm ~ttype:dct_type x in
   let ndims = Audio.G.num_dims m in
   let slices =
     let open Owl in
