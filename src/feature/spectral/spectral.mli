@@ -89,12 +89,12 @@ module Filterbank : sig
   val mel :
        ?fmax:float option
     -> ?htk:bool
-    -> ?norm:Filterbank.norm
+    -> ?norm:norm option
     -> sample_rate:int
     -> nfft:int
     -> nmels:int
     -> fmin:float
-    -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
 end
 
 val specgram :
@@ -229,10 +229,10 @@ val mel_specgram :
   -> ?fmin:float
   -> ?fmax:float option
   -> ?htk:bool
-  -> ?norm:Filterbank.norm
+  -> ?norm:Filterbank.norm option
   -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+     * (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
 (** 
   [mel_specgram] *)
 
@@ -249,4 +249,4 @@ val mfcc :
   -> ?dct_type:Owl_fft_generic.ttrig_transform
   -> ?lifter:int
   -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  -> (float, Bigarray.float64_elt) Owl_dense_ndarray.Generic.t
