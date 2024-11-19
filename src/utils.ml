@@ -58,10 +58,10 @@ module Convert = struct
 
   type reference =
     | RefFloat of float
-    | RefFunction of ((float, Bigarray.float32_elt) Audio.G.t -> float)
+    | RefFunction of ((float, float64_elt) Audio.G.t -> float)
 
   let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.)
-      (ref : reference) (s : ('a, Bigarray.float32_elt) Audio.G.t) =
+      (ref : reference) (s : (float, float64_elt) Audio.G.t) =
     assert (amin > 0.) ;
     let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
     let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
@@ -84,7 +84,7 @@ module Convert = struct
     res
 
   let db_to_power ?(amin = 1e-10) (ref : reference)
-      (s : ('a, Bigarray.float32_elt) Audio.G.t) =
+      (s : ('a, Bigarray.float64_elt) Audio.G.t) =
     assert (amin > 0.) ;
     let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
     let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
