@@ -22,8 +22,8 @@
 type norm = Slaney | PNorm of float
 
 let mel ?(fmax : float option = None) ?(htk : bool = false)
-    ?(norm : norm = Slaney) ~(sample_rate : int) ~(nfft : int) ~(nmels : int)
-    ~fmin =
+    ?(norm : norm option = None) ~(sample_rate : int) ~(nfft : int)
+    ~(nmels : int) ~fmin =
   let fmax =
     match fmax with Some fmax -> fmax | None -> float_of_int sample_rate /. 2.
   in
@@ -45,7 +45,7 @@ let mel ?(fmax : float option = None) ?(htk : bool = false)
   in
   let weights =
     match norm with
-    | Slaney ->
+    | Some Slaney ->
         let enorm =
           2.0
           $/ sub
@@ -54,8 +54,10 @@ let mel ?(fmax : float option = None) ?(htk : bool = false)
         in
         let enorm = reshape enorm [|nmels; 1|] in
         weights * enorm
-    | PNorm p ->
+    | Some (PNorm p) ->
         Audio.G.vecnorm ~p ~axis:(-1) weights
+    | None ->
+        weights
   in
   weights
 [@@warning "-unerasable-optional-argument"]

@@ -24,15 +24,32 @@
 module Convert : sig
   val mel_to_hz :
        ?htk:bool
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
+    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
   (** Converts mel-scale values to Hz. *)
 
   val hz_to_mel :
        ?htk:bool
-    -> (float, 'a) Owl_dense_ndarray_generic.t
-    -> (float, 'a) Owl_dense_ndarray_generic.t
+    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
+    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
   (** Reverse function of {!mel_to_hz}. *)
+
+  type reference =
+    | RefFloat of float
+    | RefFunction of ((float, Bigarray.float64_elt) Audio.G.t -> float)
+
+  val power_to_db :
+       ?amin:float
+    -> ?top_db:float option
+    -> reference
+    -> (float, Bigarray.float64_elt) Owl_dense_ndarray.Generic.t
+    -> (float, Bigarray.float64_elt) Owl_dense_ndarray_generic.t
+
+  val db_to_power :
+       ?amin:float
+    -> reference
+    -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
+    -> (float, Bigarray.float64_elt) Owl.Dense.Ndarray.Generic.t
 end
 
 (**
