@@ -1,4 +1,7 @@
 _build
+dataset/
+cache/
+*.pth
 .venv
 .vscode
 *.mp3
