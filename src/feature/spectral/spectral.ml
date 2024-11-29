@@ -152,7 +152,6 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
   let res = detrend res in
   let res = Audio.G.(res * window) in
   let res = Owl.Fft.S.rfft res ~axis:0 in
-  let freqs = Utils.fftfreq pad_to (1. /. float_of_int fs) in
   ( if not same_data then (
       let res_y = Audio.G.slide ~window:nfft ~step:(nfft - noverlap) y in
       Audio.G.transpose_ ~out:res_y res_y ;
@@ -195,64 +194,70 @@ let spectral_helper ?(nfft : int = 256) ?(fs : int = 2) ?(window = Window.Hann)
       let window = Audio.G.abs window in
       let n = Float.pow (Audio.G.sum' window) 2. in
       Audio.G.div_scalar_ ~out:res res Complex.{re= n; im= 0.} ) ;
-  let res, freqs =
+  let res =
     match side with
     | TwoSided ->
         (* this will center the freqs range around 0 *)
-        (Utils.roll res (-freq_center), Utils.roll freqs (-freq_center))
+        Utils.roll res (-freq_center)
     | OneSided ->
-        (res, freqs)
+        res
   in
-  (res, freqs)
+  res
 
 let specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
     (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
+  let res = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
   let res = Audio.G.re_c2s res in
-  (res, freqs)
+  res
 
 let complex_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(detrend : 'a -> 'a = Detrend.none)
     (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
-  (res, freqs)
+  let res = spectral_helper ~nfft ~fs ~window ~noverlap ~detrend x in
+  res
 
 let phase_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Phase in
+  let res = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Phase in
   let res = Audio.G.re_c2s res in
-  (Utils.unwrap ~axis:0 res, freqs)
+  Utils.unwrap ~axis:0 res
 
 let magnitude_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) (x : Audio.audio) =
-  let res, freqs =
-    spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Magnitude
-  in
+  let res = spectral_helper ~nfft ~fs ~window ~noverlap x ~mode:Magnitude in
   let res = Audio.G.re_c2s res in
-  (res, freqs)
+  res
 
 let mel_specgram ?(nfft : int = 256) ?(window : Window.t = Window.default)
     ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
     ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
     ?(norm : Filterbank.norm option = None) (x : Audio.audio) =
-  let res, freqs = spectral_helper ~nfft ~fs ~window ~noverlap x in
+  let res = spectral_helper ~nfft ~fs ~window ~noverlap x in
   let res = Audio.G.re_c2s res in
   let sample_rate = Audio.meta x |> Audio.Metadata.sample_rate in
   let weights =
     Filterbank.mel ~fmax ~htk ~sample_rate ~nfft ~nmels ~fmin ~norm
   in
   let res = Audio.G.dot weights res in
-  (res, freqs)
+  res
 
-let mfcc ?(n_mfcc : int = 20) ?(window : Window.t = Window.default)
-    ?(fs : int = 2) ?(noverlap : int = 128) ?(nmels : int = 128)
-    ?(fmin : float = 0.) ?(fmax : float option = None) ?(htk : bool = false)
-    ?norm ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
+let rms ?(window : int = 2048) ?(step : int = 512) (x : Audio.audio) =
+  let x = Audio.data x in
+  let x = Audio.G.slide ~step ~window x in
+  let x = Audio.G.abs2 x in
+  let x = Audio.G.mean x in
+  x
+
+let mfcc ?(nfft : int = 256) ?(n_mfcc : int = 20)
+    ?(window : Window.t = Window.default) ?(fs : int = 2)
+    ?(noverlap : int = 128) ?(nmels : int = 128) ?(fmin : float = 0.)
+    ?(fmax : float option = None) ?(htk : bool = false) ?norm
+    ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
     (x : Audio.audio) =
   assert (lifter >= 0) ;
-  let x, _ =
-    mel_specgram ~window ~fs ~noverlap ~nmels ~fmin ~fmax ~htk ~norm x
+  let x =
+    mel_specgram ~nfft ~window ~fs ~noverlap ~nmels ~fmin ~fmax ~htk ~norm x
   in
   let x = Audio.G.cast_s2d x in
   let x = Utils.Convert.power_to_db (RefFloat 1.0) x in
@@ -289,3 +294,31 @@ let mfcc ?(n_mfcc : int = 20) ?(window : Window.t = Window.default)
         Audio.G.(1. $+ (n /. 2. $* Audio.G.expand ~hi:true li ndims))
       in
       Audio.G.(m * li_expanded)
+
+let zero_crossings ?(threshold = 1e-10) ?(zero_pos = true)
+    (x : (float, 'b) Owl_dense_ndarray.Generic.t) =
+  let op =
+    match zero_pos with true -> Audio.G.( <.$ ) | false -> Audio.G.( <=.$ )
+  in
+  (* everything below this threshold will be zeroed *)
+  let mask = Audio.G.(abs x >.$ threshold) in
+  let x = Audio.G.(x * mask) in
+  let x = op x 0. in
+  (* we're dealing with 1D arrays *)
+  let shape = Audio.G.shape x in
+  let result = Audio.G.zeros (Audio.G.kind x) shape in
+  (* problem using diff here, as we want to keep the same dim *)
+  let x0 = Audio.G.get_slice [[]; [0; shape.(1) - 2]] x in
+  let x1 = Audio.G.get_slice [[]; [1; shape.(1) - 1]] x in
+  let crossing = Audio.G.(( !=. ) x0 x1) in
+  Audio.G.set_slice [[]; [1; shape.(1) - 1]] result crossing ;
+  result
+
+let zero_crossing_rate ?(window = 2048) ?(hop_length = 512) ?(threshold = 1e-10)
+    ?(zero_pos = false) (x : Audio.audio) =
+  let x = Audio.data x in
+  let frames = Audio.G.slide ~window ~step:(window - hop_length) x in
+  let crossings = zero_crossings ~threshold ~zero_pos frames in
+  (* Calculate mean and normalize by frame length - 1 *)
+  let rate = Audio.G.(mean ~axis:1 ~keep_dims:true crossings |> transpose) in
+  rate

@@ -94,7 +94,7 @@ module Filterbank : sig
     -> nfft:int
     -> nmels:int
     -> fmin:float
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+    -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 end
 
 val specgram :
@@ -107,7 +107,6 @@ val specgram :
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [spectrogram ?nfft ?fs ?noverlap audio] computes the spectrogram of the given audio data.
 
@@ -139,7 +138,6 @@ val complex_specgram :
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
   -> Audio.audio
   -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 
 (** 
     [complex_specgram ?nfft ?fs ?noverlap audio] computes the complex spectrogram of the given audio data.
@@ -169,7 +167,6 @@ val magnitude_specgram :
   -> ?noverlap:int
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [magnitude_specgram ?nfft ?fs ?noverlap audio] computes the magnitude spectrogram of the given audio data.
 
@@ -198,7 +195,6 @@ val phase_specgram :
   -> ?noverlap:int
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [phase_specgram ?nfft ?fs ?noverlap audio] computes the phase spectrogram of the given audio data.
 
@@ -231,13 +227,13 @@ val mel_specgram :
   -> ?htk:bool
   -> ?norm:Filterbank.norm option
   -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-     * (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (** 
   [mel_specgram] *)
 
 val mfcc :
-     ?n_mfcc:int
+     ?nfft:int
+  -> ?n_mfcc:int
   -> ?window:Window.t
   -> ?fs:int
   -> ?noverlap:int
@@ -250,3 +246,65 @@ val mfcc :
   -> ?lifter:int
   -> Audio.audio
   -> (float, Bigarray.float64_elt) Owl_dense_ndarray.Generic.t
+
+val rms :
+     ?window:int
+  -> ?step:int
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+(**
+    [rms ~window ~step audio] computes the Root Mean Square (RMS) of the given audio data for each frame.
+
+    [?window] is the window size to use for the RMS computation. Default is [2048].
+    [?step] is the step size to use for the RMS computation. Default is [1024].
+
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let rms = rms src in
+            (* ... *)
+    ]} *)
+
+val zero_crossings :
+     ?threshold:float
+  -> ?zero_pos:bool
+  -> (float, 'b) Owl_dense_ndarray.Generic.t
+  -> (float, 'b) Owl_dense_ndarray.Generic.t
+(**
+    [zero_crossings ~threshold ~zero_pos x] computes the zero-crossings of the given audio data for each frame.
+
+    [?threshold] is the threshold to use for the zero-crossing computation. Default is [1e-10].
+    [?zero_pos] is a boolean to determine if zero-crossings should be considered positive. Default is [true].
+
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let zc = zero_crossings src in
+            (* ... *)
+    ]} *)
+
+val zero_crossing_rate :
+     ?window:int
+  -> ?hop_length:int
+  -> ?threshold:float
+  -> ?zero_pos:bool
+  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+(**
+    [zero_crossing_rate ~window ~step audio] computes the zero-crossing rate of the given audio data for each frame.
+
+    [?window] is the window size to use for the zero-crossing computation. Default is [256].
+    [?noverlap] is the step size to use for the zero-crossing computation. Default is [128].
+
+    Examples:
+
+    {[
+        let () =
+            let src = read file.wav wav in
+            let zcr = zero_crossing src in
+            (* ... *)
+    ]} *)
