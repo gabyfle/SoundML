@@ -41,7 +41,7 @@ The project is still work in progress.
 * [ ] Time domain analysis
   * [x] RMS computation 
   * [X] Zero crossing rate
-* Effects module
+* [ ] Effects module
   * [ ] Pitch shifting
   * [ ] Time stretching
   * [ ] Filters (low-pass, high-pass, band-pass, etc...)
