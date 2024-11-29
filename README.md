@@ -29,29 +29,30 @@ opam install soundml
 The project is still work in progress.
 
 * [x] Read and Write audio
-* [x] Compute the FFT of an audio signal
-* [x] Compute the IFFT of an FFT
 * [x] Audio slicing (in a similar way to Owl's slicing)
 * [ ] Basic onset detection algorithms
 * [ ] Spectral analysis
   * [x] Generic spectrogram helper function
-  * [ ] Mel spectrogram
+  * [ ] Unify the spectrogram parameters inside a config module.
+  * [X] Mel spectrogram
+  * [X] MFCC spectrogram
   * [ ] Chroma spectrogram
   * [x] Constant and linear detrend
 * [ ] Time domain analysis
   * [x] RMS computation 
-  * [ ] Zero crossing rate
-  * [ ] Energy
+  * [X] Zero crossing rate
+* Effects module
+  * [ ] Pitch shifting
+  * [ ] Time stretching
+  * [ ] Filters (low-pass, high-pass, band-pass, etc...)
 * [ ] Write test files for the whole library 
 
 ## Features
  - Natively written in OCaml for a perfect OCaml developer experience
  - Easily read and write audio files in various formats (WAV, MP3, etc...)
- - Various audio signal processing functions included
-   - FFT, IFFT
-   - Spectrogram computation
-   - Audio slicing
-   - RMS computation
+ - Audio slicing
+ - Feature extraction (MFCC, mel-spectrogram, ZCR, ...)
+ - Audio effects (pitch shifting, time stretching, filters, ...)
 
 
 ## Requirements

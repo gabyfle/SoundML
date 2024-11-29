@@ -28,5 +28,5 @@
 (executable ; for testing purpose only, have to be removed
  (name test)
  (public_name test)
- (libraries ffmpeg-av ffmpeg-swresample soundml)
+ (libraries ffmpeg-av ffmpeg-swresample csv soundml)
  (modules test))
