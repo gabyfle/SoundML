@@ -97,11 +97,22 @@ module Filterbank : sig
     -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 end
 
+module Config : sig
+  type t =
+    { nfft: int
+    ; window: Window.t
+    ; fs: int
+    ; noverlap: int
+    ; side: side
+    ; mode: mode
+    ; pad_to: int option
+    ; scale_by_freq: bool option }
+
+  val default : t
+end
+
 val specgram :
-     ?nfft:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
   -> ?detrend:
        (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
@@ -129,10 +140,7 @@ val specgram :
     ]} *)
 
 val complex_specgram :
-     ?nfft:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
   -> ?detrend:
        (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
@@ -161,10 +169,7 @@ val complex_specgram :
     ]} *)
 
 val magnitude_specgram :
-     ?nfft:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
@@ -189,10 +194,7 @@ val magnitude_specgram :
     ]} *)
 
 val phase_specgram :
-     ?nfft:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
   -> Audio.audio
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
@@ -217,10 +219,7 @@ val phase_specgram :
     ]} *)
 
 val mel_specgram :
-     ?nfft:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
   -> ?nmels:int
   -> ?fmin:float
   -> ?fmax:float option
@@ -232,11 +231,8 @@ val mel_specgram :
   [mel_specgram] *)
 
 val mfcc :
-     ?nfft:int
-  -> ?n_mfcc:int
-  -> ?window:Window.t
-  -> ?fs:int
-  -> ?noverlap:int
+     ?config:Config.t
+  -> ?nmfcc:int
   -> ?nmels:int
   -> ?fmin:float
   -> ?fmax:float option
