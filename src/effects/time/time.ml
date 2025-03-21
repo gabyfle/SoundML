@@ -260,12 +260,32 @@ external rubberband_time_stretch :
   -> int
   -> (float, Bigarray.float32_elt) Audio.G.t = "caml_rubberband_time_stretch"
 
+external rubberband_pitch_shift :
+     (float, Bigarray.float32_elt) Audio.G.t
+  -> int
+  -> int
+  -> int
+  -> int
+  -> (float, Bigarray.float32_elt) Audio.G.t = "caml_rubberband_pitch_shift"
+
 let time_stretch ?(config : Config.t = Config.default) (x : Audio.audio)
     (rate : float) : Audio.audio =
+  if not (rate > 0.) then failwith "rate must be > 0."
+  else
+    let data = Audio.data x in
+    let meta = Audio.meta x in
+    let sr = Audio.Metadata.sample_rate meta in
+    let channels = Audio.Metadata.channels meta in
+    let config = Config.to_int config in
+    let y = rubberband_time_stretch data rate sr channels config in
+    Audio.set_data x y
+
+let pitch_shift ?(config : Config.t = Config.default) (x : Audio.audio)
+    (semitones : int) : Audio.audio =
   let data = Audio.data x in
   let meta = Audio.meta x in
   let sr = Audio.Metadata.sample_rate meta in
   let channels = Audio.Metadata.channels meta in
   let config = Config.to_int config in
-  let y = rubberband_time_stretch data rate sr channels config in
+  let y = rubberband_pitch_shift data semitones sr channels config in
   Audio.set_data x y
