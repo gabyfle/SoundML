@@ -19,8 +19,69 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module Audio = Audio
-module Io = Io
-module Feature = Feature
-module Effects = Effects
-module Utils = Utils
+type engine = Faster | Finer
+
+type quality = HighSpeed | HighQuality | HighConsistency
+
+type formant = Shifted | Preserved
+
+type window = Standard | Short | Long
+
+type smoothing = Off | On
+
+type threading = Auto | Always | Never
+
+type phase = Laminar | Independent
+
+type detector = Compound | Percussive | Soft
+
+type transients = Crisp | Smooth | Mixed
+
+type channels = Apart | Together
+
+type process = RealTime | Offline
+
+module Config : sig
+  type t =
+    { engine: engine
+    ; quality: quality
+    ; formant: formant
+    ; window: window
+    ; smoothing: smoothing
+    ; threading: threading
+    ; phase: phase
+    ; detector: detector
+    ; transients: transients
+    ; channels: channels
+    ; process: process }
+
+  val default : t
+
+  val percussive : t
+
+  val set_engine : engine -> t -> t
+
+  val set_quality : quality -> t -> t
+
+  val set_formant : formant -> t -> t
+
+  val set_window : window -> t -> t
+
+  val set_smoothing : smoothing -> t -> t
+
+  val set_threading : threading -> t -> t
+
+  val set_phase : phase -> t -> t
+
+  val set_detector : detector -> t -> t
+
+  val set_transients : transients -> t -> t
+
+  val set_channels : channels -> t -> t
+
+  val set_process : process -> t -> t
+
+  val to_int : t -> int
+end
+
+val time_stretch : ?config:Config.t -> Audio.audio -> float -> Audio.audio
