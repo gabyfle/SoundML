@@ -85,3 +85,25 @@ module Config : sig
 end
 
 val time_stretch : ?config:Config.t -> Audio.audio -> float -> Audio.audio
+(**
+  [time_stretch ?config audio factor] stretches or compresses the audio by the
+  given factor. 
+  
+  [config] is the configuration of the stretcher. It uses by default the same default configuration as RubberBand.
+  [audio] is the audio to stretch.
+  [factor] must be a positive number. It's the ratio of stretched to unstretched duration -- not tempo !
+  
+  @see RubberBand::RubberBandStretcher::setTimeRatio
+*)
+
+val pitch_shift : ?config:Config.t -> Audio.audio -> int -> Audio.audio
+(**
+  [pitch_shift ?config audio semitones] shifts the pitch of the audio by the
+  given number of semitones. 
+  
+  [config] is the configuration of the stretcher. It uses by default the same default configuration as RubberBand.
+  [audio] is the audio to shift.
+  [semitones] is the number of semitones to shift the pitch. A negative value indicates a downward shift, a positive value an upward shift.
+  
+  @see RubberBand::RubberBandStretcher::setPitchScale
+*)

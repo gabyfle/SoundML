@@ -1,5 +1,5 @@
 let () =
   let open Soundml in
   let v = Io.read "mono.wav" "wav" in
-  let stretched = Effects.Time.time_stretch v 0.5 in
-  Io.write stretched "stretched.wav" "wav"
+  let stretched = Effects.Time.pitch_shift v (-6) in
+  Io.write stretched "shifted.wav" "wav"
