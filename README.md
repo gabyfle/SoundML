@@ -30,13 +30,13 @@ The project is still work in progress.
 
 * [x] Read and Write audio
 * [x] Audio slicing (in a similar way to Owl's slicing)
-* [ ] Basic onset detection algorithms
+* [ ] Onset detection algorithms
 * [ ] Spectral analysis
   * [x] Generic spectrogram helper function
-  * [ ] Unify the spectrogram parameters inside a config module.
+  * [X] Unify the spectrogram parameters inside a config module.
   * [X] Mel spectrogram
   * [X] MFCC spectrogram
-  * [ ] Chroma spectrogram
+  * [ ] Chroma spectrogram (*WIP*)
   * [x] Constant and linear detrend
 * [X] Time domain analysis
   * [x] RMS computation 
