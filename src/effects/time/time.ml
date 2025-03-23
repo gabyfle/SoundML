@@ -277,7 +277,9 @@ let time_stretch ?(config : Config.t = Config.default) (x : Audio.audio)
     let sr = Audio.Metadata.sample_rate meta in
     let channels = Audio.Metadata.channels meta in
     let config = Config.to_int config in
+    Printf.printf "Size (before): %d\n" (Audio.G.numel data) ;
     let y = rubberband_time_stretch data rate sr channels config in
+    Printf.printf "Size (after): %d\n" (Audio.G.numel y) ;
     Audio.set_data x y
 
 let pitch_shift ?(config : Config.t = Config.default) (x : Audio.audio)
@@ -287,5 +289,7 @@ let pitch_shift ?(config : Config.t = Config.default) (x : Audio.audio)
   let sr = Audio.Metadata.sample_rate meta in
   let channels = Audio.Metadata.channels meta in
   let config = Config.to_int config in
+  Printf.printf "Size (before): %d\n" (Audio.G.numel data) ;
   let y = rubberband_pitch_shift data semitones sr channels config in
+  Printf.printf "Size (after): %d\n" (Audio.G.numel y) ;
   Audio.set_data x y
