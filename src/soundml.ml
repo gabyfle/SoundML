@@ -22,4 +22,5 @@
 module Audio = Audio
 module Io = Io
 module Feature = Feature
+module Effects = Effects
 module Utils = Utils

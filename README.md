@@ -38,12 +38,12 @@ The project is still work in progress.
   * [X] MFCC spectrogram
   * [ ] Chroma spectrogram (*WIP*)
   * [x] Constant and linear detrend
-* [ ] Time domain analysis
+* [X] Time domain analysis
   * [x] RMS computation 
   * [X] Zero crossing rate
-* [ ] Effects module (*WIP*)
-  * [ ] Pitch shifting
-  * [ ] Time stretching
+* [ ] Effects module
+  * [x] Pitch shifting (*TO TEST*)
+  * [x] Time stretching (*TO TEST*)
   * [ ] Filters (low-pass, high-pass, band-pass, etc...)
 * [ ] Write test files for the whole library 
 
