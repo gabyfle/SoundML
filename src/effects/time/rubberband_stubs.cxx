@@ -31,6 +31,7 @@
 
 extern "C"
 {
+
     /**
      * Time-stretch a 32-bits audio signal using the RubberBand library.
      *
@@ -47,20 +48,12 @@ extern "C"
         CAMLparam5(v_input, v_rate, v_config, v_sample_rate, v_channels);
         CAMLlocal1(v_output);
 
-        struct caml_ba_array *input_ba = Caml_ba_array_val(v_input);
-        float *input_data = static_cast<float *>(input_ba->data);
+        float *input_data = static_cast<float *>(Caml_ba_data_val(v_input));
         float rate = Double_val(v_rate);
         int sample_rate = Long_val(v_sample_rate);
         int channels = Long_val(v_channels);
         int config = Long_val(v_config);
-        size_t num_samples = input_ba->dim[0];
-
-        // TODO: Get rid of the logging
-        std::cout << "Num samples: " << num_samples << std::endl;
-        std::cout << "Rate: " << rate << std::endl;
-        std::cout << "Sample rate: " << sample_rate << std::endl;
-        std::cout << "Channels: " << channels << std::endl;
-        std::cout << "Config: " << config << std::endl;
+        size_t num_samples = Caml_ba_array_val(v_input)->dim[0];
 
         RubberBand::RubberBandStretcher stretcher(sample_rate, channels, config);
 
@@ -109,7 +102,10 @@ extern "C"
                       output_data);
         }
 
-        intnat dims[1] = {static_cast<intnat>(totalSamples)};
+        intnat dims[channels];
+        for (int c = 0; c < channels; ++c)
+            dims[c] = static_cast<intnat>(totalSamples);
+
         v_output = caml_ba_alloc(CAML_BA_FLOAT32 | CAML_BA_C_LAYOUT, channels, output_data, dims);
 
         CAMLreturn(v_output);
@@ -132,13 +128,12 @@ extern "C"
         CAMLparam5(v_input, v_semitone, v_config, v_sample_rate, v_channels);
         CAMLlocal1(v_output);
 
-        struct caml_ba_array *input_ba = Caml_ba_array_val(v_input);
-        float *input_data = static_cast<float *>(input_ba->data);
+        float *input_data = static_cast<float *>(Caml_ba_data_val(v_input));
         int semitone = Long_val(v_semitone);
         int sample_rate = Long_val(v_sample_rate);
         int channels = Long_val(v_channels);
         int config = Long_val(v_config);
-        size_t num_samples = input_ba->dim[0];
+        size_t num_samples = Caml_ba_array_val(v_input)->dim[0];
 
         RubberBand::RubberBandStretcher stretcher(sample_rate, channels, config);
 
@@ -188,7 +183,10 @@ extern "C"
                       output_data);
         }
 
-        intnat dims[1] = {static_cast<intnat>(totalSamples)};
+        intnat dims[channels];
+        for (int c = 0; c < channels; ++c)
+            dims[c] = static_cast<intnat>(totalSamples);
+
         v_output = caml_ba_alloc(CAML_BA_FLOAT32 | CAML_BA_C_LAYOUT, channels, output_data, dims);
 
         CAMLreturn(v_output);
