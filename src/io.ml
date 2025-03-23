@@ -99,7 +99,6 @@ let read (filename : string) (format : string) : audio =
   in
   decode_frames () ;
   Av.get_input istream |> Av.close ;
-  Gc.full_major () ;
   let data = G.resize data [|!rsamples|] in
   let power = float_of_int (if bit_depth = 3 then 16 else bit_depth) in
   G.div_scalar_ ~out:data data (Float.pow 2. power) ;

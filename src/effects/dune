@@ -1,0 +1,12 @@
+(include_subdirs qualified)
+
+(library
+ (name effects)
+ (package soundml)
+ (foreign_stubs
+  (language cxx)
+  (names rubberband_stubs)
+  (flags :standard -std=c++11))
+ (c_library_flags :standard -lrubberband -lfftw3 -lsamplerate)
+ (libraries audio utils owl)
+ (wrapped true))
