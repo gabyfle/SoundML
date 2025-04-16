@@ -15,7 +15,7 @@ jobs:
         ocaml-compiler:
           - "5.2"
 
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -27,6 +27,13 @@ jobs:
             sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
 
             ffmpeg -version
+
+      - name: Install & Verify Rubberband version
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y rubberband-cli librubberband-dev
+
+            rubberband --version
 
       - name: Install OCaml
         uses: ocaml/setup-ocaml@v2
@@ -54,7 +61,7 @@ jobs:
             _build/default/_doc/_html/odoc.support
 
   lint-fmt:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout tree
         uses: actions/checkout@v4
@@ -66,30 +73,3 @@ jobs:
           dune-cache: true
 
       - uses: ocaml/setup-ocaml/lint-fmt@v2
-
-  deploy-site:
-    needs: [build, lint-fmt]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download odoc documentation
-        uses: actions/download-artifact@v4
-        with:
-          name: doc
-          path: doc/
-
-      - name: Move SoundML root to... root !
-        run: mv -v doc/soundml/* doc/
-      
-      - name: Deploy to VPS Server
-        uses: easingthemes/ssh-deploy@main
-        with:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          ARGS: "-rlgoDzvc -i"
-          SOURCE: "/doc/"
-          REMOTE_HOST: ${{ secrets.HOST }}
-          REMOTE_USER: ${{ secrets.USER }}
-          TARGET: ${{ secrets.PATH }}
-          EXCLUDE: "/ocaml/, *.md, dune, *.mld"
