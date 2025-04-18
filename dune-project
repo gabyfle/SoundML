@@ -25,6 +25,8 @@
   (ocaml
    (>= 5.2.0))
   dune
+  (conf-pkg-config :build)
+  (dune-configurator :build)
   (owl
    (>= 1.1))
   (ffmpeg
