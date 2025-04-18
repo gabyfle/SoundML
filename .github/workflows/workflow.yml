@@ -1,3 +1,6 @@
+# Some of the CI has been inspired from https://github.com/savonet/build-and-test-ocaml-module/blob/main/action.yml
+# Thanks for the savonet team for building such an amazing software :p
+
 name: CI
 
 on:
@@ -26,11 +29,10 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
 
-      - name: Install dependencies
-        run: opam install . --deps-only --with-test
-
-      - name: Build SoundML libraries and executables
-        run: opam exec -- dune build
+      - name: Install SoundML package
+        run: |
+          opam --cli=2.3 install --verbose --confirm-level=unsafe-yes --with-test
+        shell: bash
 
       - name: Run tests
         run: opam exec -- dune runtest
