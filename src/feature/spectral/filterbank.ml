@@ -23,7 +23,7 @@ type norm = Slaney | PNorm of float
 
 let mel ?(fmax : float option = None) ?(htk : bool = false)
     ?(norm : norm option = None) ~(sample_rate : int) ~(nfft : int)
-    ~(nmels : int) ~fmin =
+    ~(nmels : int) ~(fmin : float) =
   let fmax =
     match fmax with Some fmax -> fmax | None -> float_of_int sample_rate /. 2.
   in
