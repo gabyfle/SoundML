@@ -31,7 +31,7 @@ jobs:
 
       - name: Install SoundML package
         run: |
-          opam --cli=2.3 install --verbose --confirm-level=unsafe-yes --with-test
+          opam --cli=2.3 install --verbose --confirm-level=unsafe-yes --with-test .
         shell: bash
 
       - name: Run tests
