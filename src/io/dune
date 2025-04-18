@@ -1,0 +1,22 @@
+(include_subdirs qualified)
+
+(library
+ (name io)
+ (package soundml)
+ (foreign_stubs
+  (language cxx)
+  (names libsndfile_stubs)
+  (flags
+   :standard
+   (:include c_flags.sexp)
+   -std=c++11
+   -O3))
+ (c_library_flags
+  (:include c_library_flags.sexp))
+ (libraries audio utils owl ffmpeg-av ffmpeg-swresample)
+ (wrapped true))
+
+(rule
+ (targets c_flags.sexp c_library_flags.sexp)
+ (action
+  (run ./config/discover.exe)))

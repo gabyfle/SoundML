@@ -62,7 +62,7 @@ let read (filename : string) (format : string) : audio =
   let out_sr = Audio.get_sample_rate icodec in
   let channels = Audio.get_channel_layout icodec in
   let nb_channels = Audio.get_nb_channels icodec in
-  let options = [`Engine_soxr] in
+  let options = [`Engine_swr] in
   let rsp = FrameToS32Bytes.from_codec ~options icodec channels out_sr in
   let duration = Av.get_duration ~format:`Millisecond istream in
   let bit_rate = Audio.get_bit_rate icodec in
@@ -84,12 +84,11 @@ let read (filename : string) (format : string) : audio =
     | `Audio_frame (i, frame) when i = idx ->
         let bytes = FrameToS32Bytes.convert rsp frame in
         let length = Bytes.length bytes in
-        for i = 0 to length / 4 do
+        for i = 0 to (length / 4) - 1 do
           let offset = i * 4 in
-          if offset + 4 <= length then (
-            let value = Int32.to_float (Bytes.get_int32_ne bytes offset) in
-            G.set data [|!rsamples|] value ;
-            incr rsamples )
+          let value = Int32.to_float (Bytes.get_int32_ne bytes offset) in
+          G.set data [|!rsamples|] value ;
+          incr rsamples
         done ;
         decode_frames ()
     | exception Avutil.Error `Eof ->

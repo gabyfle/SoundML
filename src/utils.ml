@@ -58,10 +58,10 @@ module Convert = struct
 
   type reference =
     | RefFloat of float
-    | RefFunction of ((float, float64_elt) Audio.G.t -> float)
+    | RefFunction of ((float, float32_elt) Audio.G.t -> float)
 
   let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.)
-      (ref : reference) (s : (float, float64_elt) Audio.G.t) =
+      (ref : reference) (s : (float, float32_elt) Audio.G.t) =
     assert (amin > 0.) ;
     let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
     let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
@@ -84,7 +84,7 @@ module Convert = struct
     res
 
   let db_to_power ?(amin = 1e-10) (ref : reference)
-      (s : ('a, Bigarray.float64_elt) Audio.G.t) =
+      (s : ('a, Bigarray.float32_elt) Audio.G.t) =
     assert (amin > 0.) ;
     let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
     let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
@@ -93,6 +93,21 @@ module Convert = struct
     Audio.G.(spec += (10.0 $* log10 (max2 amin ref))) ;
     Audio.G.(exp10 spec)
 end
+
+let pad_center (data : ('a, 'b) Audio.G.t) (target_size : int) (value : 'a) :
+    ('a, 'b) Audio.G.t =
+  let size = Audio.G.shape data |> fun s -> s.(0) in
+  if size = target_size then data
+  else if size > target_size then
+    raise
+      (Invalid_argument
+         "An error occured while trying to pad: current_size > target_size" )
+  else
+    let pad_total = target_size - size in
+    let pad_left = pad_total / 2 in
+    let pad_right = pad_total - pad_left in
+    let padding = [[pad_left; pad_right]] in
+    Audio.G.pad ~v:value padding data
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
@@ -191,7 +206,7 @@ let cov ?(b : ('a, 'b) Audio.G.t option) ~(a : ('a, 'b) Audio.G.t) =
 [@@warning "-unerasable-optional-argument"]
 
 let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Owl.Const.pi)
-    (p : (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t) =
+    (p : (float, 'a) Owl.Dense.Ndarray.Generic.t) =
   let nd = Audio.G.num_dims p in
   let dd = Audio.G.diff ~axis p in
   let discont = match discont with Some d -> d | None -> period /. 2. in

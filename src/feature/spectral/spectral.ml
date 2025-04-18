@@ -99,7 +99,7 @@ module Config = struct
     ; scale_by_freq: bool option }
 
   let default : t =
-    { nfft= 256
+    { nfft= 2048
     ; window= Window.default
     ; fs= 2
     ; noverlap= 0
@@ -112,12 +112,11 @@ end
 (* Ported and adapted from the spectral helper from matplotlib.mlab All credits
    to the original matplotlib.mlab authors and mainteners *)
 let spectral_helper ?(config : Config.t = Config.default)
-    ?(detrend : 'a -> 'a = Detrend.none) ?(y : Audio.audio option = None)
-    (x : Audio.audio) =
+    ?(detrend : 'a -> 'a = Detrend.none)
+    ?(y : (float, Bigarray.float32_elt) Audio.G.t option = None)
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let window = Window.get_window config.window in
-  let same_data =
-    match y with Some y -> Audio.data x = Audio.data y | None -> true
-  in
+  let same_data = match y with Some y -> x = y | None -> true in
   let pad_to = match config.pad_to with Some x -> x | None -> config.nfft in
   assert (pad_to >= config.nfft) ;
   assert (config.noverlap < config.nfft) ;
@@ -125,14 +124,8 @@ let spectral_helper ?(config : Config.t = Config.default)
   if (not same_data) && mode = PSD then assert false ;
   (* we're making copies of the data from x and y to then use in place padding
      and operations *)
-  let x = Audio.G.copy (Audio.data x) in
-  let y =
-    match y with
-    | Some y ->
-        Audio.G.copy (Audio.data y)
-    | None ->
-        Audio.G.copy x
-  in
+  let x = Audio.G.copy x in
+  let y = match y with Some y -> Audio.G.copy y | None -> Audio.G.copy x in
   (* We're making sure the arrays are at least of size nfft *)
   let xshp = Audio.G.shape x in
   ( if Array.get xshp 0 < config.nfft then
@@ -234,25 +227,27 @@ let spectral_helper ?(config : Config.t = Config.default)
   res
 
 let specgram ?(config : Config.t = Config.default)
-    ?(detrend : 'a -> 'a = Detrend.none) (x : Audio.audio) =
+    ?(detrend : 'a -> 'a = Detrend.none)
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let res = spectral_helper ~config ~detrend x in
   let res = Audio.G.re_c2s res in
   res
 
 let complex_specgram ?(config : Config.t = Config.default)
-    ?(detrend : 'a -> 'a = Detrend.none) (x : Audio.audio) =
+    ?(detrend : 'a -> 'a = Detrend.none)
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let res = spectral_helper ~config ~detrend x in
   res
 
 let phase_specgram ?(config : Config.t = {Config.default with mode= Phase})
-    (x : Audio.audio) =
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let res = spectral_helper ~config x in
   let res = Audio.G.re_c2s res in
   Utils.unwrap ~axis:0 res
 
 let magnitude_specgram
     ?(config : Config.t = {Config.default with mode= Magnitude})
-    (x : Audio.audio) =
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let res = spectral_helper ~config x in
   let res = Audio.G.re_c2s res in
   res
@@ -260,10 +255,9 @@ let magnitude_specgram
 let mel_specgram ?(config : Config.t = {Config.default with mode= Magnitude})
     ?(nmels : int = 128) ?(fmin : float = 0.) ?(fmax : float option = None)
     ?(htk : bool = false) ?(norm : Filterbank.norm option = None)
-    (x : Audio.audio) =
+    ?(sample_rate : int = 44100) (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let res = spectral_helper ~config x in
   let res = Audio.G.re_c2s res in
-  let sample_rate = Audio.meta x |> Audio.Metadata.sample_rate in
   let weights =
     Filterbank.mel ~fmax ~htk ~sample_rate ~nfft:config.nfft ~nmels ~fmin ~norm
   in
@@ -274,10 +268,9 @@ let mfcc ?(config : Config.t = Config.default) ?(nmfcc : int = 20)
     ?(nmels : int = 128) ?(fmin : float = 0.) ?(fmax : float option = None)
     ?(htk : bool = false) ?norm
     ?(dct_type : Owl.Fft.Generic.ttrig_transform = II) ?(lifter : int = 0)
-    (x : Audio.audio) =
+    ?(sample_rate : int = 44100) (x : (float, Bigarray.float32_elt) Audio.G.t) =
   assert (lifter >= 0) ;
-  let x = mel_specgram ~config ~nmels ~fmin ~fmax ~htk ~norm x in
-  let x = Audio.G.cast_s2d x in
+  let x = mel_specgram ~config ~nmels ~fmin ~fmax ~htk ~norm ~sample_rate x in
   let x = Utils.Convert.power_to_db (RefFloat 1.0) x in
   let norm =
     match dct_type with
@@ -313,15 +306,15 @@ let mfcc ?(config : Config.t = Config.default) ?(nmfcc : int = 20)
       in
       Audio.G.(m * li_expanded)
 
-let rms ?(window : int = 2048) ?(step : int = 512) (x : Audio.audio) =
-  let x = Audio.data x in
+let rms ?(window : int = 2048) ?(step : int = 512)
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let x = Audio.G.slide ~step ~window x in
   let x = Audio.G.abs2 x in
   let x = Audio.G.mean x in
   x
 
 let zero_crossings ?(threshold = 1e-10) ?(zero_pos = true)
-    (x : (float, 'b) Owl_dense_ndarray.Generic.t) =
+    (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let op =
     match zero_pos with true -> Audio.G.( <.$ ) | false -> Audio.G.( <=.$ )
   in
@@ -340,8 +333,7 @@ let zero_crossings ?(threshold = 1e-10) ?(zero_pos = true)
   result
 
 let zero_crossing_rate ?(window = 2048) ?(hop_length = 512) ?(threshold = 1e-10)
-    ?(zero_pos = false) (x : Audio.audio) =
-  let x = Audio.data x in
+    ?(zero_pos = false) (x : (float, Bigarray.float32_elt) Audio.G.t) =
   let frames = Audio.G.slide ~window ~step:(window - hop_length) x in
   let crossings = zero_crossings ~threshold ~zero_pos frames in
   (* Calculate mean and normalize by frame length - 1 *)
