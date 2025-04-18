@@ -23,14 +23,13 @@
 #include <iostream> /* for debug purpose for the moment */
 #include <cmath>
 
+extern "C"
+{
 #include <caml/mlvalues.h>
 #include <caml/memory.h>
 #include <caml/alloc.h>
 #include <caml/bigarray.h>
 #include <caml/fail.h>
-
-extern "C"
-{
 
     /**
      * Time-stretch a 32-bits audio signal using the RubberBand library.

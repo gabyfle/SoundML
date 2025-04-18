@@ -116,7 +116,7 @@ val specgram :
   -> ?detrend:
        (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
-  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Audio.G.t
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [spectrogram ?nfft ?fs ?noverlap audio] computes the spectrogram of the given audio data.
@@ -144,7 +144,7 @@ val complex_specgram :
   -> ?detrend:
        (   (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
         -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t )
-  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Audio.G.t
   -> (Complex.t, Bigarray.complex32_elt) Owl.Dense.Ndarray.Generic.t
 
 (** 
@@ -170,7 +170,7 @@ val complex_specgram :
 
 val magnitude_specgram :
      ?config:Config.t
-  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Audio.G.t
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [magnitude_specgram ?nfft ?fs ?noverlap audio] computes the magnitude spectrogram of the given audio data.
@@ -195,7 +195,7 @@ val magnitude_specgram :
 
 val phase_specgram :
      ?config:Config.t
-  -> Audio.audio
+  -> (float, Bigarray.float32_elt) Audio.G.t
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (**
     [phase_specgram ?nfft ?fs ?noverlap audio] computes the phase spectrogram of the given audio data.
@@ -225,7 +225,8 @@ val mel_specgram :
   -> ?fmax:float option
   -> ?htk:bool
   -> ?norm:Filterbank.norm option
-  -> Audio.audio
+  -> ?sample_rate:int
+  -> (float, Bigarray.float32_elt) Audio.G.t
   -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
 (** 
   [mel_specgram] *)
@@ -240,14 +241,15 @@ val mfcc :
   -> ?norm:Filterbank.norm
   -> ?dct_type:Owl_fft_generic.ttrig_transform
   -> ?lifter:int
-  -> Audio.audio
-  -> (float, Bigarray.float64_elt) Owl_dense_ndarray.Generic.t
+  -> ?sample_rate:int
+  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
 
 val rms :
      ?window:int
   -> ?step:int
-  -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
 (**
     [rms ~window ~step audio] computes the Root Mean Square (RMS) of the given audio data for each frame.
 
@@ -266,8 +268,8 @@ val rms :
 val zero_crossings :
      ?threshold:float
   -> ?zero_pos:bool
-  -> (float, 'b) Owl_dense_ndarray.Generic.t
-  -> (float, 'b) Owl_dense_ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
 (**
     [zero_crossings ~threshold ~zero_pos x] computes the zero-crossings of the given audio data for each frame.
 
@@ -288,8 +290,8 @@ val zero_crossing_rate :
   -> ?hop_length:int
   -> ?threshold:float
   -> ?zero_pos:bool
-  -> Audio.audio
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt) Audio.G.t
 (**
     [zero_crossing_rate ~window ~step audio] computes the zero-crossing rate of the given audio data for each frame.
 

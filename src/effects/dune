@@ -6,7 +6,12 @@
  (foreign_stubs
   (language cxx)
   (names rubberband_stubs)
-  (flags :standard -std=c++11))
+  (flags :standard -std=c++11 -O3))
  (c_library_flags :standard -lrubberband -lfftw3 -lsamplerate)
  (libraries audio utils owl)
  (wrapped true))
+
+(rule
+ (targets c_flags.sexp c_library_flags.sexp)
+ (action
+  (run ./time/config/discover.exe)))

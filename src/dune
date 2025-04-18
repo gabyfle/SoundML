@@ -6,13 +6,6 @@
  (wrapped false))
 
 (library
- (name io)
- (package soundml)
- (modules io)
- (libraries ffmpeg-av ffmpeg-swresample audio)
- (wrapped false))
-
-(library
  (name utils)
  (package soundml)
  (modules utils)
@@ -24,9 +17,3 @@
  (public_name soundml)
  (modules soundml)
  (libraries owl audio io feature effects))
-
-(executable ; for testing purpose only, have to be removed
- (name test)
- (public_name test)
- (libraries ffmpeg-av ffmpeg-swresample csv soundml)
- (modules test))

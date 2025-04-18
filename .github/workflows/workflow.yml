@@ -21,20 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install & Verify FFmpeg version
-        run: |
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
-
-            ffmpeg -version
-
-      - name: Install & Verify Rubberband version
-        run: |
-            sudo apt-get update
-            sudo apt-get install -y rubberband-cli librubberband-dev
-
-            rubberband --version
-
       - name: Install OCaml
         uses: ocaml/setup-ocaml@v3
         with:
@@ -49,17 +35,6 @@ jobs:
       - name: Run tests
         run: opam exec -- dune runtest
 
-      - name: Build SoundML documentation
-        run: opam install odoc && opam exec -- dune build @doc
-
-      - name: Upload odoc documentation
-        uses: actions/upload-artifact@v4
-        with:
-          name: doc
-          path: |
-            _build/default/_doc/_html/soundml
-            _build/default/_doc/_html/odoc.support
-
   lint-fmt:
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install OCaml
-        uses: ocaml/setup-ocaml@v2
+        uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.2"
           dune-cache: true

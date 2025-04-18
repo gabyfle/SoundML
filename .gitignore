@@ -1,10 +1,9 @@
 _build
 dataset/
 cache/
+report/
 *.pth
 .venv
 .vscode
 *.mp3
-*.npy
-*.py
 *.wav
