@@ -6,8 +6,13 @@
  (foreign_stubs
   (language cxx)
   (names rubberband_stubs)
-  (flags :standard -std=c++11 -O3))
- (c_library_flags :standard -lrubberband -lfftw3 -lsamplerate)
+  (flags
+   :standard
+   (:include c_flags.sexp)
+   -std=c++11
+   -O3))
+ (c_library_flags
+  (:include c_library_flags.sexp))
  (libraries audio utils owl)
  (wrapped true))
 
