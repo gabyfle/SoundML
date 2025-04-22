@@ -5,7 +5,7 @@
 (generate_opam_files true)
 
 (source
- (github gabyfle/soundml))
+ (github gabyfle/SoundML))
 
 (authors "Gabriel Santamaria <gaby.santamaria@outlook.fr>")
 
@@ -25,10 +25,12 @@
   (ocaml
    (>= 5.2.0))
   dune
-  (conf-pkg-config :build)
+  (conf-sndfile :build)
+  (conf-rubberband :build)
   (dune-configurator :build)
+  (odoc :with-doc)
   (owl
-   (>= 1.1))
+   (>= 1.2))
   (ffmpeg
    (>= 1.2.1)))
  (tags
