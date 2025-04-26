@@ -40,13 +40,13 @@ let to_mono (x : (float, 'a) G.t) =
 
 let read : type a.
        ?buffer_size:int
-    -> ?sample_rate:int
+    -> ?sample_rate:int option
     -> ?mono:bool
     -> (float, a) kind
     -> string
     -> a audio =
- fun ?(buffer_size : int = 1024) ?(sample_rate : int = 22050)
-     ?(mono : bool = true) typ (filename : string) ->
+ fun ?(buffer_size : int = 1024) ?sample_rate ?(mono : bool = true) typ
+     (filename : string) ->
   let read_func : type a.
       (float, a) kind -> string -> int -> int -> (float, a) G.t * metadata =
    fun typ ->
@@ -56,7 +56,16 @@ let read : type a.
     | Float64 ->
         caml_read_audio_file_f64
     | _ ->
-        .
+        failwith "unsupported"
+  in
+  let sample_rate =
+    match sample_rate with
+    | None ->
+        22050
+    | Some None ->
+        -1
+    | Some (Some rate) ->
+        rate
   in
   let data, meta = read_func typ filename buffer_size sample_rate in
   let data = if mono then to_mono data else data in
