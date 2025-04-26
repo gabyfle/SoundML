@@ -84,7 +84,11 @@ module Config : sig
   val to_int : t -> int
 end
 
-val time_stretch : ?config:Config.t -> Audio.audio -> float -> Audio.audio
+val time_stretch :
+     ?config:Config.t
+  -> Bigarray.float32_elt Audio.audio
+  -> float
+  -> Bigarray.float32_elt Audio.audio
 (**
   [time_stretch ?config audio factor] stretches or compresses the audio by the
   given factor. 
@@ -95,7 +99,11 @@ val time_stretch : ?config:Config.t -> Audio.audio -> float -> Audio.audio
   
   @see RubberBand::RubberBandStretcher::setTimeRatio *)
 
-val pitch_shift : ?config:Config.t -> Audio.audio -> int -> Audio.audio
+val pitch_shift :
+     ?config:Config.t
+  -> Bigarray.float32_elt Audio.audio
+  -> int
+  -> Bigarray.float32_elt Audio.audio
 (**
   [pitch_shift ?config audio semitones] shifts the pitch of the audio by the
   given number of semitones. 

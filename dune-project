@@ -23,15 +23,17 @@
   "SoundML is a library built on top of Owl to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
-   (>= 5.2.0))
+   (>= 4.14.2))
   dune
   (conf-sndfile :build)
   (conf-rubberband :build)
+  ; Samplerate is already a requirement of rubberband
+  (conf-samplerate :build)
   (dune-configurator :build)
-  (odoc :with-doc)
-  (owl
+  (owl ; Version 1.2 is required to have the DC transform
    (>= 1.2))
-  (ffmpeg
-   (>= 1.2.1)))
+  (odoc :with-doc)
+  (alcotest :with-test)
+  (yojson :with-test))
  (tags
-  (sound owl ffmpeg gabyfle)))
+  (sound owl spectrogram fourier gabyfle)))

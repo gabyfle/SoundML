@@ -19,23 +19,19 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module C = Configurator.V1
+open Tutils
+
+let tests = [("timeseries", (module Test_timeseries.Tests : Testable))]
 
 let () =
-  C.main ~name:"sndfile-pkg-config" (fun c ->
-      let default : C.Pkg_config.package_conf =
-        {libs= ["-lsndfile"; "-lsamplerate"]; cflags= []}
-      in
-      let conf =
-        match C.Pkg_config.get c with
-        | None ->
-            default
-        | Some pc -> (
-          match C.Pkg_config.query pc ~package:"sndfile samplerate" with
-          | None ->
-              default
-          | Some deps ->
-              deps )
-      in
-      C.Flags.write_sexp "c_flags.sexp" conf.cflags ;
-      C.Flags.write_sexp "c_library_flags.sexp" conf.libs )
+  let types = List.fold_left (fun acc (x, _) -> x :: acc) [] tests in
+  let data = Testdata.create test_vectors_dir test_audio_dir types in
+  let tests =
+    let aux acc (typ, md) =
+      let module Tests = (val md : Testable) in
+      (typ_to_readable typ, Tests.create_test_set (Testdata.get typ data))
+      :: acc
+    in
+    List.fold_left aux [] tests
+  in
+  Alcotest.run "SoundML" tests

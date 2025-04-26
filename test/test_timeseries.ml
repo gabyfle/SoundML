@@ -19,23 +19,46 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module C = Configurator.V1
+open Soundml
+open Tutils
 
-let () =
-  C.main ~name:"sndfile-pkg-config" (fun c ->
-      let default : C.Pkg_config.package_conf =
-        {libs= ["-lsndfile"; "-lsamplerate"]; cflags= []}
+let read_audio (path : string) (sample_rate : int) (mono : bool) :
+    (float, Bigarray.float32_elt) Audio.G.t =
+  let audio = Io.read ~sample_rate ~mono Bigarray.Float32 path in
+  Audio.data audio
+
+module Tests : Testable = struct
+  let typ = "timeseries"
+
+  let create_test_set (data : (string * string * Parameters.t) list) =
+    let create_tests (basename : string) (case : string * string * Parameters.t)
+        =
+      let vector_path, audio_path, params = case in
+      let sr = Parameters.get_int "sr" params in
+      let mono = Parameters.get_bool "mono" params in
+      let audio = read_audio audio_path sr mono in
+      let kind = Audio.G.kind audio in
+      let vector = load_npy vector_path kind in
+      let test_allclose_name = typ ^ "_allclose_" ^ basename in
+      let test_rallclose () =
+        Alcotest.(check bool)
+          test_allclose_name true
+          (Check.rallclose audio vector)
       in
-      let conf =
-        match C.Pkg_config.get c with
-        | None ->
-            default
-        | Some pc -> (
-          match C.Pkg_config.query pc ~package:"sndfile samplerate" with
-          | None ->
-              default
-          | Some deps ->
-              deps )
+      let test_shape_name = typ ^ "_shape_" ^ basename in
+      let test_shape () =
+        Alcotest.(check bool) test_shape_name true (Check.shape audio vector)
       in
-      C.Flags.write_sexp "c_flags.sexp" conf.cflags ;
-      C.Flags.write_sexp "c_library_flags.sexp" conf.libs )
+      (test_shape, test_rallclose)
+    in
+    let aux acc x =
+      let f, _, _ = x in
+      let basename = Filename.basename f |> Filename.remove_extension in
+      let tshape, tallclose = create_tests basename x in
+      let test_name = Printf.sprintf "test_%s" basename in
+      (test_name ^ "_shape", `Slow, tshape)
+      :: (test_name ^ "_allclose", `Slow, tallclose)
+      :: acc
+    in
+    List.fold_left aux [] data
+end

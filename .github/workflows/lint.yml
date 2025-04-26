@@ -1,0 +1,24 @@
+name: Lint & Format
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  lint-fmt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml for linting
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+          dune-cache: true
+      - name: Run OCaml Lint & Format Check
+        uses: ocaml/setup-ocaml/lint-fmt@v2
