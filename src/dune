@@ -1,7 +1,7 @@
 (library
  (name audio)
  (package soundml)
- (libraries ffmpeg-av owl)
+ (libraries owl)
  (modules audio)
  (wrapped false))
 

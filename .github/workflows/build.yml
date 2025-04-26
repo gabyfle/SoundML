@@ -1,0 +1,36 @@
+# Inspired by https://github.com/savonet/build-and-test-ocaml-module/blob/main/action.yml
+# Thanks for the savonet team for building such an amazing software :p
+name: Build
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest] # , macos-latest, windows-latest]
+        ocaml-compiler:
+          - "5.3.0"
+          - "5.0.0"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml ${{ matrix.ocaml-compiler }} on ${{ matrix.os }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+          dune-cache: true
+
+      - name: Install SoundML
+        run: opam install . --yes --confirm-level=unsafe-yes
+        shell: bash

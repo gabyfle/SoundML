@@ -1,0 +1,11 @@
+(data_only_dirs vectors audio)
+
+(tests
+ (names test)
+ (libraries alcotest yojson soundml)
+ (package soundml)
+ (deps
+  (source_tree vectors)
+  (source_tree audio))
+ (action
+  (run %{test})))
