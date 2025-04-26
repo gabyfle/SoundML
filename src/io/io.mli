@@ -52,7 +52,7 @@ open Bigarray
 val read :
   'a.
      ?buffer_size:int
-  -> ?sample_rate:int
+  -> ?sample_rate:int option
   -> ?mono:bool
   -> (float, 'a) kind
   -> string
@@ -62,7 +62,7 @@ val read :
 
     {3 Parameters}
     - [buffer_size] is the size of the buffer used while reading the file. Default is 1024. Only change the value if you know what you're doing.
-    - [sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz.
+    - [sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz. If [None] is passed, the file's sample rate is used.
     - [mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
     - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
     - [filename] is the path to the file to read audio from.
