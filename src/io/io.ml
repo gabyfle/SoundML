@@ -56,7 +56,7 @@ let read : type a.
     | Float64 ->
         caml_read_audio_file_f64
     | _ ->
-        failwith "Not available"
+        .
   in
   let data, meta = read_func typ filename buffer_size sample_rate in
   let data = if mono then to_mono data else data in
