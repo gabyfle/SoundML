@@ -26,6 +26,7 @@
 #include <limits>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 
 #include <sndfile.hh>
 #include <samplerate.h>
@@ -82,8 +83,7 @@ struct AudioMetadata
     int format;
 };
 
-template <typename T>
-using AudioData = std::tuple<std::vector<T>, AudioMetadata>;
+using AudioData = std::pair<std::vector<float>, AudioMetadata>;
 
 /**
  * Reads an audio file and returns the data into a vector.
@@ -92,12 +92,10 @@ using AudioData = std::tuple<std::vector<T>, AudioMetadata>;
  * @param buffer_size The size of the buffer to read into.
  * @param trgt_sample_rate The sample rate we're targeting for resampling.
  * @param converter_type Converter type we need to use (from SRC).
- * @tparam T The type of the audio data (float or double).
  *
  * @return A std::expected<AudioData> containing the audio data on success, an std::unexpected<int> containing the error code on failure.
  */
-template <typename T>
-std::expected<AudioData<T>, Error> read_audio_file(
+std::expected<AudioData, Error> read_audio_file(
     const std::string &filename,
     sf_count_t buffer_size = 1024,
     int trgt_sample_rate = 22050,
@@ -115,6 +113,8 @@ std::expected<AudioData<T>, Error> read_audio_file(
     if (nat_frames <= 0 || channels <= 0 || nat_sample_rate <= 0 || format <= 0)
         return std::unexpected(Error(SF_ERR_MALFORMED_FILE, SNDFILE_ERR));
 
+    /* if trgt_sample_rate is negative, it means resampling is desactivated */
+    trgt_sample_rate = trgt_sample_rate > 0 ? trgt_sample_rate : nat_sample_rate;
     bool needs_resampling = (trgt_sample_rate != nat_sample_rate);
     SRC_STATE *src_state = nullptr;
     SRC_DATA src_data;
@@ -131,16 +131,16 @@ std::expected<AudioData<T>, Error> read_audio_file(
         src_state = src_new(converter_type, channels, &src_error);
         if (src_state == nullptr)
             return std::unexpected(Error(src_error, SRC_ERR));
+
         size_t max_output_frames_per_chunk = static_cast<size_t>(std::ceil(buffer_size * src_ratio)) + 10;
-        size_t min_buffer_size = channels * 16;
-        resample_buffer.resize(std::max(max_output_frames_per_chunk * channels, min_buffer_size));
+        resample_buffer.resize(max_output_frames_per_chunk * channels);
 
         src_data.src_ratio = src_ratio;
         src_data.data_out = resample_buffer.data();
         src_data.output_frames = resample_buffer.size() / channels;
     }
 
-    size_t estimated_samples = static_cast<size_t>(nat_frames * channels * src_ratio * 1.05);
+    size_t estimated_samples = static_cast<size_t>(nat_frames * channels * (needs_resampling ? src_ratio : 1.0) * 1.2);
     if (estimated_samples > 0 && estimated_samples < processed_audio.max_size())
         processed_audio.reserve(estimated_samples);
     else
@@ -219,24 +219,8 @@ std::expected<AudioData<T>, Error> read_audio_file(
         src_state = nullptr;
     }
 
-    std::vector<T> audio;
-    size_t n_samples = processed_audio.size();
-
-    if constexpr (std::is_same_v<T, float>)
-        audio = processed_audio;
-    else if constexpr (std::is_same_v<T, double>)
-    {
-        audio.resize(n_samples);
-        for (size_t i = 0; i < n_samples; ++i)
-            audio[i] = static_cast<T>(processed_audio[i]);
-        processed_audio.clear();
-        processed_audio.shrink_to_fit();
-    }
-    else
-        static_assert(!std::is_same_v<T, T>, "Unsupported type T for audio data");
-
     AudioMetadata metadata(total_generated, channels, trgt_sample_rate, format);
-    return AudioData<T>(audio, metadata);
+    return AudioData(std::move(processed_audio), metadata);
 }
 
 template <typename T>
@@ -249,7 +233,7 @@ CAMLprim value caml_read_audio_file(value filename, value buffer_size, value sam
     sf_count_t buffer_size_val = Long_val(buffer_size);
     int sample_rate_val = Long_val(sample_rate);
 
-    auto result = read_audio_file<T>(filename_str, buffer_size_val, sample_rate_val);
+    auto result = read_audio_file(filename_str, buffer_size_val, sample_rate_val);
     if (!result.has_value())
     {
         Error err = result.error();
@@ -257,7 +241,7 @@ CAMLprim value caml_read_audio_file(value filename, value buffer_size, value sam
         caml_failwith(error_str.c_str());
     }
 
-    auto [audio_data, metadata] = result.value();
+    auto &[audio_data, metadata] = result.value();
     size_t audio_size = audio_data.size();
     int ndims = (metadata.channels > 1) ? 2 : 1;
     intnat dims[ndims];
@@ -283,7 +267,17 @@ CAMLprim value caml_read_audio_file(value filename, value buffer_size, value sam
     audio_array = caml_ba_alloc(type_flag | CAML_BA_C_LAYOUT, ndims, NULL, dims);
 
     if (ndims == 1)
-        std::memcpy(Caml_ba_data_val(audio_array), audio_data.data(), audio_size * sizeof(T));
+    {
+        if constexpr (std::is_same_v<T, float>)
+            std::memcpy(Caml_ba_data_val(audio_array), audio_data.data(), audio_size * sizeof(T));
+        else
+        {
+            T *dest_data = static_cast<T *>(Caml_ba_data_val(audio_array));
+            const float *src_data = audio_data.data();
+            for (size_t i = 0; i < metadata.frames; ++i)
+                dest_data[i] = static_cast<double>(src_data[i]);
+        }
+    }
     else /* we aim to have shape (channels, frames), so we need to deinterleave the samples */
     {
         /**
@@ -298,16 +292,13 @@ CAMLprim value caml_read_audio_file(value filename, value buffer_size, value sam
         const int nchannels = metadata.channels;
 
         T *dest_data = static_cast<T *>(Caml_ba_data_val(audio_array));
-        const T *src_data = audio_data.data();
+        const float *src_data = audio_data.data();
 
-        for (size_t f = 0; f < nframes; ++f)
+        for (int c = 0; c < nchannels; ++c)
         {
-            for (int c = 0; c < nchannels; ++c)
-            {
-                size_t src_idx = f * nchannels + c; /* interleaved format */
-                size_t dest_idx = c * nframes + f;  /* planar format */
-                dest_data[dest_idx] = src_data[src_idx];
-            }
+            T *dest_channel_ptr = dest_data + c * nframes; /* interleaved format */
+            for (size_t f = 0; f < nframes; ++f)
+                dest_channel_ptr[f] = static_cast<T>(src_data[f * nchannels + c]); /* planar format */
         }
     }
 
