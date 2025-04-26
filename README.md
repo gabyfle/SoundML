@@ -7,7 +7,8 @@
 
 <h4> <span> · </span> <a href="https://github.com/gabyfle/SoundML/blob/master/README.md"> Documentation </a> <span> · </span> <a href="https://github.com/gabyfle/SoundML/issues"> Report Bug </a> <span> · </span> <a href="https://github.com/gabyfle/SoundML/issues"> Request Feature </a> · </h4>
 
-
+[![Build](https://github.com/gabyfle/SoundML/actions/workflows/build.yml/badge.svg)](https://github.com/gabyfle/SoundML/actions/workflows/build.yml)
+[![Test](https://github.com/gabyfle/SoundML/actions/workflows/test.yml/badge.svg)](https://github.com/gabyfle/SoundML/actions/workflows/test.yml)
 </div>
 
 ## About the Project
@@ -48,49 +49,26 @@ The project is still work in progress.
 * [ ] Write test files for the whole library 
 
 ## Features
- - Natively written in OCaml for a perfect OCaml developer experience
  - Easily read and write audio files in various formats (WAV, MP3, etc...)
  - Audio slicing
  - Feature extraction (MFCC, mel-spectrogram, ZCR, ...)
  - Audio effects (pitch shifting, time stretching, filters, ...)
 
-
-## Requirements
-
-You should be using the OCaml compiler with a version at least equal to 5.1.0. You can install it by following the instructions on the [OCaml website](https://ocaml.org/docs/install.html). This project uses the Dune build system.
-
-This library heavily relies on the Owl and ocaml-ffmpeg libraries.
-
-<div align=center>
-
-| Name                                                                                                  | Version  | Description                                                                                        |
-| ----------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| [**Owl**](https://github.com/owlbarn/owl) - *OCaml Scientific Computing*                              | `>= 1.1` | Library for scientific computing in OCaml. Used to make the heavy computations (FFT, IFFT, etc...) |
-| [**ocaml-ffmpeg**](https://github.com/savonet/ocaml-ffmpeg) - *OCaml bindings to the FFmpeg library.* | `>= 1.2` | OCaml bindings for FFmpeg. Used to read and write audio data.                                      |
-
-</div>
-
-## Inspirations
-
-This project is heavily inspired by other amazing open-source libraries such as:
-
-
-<div align=center>
-
-| Name                                              | Inspiration                                                                                                                                                                                                                                              | Reference                                                                                                                                                                                                                                 |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [**librosa**](https://github.com/librosa/librosa) | General functionalities for audio signal processing                                                                                                                                                                                                      | McFee, Brian, Colin Raffel, Dawen Liang, Daniel PW Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto. "librosa: Audio and music signal analysis in python." In Proceedings of the 14th python in science conference, pp. 18-25. 2015. |
-| [**pydub**](https://github.com/jiaaro/pydub)      | Ease of use, audio slicing using milliseconds and manipulation                                                                                                                                                                                           | -                                                                                                                                                                                                                                         |
-| [**Numpy**](https://numpy.org/)                   | Numerous implementation of SoundML's algorithms were directly taken from Numpy                                                                                                                                                                           | -                                                                                                                                                                                                                                         |
-| [**Matplotlib**](https://matplotlib.org/)         | The implementation of their spectral helper to compute spectrogram as well as the one of the linear detrend function were took from the [`matplotlib.mlab`](https://github.com/matplotlib/matplotlib/blob/main/lib/matplotlib/mlab.py#L213-L373) module. | -                                                                                                                                                                                                                                         |
-
-</div>
-
-Don't hesitate to check the amazing work done by the authors and contributors of these libraries!
-
 ## License
 
 Distributed under the Apache License Version 2.0. See LICENSE for more information.
+
+## References
+
+- **McFee, Brian, Colin Raffel, Dawen Liang, Daniel PW Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto** (2015). *librosa: Audio and music signal analysis in python.* In Proceedings of the 14th python in science conference, pp. 18-25.
+
+- **Bellanger, M.** (2022). *Traitement numérique du signal. 10e édition.* Dunod.
+
+- **Wang, L., Zhao, J., & Mortier, R.** (2022). *OCaml Scientific Computing*. Springer International Publishing eBooks. DOI: [10.1007/978-3-030-97645-3](https://doi.org/10.1007/978-3-030-97645-3)
+
+- **Zoelzer, U.** (2002). *Dafx: Digital Audio Effects*. DOI: [10.1002/9781119991298](https://doi.org/10.1002/9781119991298)
+
+- **Müller, M.** (2015). *Fundamentals of Music Processing*. Cambridge International Law Journal. DOI: [10.1007/978-3-319-21945-5](https://doi.org/10.1007/978-3-319-21945-5)
 
 ## Acknowledgements
 

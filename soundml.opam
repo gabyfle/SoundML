@@ -6,19 +6,21 @@ description:
 maintainer: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 authors: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 license: "Apache-2.0"
-tags: ["sound" "owl" "ffmpeg" "gabyfle"]
+tags: ["sound" "owl" "spectrogram" "fourier" "gabyfle"]
 homepage: "https://github.com/gabyfle/SoundML"
 doc: "https://soundml.gabyfle.dev"
 bug-reports: "https://github.com/gabyfle/SoundML/issues"
 depends: [
-  "ocaml" {>= "5.2.0"}
+  "ocaml" {>= "4.14.2"}
   "dune" {>= "3.15"}
   "conf-sndfile" {build}
   "conf-rubberband" {build}
+  "conf-samplerate" {build}
   "dune-configurator" {build}
-  "odoc" {with-doc}
   "owl" {>= "1.2"}
-  "ffmpeg" {>= "1.2.1"}
+  "odoc" {with-doc}
+  "alcotest" {with-test}
+  "yojson" {with-test}
 ]
 build: [
   ["dune" "subst"] {dev}

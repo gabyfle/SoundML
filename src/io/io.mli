@@ -24,6 +24,7 @@
     data from and to the filesystem. *)
 
 open Audio
+open Bigarray
 
 (**
     {1 Supported formats}
@@ -48,52 +49,34 @@ open Audio
 (**
     {1 Reading data} *)
 
-val read_metadata : string -> string -> Metadata.t
+val read :
+  'a.
+     ?buffer_size:int
+  -> ?sample_rate:int
+  -> ?mono:bool
+  -> (float, 'a) kind
+  -> string
+  -> 'a audio
 (**
-    [read_metadata filename format] reads the metadata of an audio file and returns [Metadata.t] type.
-    
-    Example usage:
-    
-    {[
-    let () =
-        let src = Io.read_metadata file.wav wav in
-        let open Audio in
-        Printf.fprintf "Sample rate: %d\n" (Metadata.sample_rate src);
-        (* ... *)
-    ]} *)
+    [read ?buffer_size ?sample_rate ?mono kind filename] reads an audio file and returns an [audio].
 
-val read : string -> string -> audio
-(**
-    [read filename format] reads an audio file returns a representation of the file.
+    {3 Parameters}
+    - [buffer_size] is the size of the buffer used while reading the file. Default is 1024. Only change the value if you know what you're doing.
+    - [sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz.
+    - [mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
+    - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
+    - [filename] is the path to the file to read audio from.
     
-    Example usage:
+    {3 Usage}
+    Reading audio is straightfoward. Simply specify the path to the file you want to read.
     
     {[
-    let () =
-        let src = Io.read file.wav wav in
-        (* ... *)
+      open Soundml
+      (* This will read the file.wav audio into a Float32 bigarray *)
+      let audio = Io.read Bigarray.Float32 "path/to/file.wav"
     ]}
 
-    you can as well choose to have a stereo representation of the file
+    {3 Supported formats}
 
-    {[
-    let () =
-        let src = Io.read `Stereo file.wav wav in
-        (* ... *)
-    ]} *)
-
-(**
-    {1 Writing data} *)
-
-val write : audio -> string -> string -> unit
-(**
-    [write audio filename format] writes an audio file from the given audio data element.
-    
-    Example usage:
-    
-    {[
-    (* Converting an MP3 file into a WAV file *)
-    let () =
-        let src = Io.read_audio "file.mp3" "mp3" in
-        Io.write src "file.wav" "wav"
-    ]} *)
+    SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
+    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats}. *)

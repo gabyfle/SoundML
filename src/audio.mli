@@ -53,21 +53,21 @@ module Metadata : sig
   (**
       [name meta] returns the name of the file represented by the metadata *)
 
+  val frames : t -> int
+  (**
+      TODO *)
+
   val channels : t -> int
   (**
       [channels meta] returns the number of channels of the audio file *)
-
-  val sample_width : t -> int
-  (**
-      [sample_width meta] returns the sample width of the audio file *)
 
   val sample_rate : t -> int
   (**
       [sample_rate meta] returns the sample rate of the audio file *)
 
-  val bit_rate : t -> int
+  val format : t -> int
   (**
-      [bit_rate meta] returns the bit rate of the audio file *)
+      TODO *)
 end
 
 (**
@@ -78,42 +78,33 @@ end
 
 (**
     High level representation of an audio file data, used to store data when reading audio files. *)
-type audio
+type 'a audio
 
-val create :
-     Metadata.t
-  -> Avutil.audio Avcodec.params
-  -> (float, Bigarray.float32_elt) G.t
-  -> audio
+val create : Metadata.t -> (float, 'a) G.t -> 'a audio
 (**
-    [create metadata icodec data] creates a new audio with the given name and metadata *)
+    [create metadata data] creates a new audio with the given name and metadata *)
 
-val meta : audio -> Metadata.t
+val meta : 'a audio -> Metadata.t
 (**
     [meta audio] returns the metadata attached to the given audio element *)
 
-val rawsize : audio -> int
+val rawsize : 'a audio -> int
 (**
     [rawsize audio] returns the raw size of the given audio element *)
 
-val length : audio -> int
+val length : 'a audio -> int
 (**
     [length audio] returns the length (in milliseconds) of the given audio element *)
 
-val data : audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+val data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio element *)
 
-val set_data :
-  audio -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t -> audio
+val set_data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t -> 'a audio
 (**
     [set_data audio data] sets the data of the given audio element *)
 
-val codec : audio -> Avutil.audio Avcodec.params
-(**
-    [codec audio] returns the codec of the given audio element *)
-
-val get : int -> audio -> float
+val get : int -> 'a audio -> float
 (**
     [get x audio] returns the sample located at the position [x] in milliseconds.
 
@@ -126,7 +117,7 @@ val get : int -> audio -> float
         let sample = Audio.get 1000 audio in (* get the sample at 1 second *)
     ]} *)
 
-val get_slice : int * int -> audio -> audio
+val get_slice : int * int -> 'a audio -> 'a audio
 (**
     [get_slice (start, stop) audio] returns a slice of the audio element from the position [start] to [stop].
 
@@ -142,7 +133,7 @@ val get_slice : int * int -> audio -> audio
         let slice = Audio.get_slice audio 1000 2000 in (* get the slice from 1 to 2 seconds *)
     ]} *)
 
-val normalize : ?factor:float -> audio -> unit
+val normalize : ?factor:float -> 'a audio -> unit
 (**
     [normalize ?factor audio] normalizes the data of the given audio data element by
     the [?factor] parameter, by default equal to $2^31 - 1$.
@@ -165,7 +156,7 @@ val normalize : ?factor:float -> audio -> unit
         Audio.write audio "audio.wav"
     ]} *)
 
-val reverse : audio -> audio
+val reverse : 'a audio -> 'a audio
 (**
     [reverse audio] reverses the audio data.
     This function does not operate in place: a new audio element is created with the reversed data.
@@ -185,14 +176,14 @@ val reverse : audio -> audio
     audio data. You can use them to make the code more concise and more readable.
     They are just syntaxic sugar on functions over the {!Audio.audio} type. *)
 
-val ( .%{} ) : audio -> int -> float
+val ( .%{} ) : 'a audio -> int -> float
 (** Operator of {!Audio.get} *)
 
-val ( .${} ) : audio -> int * int -> audio
+val ( .${} ) : 'a audio -> int * int -> 'a audio
 (** Operator of {!Audio.get_slice} *)
 
-val ( $/ ) : audio -> float -> unit
+val ( $/ ) : 'a audio -> float -> unit
 (** Operator of {!Audio.normalize} *)
 
-val ( /$ ) : float -> audio -> unit
+val ( /$ ) : float -> 'a audio -> unit
 (** Operator of {!Audio.normalize} *)

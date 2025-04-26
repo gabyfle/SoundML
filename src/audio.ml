@@ -26,59 +26,48 @@ module G = Dense.Ndarray.Generic
 
 module Metadata = struct
   type t =
-    { name: string
-    ; channels: int
-    ; sample_width: int
-    ; sample_rate: int
-    ; bit_rate: int }
+    {name: string; frames: int; channels: int; sample_rate: int; format: int}
 
-  let create ?(name : string = "Unknown") channels sample_width sample_rate
-      bit_rate =
-    {name; channels; sample_width; sample_rate; bit_rate}
+  let create ?(name : string = "Unknown") frames channels sample_rate format =
+    {name; frames; channels; sample_rate; format}
 
   let name (m : t) = m.name
 
-  let channels (m : t) = m.channels
+  let frames (m : t) = m.frames
 
-  let sample_width (m : t) = m.sample_width
+  let channels (m : t) = m.channels
 
   let sample_rate (m : t) = m.sample_rate
 
-  let bit_rate (m : t) = m.bit_rate
+  let format (m : t) = m.format
 end
 
-type audio =
-  { meta: Metadata.t
-  ; icodec: Avutil.audio Avcodec.params
-  ; data: (float, Bigarray.float32_elt) G.t }
+type 'a audio = {meta: Metadata.t; data: (float, 'a) G.t}
 
-let create (meta : Metadata.t) icodec data = {meta; icodec; data}
+let create (meta : Metadata.t) data = {meta; data}
 
-let meta (a : audio) = a.meta
+let meta (a : 'a audio) = a.meta
 
-let rawsize (a : audio) = G.numel a.data
+let rawsize (a : 'a audio) = G.numel a.data
 
-let length (a : audio) : int =
+let length (a : 'a audio) : int =
   let meta = meta a in
   let channels = float_of_int (Metadata.channels meta) in
   let sr = float_of_int (Metadata.sample_rate meta) in
   let size = float_of_int (rawsize a) /. channels in
   Int.of_float (size /. sr *. 1000.)
 
-let data (a : audio) = a.data
+let data (a : 'a audio) = a.data
 
-let set_data (a : audio) (d : (float, Bigarray.float32_elt) G.t) =
-  {a with data= d}
+let set_data (a : 'a audio) (d : (float, 'a) G.t) = {a with data= d}
 
-let codec (a : audio) = a.icodec
-
-let sample_pos (a : audio) (x : int) =
+let sample_pos (a : 'a audio) (x : int) =
   Int.of_float
     ( float_of_int x /. 1000.
     *. float_of_int (Metadata.sample_rate (meta a))
     *. float_of_int (Metadata.channels (meta a)) )
 
-let get_slice (slice : int * int) (a : audio) : audio =
+let get_slice (slice : int * int) (a : 'a audio) : 'a audio =
   let x, y = slice in
   let x, y =
     match (sample_pos a x, sample_pos a y) with
@@ -103,14 +92,14 @@ let get_slice (slice : int * int) (a : audio) : audio =
     let data = G.get_slice [[x; y]] a.data in
     {a with data}
 
-let get (x : int) (a : audio) : float =
+let get (x : int) (a : 'a audio) : float =
   let slice = get_slice (x, x) a |> data in
   G.get slice [|0|]
 
-let normalize ?(factor : float = 2147483647.) (a : audio) : unit =
+let normalize ?(factor : float = 2147483647.) (a : 'a audio) : unit =
   G.scalar_mul_ (1. /. factor) a.data
 
-let reverse (x : audio) : audio =
+let reverse (x : 'a audio) : 'a audio =
   let data = G.reverse x.data in
   {x with data}
 

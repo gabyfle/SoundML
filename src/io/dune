@@ -5,15 +5,14 @@
  (package soundml)
  (foreign_stubs
   (language cxx)
-  (names libsndfile_stubs)
+  (names soundml_io)
   (flags
    :standard
    (:include c_flags.sexp)
-   -std=c++11
-   -O3))
+   -std=c++23))
  (c_library_flags
   (:include c_library_flags.sexp))
- (libraries audio utils owl ffmpeg-av ffmpeg-swresample)
+ (libraries audio utils owl)
  (wrapped true))
 
 (rule

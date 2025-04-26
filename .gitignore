@@ -5,5 +5,5 @@ report/
 *.pth
 .venv
 .vscode
-*.mp3
-*.wav
+wav/
+mp3/
