@@ -9,7 +9,7 @@ This is the C/C++ code for SoundML IO library. It relies on C++23 (for `std::exp
 
 ### General information
 
-Since we're working with `Owl` that uses the `Bigarray.c_layout` layout, we choose to maintain the interleaved layout for the audio data. This allows us to directly write the data into the `Bigarray` without having to deinterleave it. Thus, when reading an audio files that contains `n` channels and `m` samples per channel, the final shape of the `Bigarray` will be `(n, m)` instead of `(m, n)` as you may be used to using other well known libraries (like *librosa*).
+Since we're working with `Owl` that uses the `Bigarray.c_layout` layout, we choose to maintain the interleaved layout for the audio data. This allows us to directly write the data into the `Bigarray` without having to deinterleave it. Thus, when reading an audio files that contains `n` channels and `m` samples per channel, the final shape of the `Bigarray` will be `(m, n)` instead of `(n, m)` as you may be used to using other well known libraries (like *librosa*).
 
 In this directory, you'll find the following files:
 
