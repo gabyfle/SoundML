@@ -97,7 +97,7 @@ val time_stretch :
   [audio] is the audio to stretch.
   [factor] must be a positive number. It's the ratio of stretched to unstretched duration -- not tempo !
   
-  @see RubberBand::RubberBandStretcher::setTimeRatio *)
+   *)
 
 val pitch_shift :
      ?config:Config.t
@@ -112,4 +112,4 @@ val pitch_shift :
   [audio] is the audio to shift.
   [semitones] is the number of semitones to shift the pitch. A negative value indicates a downward shift, a positive value an upward shift.
   
-  @see RubberBand::RubberBandStretcher::setPitchScale *)
+   *)
