@@ -38,7 +38,7 @@ exception Resampling_error of string
 (** Thrown when an internal error occurred. This is should not happen, so please report it. *)
 exception Internal_error of string
 
-(** The resampling method to use. The default is [NONE], which means no resampling will be done. *)
+(** The resampling method to use. The default is [SOXR_HQ]. *)
 type resampling_t =
   | NONE  (** Indicates that no resampling is requested *)
   | SOXR_QQ  (** 'Quick' cubic interpolation. *)
@@ -57,10 +57,11 @@ val read :
   -> string
   -> 'a audio
 (**
-    [read ?sample_rate ?mono ?fix kind filename] reads an audio file and returns an [audio].
+    [read ?res_typ ?sample_rate ?mono ?fix kind filename] reads an audio file and returns an [audio].
 
     {2 Parameters}
-    - [?sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz. If [None] is passed, the file's sample rate is used.
+    - [?res_typ] is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
+    - [?sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz.
     - [?mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
     - [?fix] if a boolean that indicates if, after resampling the audio, we want it to match the expected number of samples of {m \lceil n \times \frac{tsr}{isr} \rceil} where {m n} is the number of frames in the file, {m tsr} is the target sample rate and {m isr} is the input sample rate.
     - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
@@ -76,7 +77,7 @@ val read :
     
     {[
       open Soundml
-      (* This will read the file.wav audio into a Float32 bigarray *)
+      (* This will read the file.wav audio into a Float32 bigarray, resampled using SOXR_HQ at 22050Hz. *)
       let audio = Io.read Bigarray.Float32 "path/to/file.wav"
     ]}
 
