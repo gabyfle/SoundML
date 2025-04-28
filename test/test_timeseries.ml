@@ -22,10 +22,22 @@
 open Soundml
 open Tutils
 
-let read_audio (path : string) (sample_rate : int) (mono : bool) :
-    (float, Bigarray.float32_elt) Audio.G.t =
-  let audio = Io.read ~sample_rate ~mono Bigarray.Float32 path in
-  Audio.data audio
+let string_to_resample_typ = function
+  | "soxr_vhq" ->
+      Io.SOXR_VHQ
+  | "soxr_hq" ->
+      Io.SOXR_HQ
+  | "soxr_mq" ->
+      Io.SOXR_MQ
+  | "soxr_lq" ->
+      Io.SOXR_LQ
+  | _ ->
+      Io.NONE
+
+let read_audio (path : string) (res_typ : Io.resampling_t) (sample_rate : int)
+    (mono : bool) : (float, Bigarray.float64_elt) Audio.G.t =
+  let audio = Io.read ~res_typ ~sample_rate ~mono Bigarray.Float64 path in
+  Audio.G.transpose (Audio.data audio)
 
 module Tests : Testable = struct
   let typ = "timeseries"
@@ -34,11 +46,17 @@ module Tests : Testable = struct
     let create_tests (basename : string) (case : string * string * Parameters.t)
         =
       let vector_path, audio_path, params = case in
-      let sr = Parameters.get_int "sr" params in
-      let mono = Parameters.get_bool "mono" params in
-      let audio = read_audio audio_path sr mono in
-      let kind = Audio.G.kind audio in
-      let vector = load_npy vector_path kind in
+      let sr = Option.value ~default:22050 @@ Parameters.get_int "sr" params in
+      let mono =
+        Option.value ~default:true @@ Parameters.get_bool "mono" params
+      in
+      let resampler =
+        string_to_resample_typ
+          ( Option.value ~default:"None"
+          @@ Parameters.get_string "res_type" params )
+      in
+      let audio = read_audio audio_path resampler sr mono in
+      let vector = load_npy vector_path Bigarray.Float64 in
       let test_allclose_name = typ ^ "_allclose_" ^ basename in
       let test_rallclose () =
         Alcotest.(check bool)
@@ -54,10 +72,10 @@ module Tests : Testable = struct
     let aux acc x =
       let f, _, _ = x in
       let basename = Filename.basename f |> Filename.remove_extension in
+      let basename = Option.get @@ Testdata.get_test_filename basename in
       let tshape, tallclose = create_tests basename x in
-      let test_name = Printf.sprintf "test_%s" basename in
-      (test_name ^ "_shape", `Slow, tshape)
-      :: (test_name ^ "_allclose", `Slow, tallclose)
+      ("SHAPE:    " ^ basename, `Slow, tshape)
+      :: ("ALLCLOSE: " ^ basename, `Slow, tallclose)
       :: acc
     in
     List.fold_left aux [] data

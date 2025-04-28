@@ -37,17 +37,23 @@ module Parameters : sig
 
   val create : string -> t
 
-  val get_string : string -> t -> string
+  val get_string : string -> t -> string option
 
-  val get_int : string -> t -> int
+  val get_int : string -> t -> int option
 
-  val get_float : string -> t -> float
+  val get_float : string -> t -> float option
 
-  val get_bool : string -> t -> bool
+  val get_bool : string -> t -> bool option
 end
 
 module Testdata : sig
   type t = (string * string * Parameters.t) list StrMap.t
+
+  val get_test_type : string -> string option
+  (** Returns the test type for a given test name *)
+
+  val get_test_filename : string -> string option
+  (** Returns the test filename for a given test type *)
 
   val create : string -> string -> string list -> t
   (** Creates a test set given a directory of vectors files, a directory of audio files
@@ -67,18 +73,20 @@ end
 
 (** Module providing usefull checking functions for the tests *)
 module Check : sig
-  val eps : float
-  (** The epsilon value used for floating point comparisons. *)
-
   val rallclose :
-       (float, 'b) Owl_dense_ndarray.Generic.t
+       ?rtol:float
+    -> ?atol:float
+    -> (float, 'b) Owl_dense_ndarray.Generic.t
     -> (float, 'b) Owl_dense_ndarray.Generic.t
     -> bool
   (** Real-valued all-close function *)
 
   val callclose :
-       (Complex.t, 'b) Owl_dense_ndarray.Generic.t
-    -> (Complex.t, 'b) Owl_dense_ndarray.Generic.t
+    'a.
+       ?rtol:float
+    -> ?atol:float
+    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
+    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
     -> bool
   (** Complex-valued all-close function *)
 
