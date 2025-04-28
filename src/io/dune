@@ -9,12 +9,9 @@
   (flags
    :standard
    (:include c_flags.sexp)
-   -std=c++23
-   -g
-   -fPIC))
+   -std=c++23))
  (c_library_flags
-  (:include c_library_flags.sexp)
-  -g)
+  (:include c_library_flags.sexp))
  (libraries audio utils owl)
  (wrapped true))
 

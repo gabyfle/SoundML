@@ -24,14 +24,14 @@ module C = Configurator.V1
 let () =
   C.main ~name:"sndfile-pkg-config" (fun c ->
       let default : C.Pkg_config.package_conf =
-        {libs= ["-lsndfile"; "-lsamplerate"]; cflags= []}
+        {libs= ["-lsndfile"; "-lsoxr"]; cflags= []}
       in
       let conf =
         match C.Pkg_config.get c with
         | None ->
             default
         | Some pc -> (
-          match C.Pkg_config.query pc ~package:"sndfile samplerate" with
+          match C.Pkg_config.query pc ~package:"sndfile soxr" with
           | None ->
               default
           | Some deps ->

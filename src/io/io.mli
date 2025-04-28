@@ -46,24 +46,29 @@ open Bigarray
     - WAV
     - MP3 *)
 
+type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
+(*| SRC_SINC_BEST_QUALITY | SRC_SINC_MEDIUM_QUALITY | SRC_SINC_FASTEST |
+  SRC_ZERO_ORDER_HOLD | SRC_LINEAR*)
+
 (**
     {1 Reading data} *)
 
 val read :
   'a.
-     ?buffer_size:int
-  -> ?sample_rate:int option
+     ?res_typ:resampling_t
+  -> ?sample_rate:int
   -> ?mono:bool
+  -> ?fix:bool
   -> (float, 'a) kind
   -> string
   -> 'a audio
 (**
-    [read ?buffer_size ?sample_rate ?mono kind filename] reads an audio file and returns an [audio].
+    [read ?sample_rate ?mono kind filename] reads an audio file and returns an [audio].
+    open Soundml
 
     {3 Parameters}
-    - [buffer_size] is the size of the buffer used while reading the file. Default is 1024. Only change the value if you know what you're doing.
-    - [sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz. If [None] is passed, the file's sample rate is used.
-    - [mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
+    - [?sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz. If [None] is passed, the file's sample rate is used.
+    - [?mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
     - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
     - [filename] is the path to the file to read audio from.
     
