@@ -66,8 +66,8 @@ let read : type a.
         caml_read_audio_file_f32
     | Float64 ->
         caml_read_audio_file_f64
-    | _ ->
-        failwith "Unsupported datatype."
+    | Float16 ->
+        failwith "Float16 elements kind aren't supported for the moment."
   in
   let sample_rate =
     match sample_rate with None -> 22050 | Some rate -> rate
