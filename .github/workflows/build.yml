@@ -31,6 +31,13 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
           dune-cache: true
 
+      # temporary, waiting for the conf-soxr package to be published to opam repo
+      - name: Install libsoxr-dev
+        run: |
+            sudo apt-get update
+            sudo apt-get install -y libsoxr-dev
+        shell: bash
+
       - name: Install SoundML
         run: opam install . --yes --confirm-level=unsafe-yes
         shell: bash

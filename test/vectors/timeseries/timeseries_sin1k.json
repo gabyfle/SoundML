@@ -1,4 +1,5 @@
 {
-    "sr": 44100,
-    "mono": false
+    "mono": false,
+    "res_type": "soxr_mq",
+    "sr": 22050
 }

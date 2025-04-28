@@ -9,7 +9,7 @@ It's supposed to be ran only once. Then the generated vectors
 haved to be used for the actual testing.
 """
 
-from typing import Any, Tuple, Dict
+from typing import Any, Tuple, Dict, List
 import os
 import json
 import numpy as np
@@ -84,7 +84,7 @@ class VectorGenerator:
                 )
                 output_filename: str = os.path.join(self.output_dir, f"{filename}.npy")
                 params_filename: str = os.path.join(self.output_dir, f"{filename}.json")
-                np.save(output_filename, y)
+                np.save(output_filename, np.ascontiguousarray(y, dtype=np.float64))
                 params.write(params_filename)
             except Exception as e:
                 print(f"ERROR generating for {identifier}: {e}")
@@ -99,18 +99,26 @@ class TimeSeriesVectorGenerator(VectorGenerator):
 
     counter: int = 0
 
+    resamplers: List[str] = ["soxr_vhq", "soxr_hq", "soxr_mq", "soxr_lq"]
+
     def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
         """
         Generate the time-series vector for the given file
         """
-        mono = True if self.counter % 2 == 0 or self.counter % 3 == 0 else False
+        params = {}
+        mono = False if self.counter % 2 == 0 or self.counter % 3 == 0 else False
         sr = 22050 if (self.counter) % 2 == 0 and self.counter % 3 != 0 else None
-        # For the moment, SoundML don't support soxr resampling, so we're using
-        # samplerate's linear resampling
-        y, sr = librosa.load(audio_path, mono=mono, sr=sr, res_type="linear")
-        y = y.astype(np.float32)
+        res_type = self.resamplers[self.counter % len(self.resamplers)]
+        params["mono"] = mono
+        if sr is not None:
+            params["res_type"] = res_type
+        y, sr = librosa.load(
+            audio_path, mono=mono, sr=sr, res_type=res_type, dtype=np.float64
+        )
+        params["sr"] = sr
+        y = np.ascontiguousarray(y, dtype=np.float64)
         self.counter += 1
-        return (y, Parameters({"sr": sr, "mono": mono}))
+        return (y, Parameters(params))
 
 
 class STFTVectorGenerator(VectorGenerator):

@@ -1,4 +1,4 @@
 {
-    "sr": 44100,
-    "mono": true
+    "mono": false,
+    "sr": 44100
 }

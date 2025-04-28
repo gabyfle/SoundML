@@ -1,4 +1,5 @@
 {
-    "sr": 96000,
-    "mono": true
+    "mono": false,
+    "res_type": "soxr_vhq",
+    "sr": 22050
 }

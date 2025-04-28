@@ -34,13 +34,16 @@ module Parameters = struct
 
   let create (path : string) = Yojson.Basic.from_file path
 
-  let get_string (name : string) (params : t) = member name params |> to_string
+  let get_string (name : string) (params : t) =
+    member name params |> to_string_option
 
-  let get_int (name : string) (params : t) = member name params |> to_int
+  let get_int (name : string) (params : t) = member name params |> to_int_option
 
-  let get_float (name : string) (params : t) = member name params |> to_float
+  let get_float (name : string) (params : t) =
+    member name params |> to_float_option
 
-  let get_bool (name : string) (params : t) = member name params |> to_bool
+  let get_bool (name : string) (params : t) =
+    member name params |> to_bool_option
 end
 
 module Testdata = struct
@@ -136,23 +139,46 @@ end
 module Check = struct
   open Soundml
 
-  let eps : float = 1e-10
-
-  let rallclose (x : (float, 'b) Audio.G.t) (y : (float, 'b) Audio.G.t) =
-    Audio.G.(sub x y |> abs |> sum') < eps
-
-  let callclose (x : (Complex.t, 'b) Audio.G.t) (y : (Complex.t, 'b) Audio.G.t)
-      =
-    let d = Audio.G.(sub x y) in
-    let d = Audio.G.(abs d) in
-    let d = Audio.G.(sum' d) in
-    Complex.(d.re) < eps && Complex.(d.im) < eps
-
   let shape (x : ('a, 'b) Audio.G.t) (y : ('a, 'b) Audio.G.t) =
     let shape_x = Audio.G.shape x in
     let shape_y = Audio.G.shape y in
     if Array.length shape_x <> Array.length shape_y then false
     else Array.for_all2 (fun x y -> x = y) shape_x shape_y
+
+  let rallclose ?(rtol = 1e-05) ?(atol = 1e-10) (x : ('a, 'b) Audio.G.t)
+      (y : ('a, 'b) Audio.G.t) : bool =
+    if not (shape x y) then false
+    else
+      let abs_diff = Audio.G.abs (Audio.G.sub x y) in
+      let tolerance = Audio.G.(add_scalar (mul_scalar (abs y) rtol) atol) in
+      let comparison_mask = Audio.G.elt_less_equal abs_diff tolerance in
+      Audio.G.min' comparison_mask >= 1.0
+
+  let callclose : type a.
+         ?rtol:float
+      -> ?atol:float
+      -> (Complex.t, a) Audio.G.t
+      -> (Complex.t, a) Audio.G.t
+      -> bool =
+   fun ?(rtol = 1e-05) ?(atol = 1e-08) (x : (Complex.t, a) Audio.G.t)
+       (y : (Complex.t, a) Audio.G.t) ->
+    if not (shape x y) then false
+    else
+      let x, y =
+        match Audio.G.kind x with
+        | Bigarray.Complex32 ->
+            (Audio.G.cast_c2z x, Audio.G.cast_c2z y)
+        | Bigarray.Complex64 ->
+            (x, y)
+        | _ ->
+            .
+      in
+      let diff = Audio.G.sub x y in
+      let abs_diff = Audio.G.abs2_z2d diff in
+      let abs_y = Audio.G.abs2_z2d y in
+      let tolerance = Audio.G.(add_scalar (mul_scalar abs_y rtol) atol) in
+      let comparison_mask = Audio.G.elt_less_equal abs_diff tolerance in
+      Audio.G.min' comparison_mask >= 1.0
 end
 
 (* This snippet has been gathered from the exact same code but for Matrix in
