@@ -76,7 +76,7 @@ let read : type a.
     -> (float, a) kind
     -> string
     -> a audio =
- fun ?(res_typ : resampling_t = SOXR_VHQ) ?sample_rate ?(mono : bool = true)
+ fun ?(res_typ : resampling_t = SOXR_HQ) ?sample_rate ?(mono : bool = true)
      ?(fix : bool = true) typ (filename : string) ->
   let read_func : type a.
          (float, a) kind
