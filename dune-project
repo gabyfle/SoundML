@@ -23,7 +23,7 @@
   "SoundML is a library built on top of Owl to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
-   (>= 4.14.2))
+   (>= 5.2.0))
   dune
   (conf-sndfile :build)
   (conf-rubberband :build)
