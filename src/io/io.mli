@@ -26,6 +26,14 @@
 open Audio
 open Bigarray
 
+exception File_not_found of string
+
+exception Invalid_format of string
+
+exception Resampling_error of string
+
+exception Internal_error of string
+
 (**
     {1 Supported formats}
     

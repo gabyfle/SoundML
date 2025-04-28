@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2023-2025                                                  *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -21,6 +21,30 @@
 
 open Audio
 open Bigarray
+
+exception File_not_found of string
+
+exception Invalid_format of string
+
+exception Resampling_error of string
+
+exception Internal_error of string
+
+let _ =
+  Callback.register_exception "soundml.exn.file_not_found"
+    (File_not_found "file.wav")
+
+let _ =
+  Callback.register_exception "soundml.exn.invalid_format"
+    (Invalid_format "invalid format")
+
+let _ =
+  Callback.register_exception "soundml.exn.resampling_error"
+    (Resampling_error "error")
+
+let _ =
+  Callback.register_exception "soundml.exn.internal_error"
+    (Internal_error "internal error")
 
 (* nframes * channels * sample_rate * padded_frames * format *)
 type metadata = int * int * int * int * int
@@ -67,7 +91,10 @@ let read : type a.
     | Float64 ->
         caml_read_audio_file_f64
     | Float16 ->
-        failwith "Float16 elements kind aren't supported for the moment."
+        raise
+          (Invalid_argument
+             "Float16 elements kind aren't supported. The array kind must be \
+              either Float32 or Float64." )
   in
   let sample_rate =
     match sample_rate with None -> 22050 | Some rate -> rate
