@@ -6,6 +6,7 @@
  (foreign_stubs
   (language cxx)
   (names soundml_io)
+  (include_dirs cio)
   (flags
    :standard
    (:include c_flags.sexp)
