@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2023-2025                                                  *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -21,45 +21,31 @@
 
 (**
     The {!Io} (in/out) module is the entry point for reading and writing audio
-    data from and to the filesystem. *)
+    data from and to the filesystem. It supports resampling via the {{:https://github.com/chirlu/soxr}SoXr} library. *)
 
 open Audio
 open Bigarray
 
+(** Thrown when a requested file cannot be found on the system. *)
 exception File_not_found of string
 
+(** Thrown when the file we're trying to read is encoded in an invalid format, or when the format we're trying to write isn't supported. *)
 exception Invalid_format of string
 
+(** Thrown when an error occurred while resampling. *)
 exception Resampling_error of string
 
+(** Thrown when an internal error occurred. This is should not happen, so please report it. *)
 exception Internal_error of string
 
-(**
-    {1 Supported formats}
-    
-    {!Soundml} supports the following formats for reading and writing audio data.
-
-    {2 Reading}
-    
-    - WAV
-    - MP3
-    - FLAC
-    - OGG
-    - AIFF
-    - AU
-    - RAW
-
-    {2 Writing}
-
-    - WAV
-    - MP3 *)
-
-type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
-(*| SRC_SINC_BEST_QUALITY | SRC_SINC_MEDIUM_QUALITY | SRC_SINC_FASTEST |
-  SRC_ZERO_ORDER_HOLD | SRC_LINEAR*)
-
-(**
-    {1 Reading data} *)
+(** The resampling method to use. The default is [NONE], which means no resampling will be done. *)
+type resampling_t =
+  | NONE  (** Indicates that no resampling is requested *)
+  | SOXR_QQ  (** 'Quick' cubic interpolation. *)
+  | SOXR_LQ  (** 'Low' 16-bit with larger rolloff. *)
+  | SOXR_MQ  (** 'Medium' 16-bit with medium rolloff. *)
+  | SOXR_HQ  (** 'High quality'. *)
+  | SOXR_VHQ  (** 'Very high quality'. *)
 
 val read :
   'a.
@@ -71,16 +57,21 @@ val read :
   -> string
   -> 'a audio
 (**
-    [read ?sample_rate ?mono kind filename] reads an audio file and returns an [audio].
-    open Soundml
+    [read ?sample_rate ?mono ?fix kind filename] reads an audio file and returns an [audio].
 
-    {3 Parameters}
+    {2 Parameters}
     - [?sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz. If [None] is passed, the file's sample rate is used.
     - [?mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
+    - [?fix] if a boolean that indicates if, after resampling the audio, we want it to match the expected number of samples of {m \lceil n \times \frac{tsr}{isr} \rceil} where {m n} is the number of frames in the file, {m tsr} is the target sample rate and {m isr} is the input sample rate.
     - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
     - [filename] is the path to the file to read audio from.
+
+    @raise File_not_found If the file does not exist.
+    @raise Invalid_format If the file is not a valid audio file.
+    @raise Resampling_error If the resampling fails.
+    @raise Internal_error If an internal error occurs.
     
-    {3 Usage}
+    {2 Usage}
     Reading audio is straightfoward. Simply specify the path to the file you want to read.
     
     {[
@@ -89,7 +80,7 @@ val read :
       let audio = Io.read Bigarray.Float32 "path/to/file.wav"
     ]}
 
-    {3 Supported formats}
+    {2 Supported formats}
 
     SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
     on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats}. *)
