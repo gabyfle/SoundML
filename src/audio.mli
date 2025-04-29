@@ -30,6 +30,10 @@ open Owl
     internally to make the computations around the audio data *)
 module G = Dense.Ndarray.Generic
 
+(** @canonical Audio.Aformat
+    Abstraction over the different supported audio format from libsndfile. *)
+module Aformat = Aformat
+
 (**
     {1 Audio Metadata}
 
@@ -45,17 +49,17 @@ module G = Dense.Ndarray.Generic
 module Metadata : sig
   type t
 
-  val create : ?name:string -> int -> int -> int -> int -> t
+  val create : ?name:string -> int -> int -> int -> Aformat.t -> t
   (**
-      [create ?name channels sample_width sample_rate bit_rate] creates a new metadata with the given parameters *)
+      [create ?name channels frames sample_rate format] creates a new metadata
+      with the given name, number of channels, number of frames, sample rate
+      and format. The name is optional and defaults to [""] *)
 
   val name : t -> string
   (**
       [name meta] returns the name of the file represented by the metadata *)
 
   val frames : t -> int
-  (**
-      TODO *)
 
   val channels : t -> int
   (**
@@ -65,9 +69,9 @@ module Metadata : sig
   (**
       [sample_rate meta] returns the sample rate of the audio file *)
 
-  val format : t -> int
+  val format : t -> Aformat.t
   (**
-      TODO *)
+        [format meta] returns the format of the audio file *)
 end
 
 (**
@@ -99,6 +103,10 @@ val length : 'a audio -> int
 val data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t
 (**
     [data audio] returns the data of the given audio element *)
+
+val sr : 'a audio -> int
+(**
+    [sr audio] returns the sample rate of the given audio element *)
 
 val set_data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t -> 'a audio
 (**

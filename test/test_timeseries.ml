@@ -37,7 +37,7 @@ let string_to_resample_typ = function
 let read_audio (path : string) (res_typ : Io.resampling_t) (sample_rate : int)
     (mono : bool) : (float, Bigarray.float64_elt) Audio.G.t =
   let audio = Io.read ~res_typ ~sample_rate ~mono Bigarray.Float64 path in
-  Audio.G.transpose (Audio.data audio)
+  Audio.data audio
 
 module Tests : Testable = struct
   let typ = "timeseries"

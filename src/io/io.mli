@@ -59,13 +59,15 @@ val read :
 (**
     [read ?res_typ ?sample_rate ?mono ?fix kind filename] reads an audio file and returns an [audio].
 
+    @return an [audio] type that contains the audio data read from the file. The type of the audio's data is determined by the [kind] parameter.
+
     {2 Parameters}
-    - [?res_typ] is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
-    - [?sample_rate] is the target sample rate to use when reading the file. Default is 22050 Hz.
-    - [?mono] is a boolean that indicates if we want to convert to a mono audio. Default is [true].
-    - [?fix] if a boolean that indicates if, after resampling the audio, we want it to match the expected number of samples of {m \lceil n \times \frac{tsr}{isr} \rceil} where {m n} is the number of frames in the file, {m tsr} is the target sample rate and {m isr} is the input sample rate.
-    - [kind] is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
-    - [filename] is the path to the file to read audio from.
+    @param ?res_typ is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
+    @param ?sample_rate is the target sample rate to use when reading the file. Default is 22050 Hz.
+    @param ?mono is a boolean that indicates if we want to convert to a mono audio. Default is [true].
+    @param ?fix if a boolean that indicates if, after resampling the audio, we want it to match the expected number of samples of {m \lceil n \times \frac{tsr}{isr} \rceil} where {m n} is the number of frames in the file, {m tsr} is the target sample rate and {m isr} is the input sample rate.
+    @param kind is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
+    @param filename is the path to the file to read audio from.
 
     @raise File_not_found If the file does not exist.
     @raise Invalid_format If the file is not a valid audio file.
@@ -84,4 +86,34 @@ val read :
     {2 Supported formats}
 
     SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
-    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats}. *)
+    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats} and in the {!Audio.Aformat} module. *)
+
+val write : 'a. ?format:Aformat.t -> string -> (float, 'a) G.t -> int -> unit
+(**
+    [write ?format filename data sample_reat] writes an audio file to the filesystem.
+
+    {2 Parameters}
+    @param ?format is the format to use when writing the file. If not specified, the format is determined by the file extension by {!Aformat.of_ext}.
+    @param filename is the path to the file to write audio to.
+    @param data is the audio data to write. It can be either a [Bigarray.Float32] or [Bigarray.Float64].
+    @param sample_rate is the sample rate of the audio data.
+
+
+    @raise Invalid_format If the file is not a valid audio file.
+    @raise Internal_error If an internal error occurs.
+
+
+    {2 Usage}
+    Writing audio is as straightfoward as reading it. Simply specify the path to the file you want to write.
+    
+    {[
+      open Soundml
+      open Audio
+      let audio = Io.read Bigarray.Float32 "path/to/file.mp3" in
+      Io.write "path/to/file.wav" (data audio) 22050 (* we'll automatically detect that you want to write to the WAV format *)
+    ]}
+
+    {2 Supported formats}
+
+    SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
+    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats} and in the {!Audio.Aformat} module. *)

@@ -34,4 +34,4 @@ let () =
     in
     List.fold_left aux [] tests
   in
-  Alcotest.run "SoundML" tests
+  Alcotest.run "SoundML: Vectors Comparison" tests

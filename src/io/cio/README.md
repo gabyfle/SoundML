@@ -17,5 +17,6 @@ In this directory, you'll find the following files:
 - `read.hxx` : implements the needed `read`s functions. The file reading implementation is split between two classes:
   - `SoundML::IO::SndfileReader` : this is used when no resampling is needed.
   - `SoundML::IO::SoXrReader` : this is used when resampling is needed. It performs resampling while reading the file. Each read buffer is fed to the soxr resampler and the output is written directly to the `Bigarray` data pointer.
+- `write.hxx` implements a simple writing function that directly uses `sndfile` to write the data.
 
 Exceptions are used to handle the errors. To do so, in `common.hxx` we retreive (inside `raise_caml_exception`) the correct exception to raise in OCaml based on the `Error` provided.
