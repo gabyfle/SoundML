@@ -23,10 +23,15 @@ open Owl
 
 (* generic multi-dimensionnal array *)
 module G = Dense.Ndarray.Generic
+module Aformat = Aformat
 
 module Metadata = struct
   type t =
-    {name: string; frames: int; channels: int; sample_rate: int; format: int}
+    { name: string
+    ; frames: int
+    ; channels: int
+    ; sample_rate: int
+    ; format: Aformat.t }
 
   let create ?(name : string = "Unknown") frames channels sample_rate format =
     {name; frames; channels; sample_rate; format}
@@ -58,6 +63,8 @@ let length (a : 'a audio) : int =
   Int.of_float (size /. sr *. 1000.)
 
 let data (a : 'a audio) = a.data
+
+let sr (a : 'a audio) = Metadata.sample_rate @@ meta a
 
 let set_data (a : 'a audio) (d : (float, 'a) G.t) = {a with data= d}
 

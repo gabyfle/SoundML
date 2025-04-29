@@ -22,10 +22,7 @@
 #ifndef SOUNDML_READER_H
 #define SOUNDML_READER_H
 
-#include <string>
 #include <vector>
-#include <expected>
-#include <variant>
 #include <memory>
 
 #include <cmath>

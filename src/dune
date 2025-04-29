@@ -1,7 +1,13 @@
 (library
+ (name aformat)
+ (package soundml)
+ (modules aformat)
+ (wrapped false))
+
+(library
  (name audio)
  (package soundml)
- (libraries owl)
+ (libraries owl aformat)
  (modules audio)
  (wrapped false))
 
