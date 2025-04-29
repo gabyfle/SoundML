@@ -46,10 +46,10 @@ let _ =
   Callback.register_exception "soundml.exn.internal_error"
     (Internal_error "internal error")
 
+type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
+
 (* nframes * channels * sample_rate * padded_frames * format *)
 type metadata = int * int * int * int * int
-
-type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
 
 external caml_read_audio_file_f32 :
      string
@@ -117,7 +117,58 @@ let read : type a.
         else Audio.G.sub_left data 0 real
   in
   let channels = if mono then 1 else channels in
+  let format =
+    match Aformat.of_int format with
+    | Ok fmt ->
+        fmt
+    | Error e ->
+        raise (Invalid_format e)
+  in
   let meta =
     Metadata.create ~name:filename frames channels sample_rate format
   in
+  let data = Audio.G.transpose data in
   Audio.create meta data
+
+external caml_write_audio_file_f32 :
+     string
+  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> int * int * int * int
+  -> unit = "caml_write_audio_file_f32"
+
+external caml_write_audio_file_f64 :
+     string
+  -> (float, Bigarray.float64_elt) Audio.G.t
+  -> int * int * int * int
+  -> unit = "caml_write_audio_file_f64"
+
+let write : type a.
+    ?format:Aformat.t -> string -> (float, a) Audio.G.t -> int -> unit =
+ fun ?format (filename : string) (x : (float, a) Audio.G.t) sample_rate ->
+  let format =
+    if format = None then
+      match Aformat.of_ext (Filename.extension filename) with
+      | Ok fmt ->
+          fmt
+      | Error e ->
+          raise (Invalid_format e)
+    else Option.get format
+  in
+  let format = Aformat.to_int format in
+  let data = Audio.G.transpose x in
+  let dshape = Audio.G.shape data in
+  let nframes = dshape.(0) in
+  let channels = if Array.length dshape > 1 then dshape.(1) else 1 in
+  (* we get back our interleaved format *)
+  match Audio.G.kind data with
+  | Float32 ->
+      caml_write_audio_file_f32 filename data
+        (nframes, sample_rate, channels, format)
+  | Float64 ->
+      caml_write_audio_file_f64 filename data
+        (nframes, sample_rate, channels, format)
+  | _ ->
+      raise
+        (Invalid_argument
+           "Float16 elements kind aren't supported. The array kind must be \
+            either Float32 or Float64." )

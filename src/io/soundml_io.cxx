@@ -20,6 +20,7 @@
 /*****************************************************************************/
 
 #include "read.hxx"
+#include "write.hxx"
 
 extern "C"
 {
@@ -31,5 +32,15 @@ extern "C"
     CAMLprim value caml_read_audio_file_f64(value filename, value res_typ, value sample_rate, value fix)
     {
         return caml_read_audio_file<double>(filename, res_typ, sample_rate, fix);
+    }
+
+    CAMLprim value caml_write_audio_file_f32(value filename, value ba_data, value metadata)
+    {
+        return caml_write_audio_file<float>(filename, ba_data, metadata);
+    }
+
+    CAMLprim value caml_write_audio_file_f64(value filename, value ba_data, value metadata)
+    {
+        return caml_write_audio_file<double>(filename, ba_data, metadata);
     }
 }

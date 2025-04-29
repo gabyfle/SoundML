@@ -20,6 +20,8 @@
 /*****************************************************************************/
 
 #define SOUNDML_BUFFER_SIZE 4096
+#include <expected>
+#include <variant>
 #include <sndfile.hh>
 
 extern "C" /* OCaml imports */
@@ -32,6 +34,8 @@ extern "C" /* OCaml imports */
 #include <caml/fail.h>
 }
 
+#ifndef SOUNDML_IO_COMMON_H
+#define SOUNDML_IO_COMMON_H
 namespace SoundML
 {
     namespace IO
@@ -167,5 +171,7 @@ namespace SoundML
                 return SOXR_VHQ;
             }
         }
-    } /* namespace IO */
+    } /* namespace SoundML::IO */
 } /* namespace SoundML */
+
+#endif /* SOUNDML_IO_COMMON_H */
