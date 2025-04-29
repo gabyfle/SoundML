@@ -359,5 +359,8 @@ let of_ext ?sub ?(endian = FILE) (ext : string) : (t, string) result =
       if ftype = RAW && sub = None then
         Error "The RAW format needs to have it's subtype specified"
       else
-        let sub = Option.get (get_default_subtype ftype) in
+        let sub =
+          if sub = None then Option.get (get_default_subtype ftype)
+          else Option.get sub
+        in
         Ok {ftype; sub; endian}
