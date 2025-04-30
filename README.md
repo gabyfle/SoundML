@@ -16,43 +16,11 @@
 > [!WARNING]
 > The project is still in development and is not yet ready for use.
 
-## Getting Started
-
-### Installation
-
-This project uses Opam as a package manager
-```bash
-opam install soundml
-```
-
-## Roadmap
-
-The project is still work in progress.
-
-* [x] Read and Write audio
-* [x] Audio slicing (in a similar way to Owl's slicing)
-* [ ] Onset detection algorithms
-* [ ] Spectral analysis
-  * [x] Generic spectrogram helper function
-  * [X] Unify the spectrogram parameters inside a config module.
-  * [X] Mel spectrogram
-  * [X] MFCC spectrogram
-  * [ ] Chroma spectrogram (*WIP*)
-  * [x] Constant and linear detrend
-* [X] Time domain analysis
-  * [x] RMS computation 
-  * [X] Zero crossing rate
-* [ ] Effects module
-  * [x] Pitch shifting (*TO TEST*)
-  * [x] Time stretching (*TO TEST*)
-  * [ ] Filters (low-pass, high-pass, band-pass, etc...)
-* [ ] Write test files for the whole library 
-
 ## Features
- - Easily read and write audio files in various formats (WAV, MP3, etc...)
- - Audio slicing
- - Feature extraction (MFCC, mel-spectrogram, ZCR, ...)
- - Audio effects (pitch shifting, time stretching, filters, ...)
+ - A fast I/O for interacting with audio files
+ - Feature extraction
+ - Audio effects
+   - Time stretching and pitch shifting
 
 ## License
 
