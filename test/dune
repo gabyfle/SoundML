@@ -1,7 +1,7 @@
 (data_only_dirs vectors audio)
 
 (tests
- (names test_vectors test_aformat)
+ (names test_vectors test_aformat test_time)
  (libraries alcotest yojson soundml)
  (package soundml)
  (deps
