@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2023-2025                                                  *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -21,273 +21,209 @@
 
 type engine = Faster | Finer
 
-type quality = HighSpeed | HighQuality | HighConsistency
+let engine_to_int = function Faster -> 0x00000000 | Finer -> 0x20000000
 
-type formant = Shifted | Preserved
+type transients = Crisp | Mixed | Smooth
 
-type window = Standard | Short | Long
-
-type smoothing = Off | On
-
-type threading = Auto | Always | Never
-
-type phase = Laminar | Independent
+let transients_to_int = function
+  | Crisp ->
+      0x00000000
+  | Mixed ->
+      0x00000100
+  | Smooth ->
+      0x00000200
 
 type detector = Compound | Percussive | Soft
 
-type transients = Crisp | Smooth | Mixed
+let detector_to_int = function
+  | Compound ->
+      0x00000000
+  | Percussive ->
+      0x00000400
+  | Soft ->
+      0x00000800
+
+type phase = Laminar | Independent
+
+let phase_to_int = function Laminar -> 0x00000000 | Independent -> 0x00002000
+
+type threading = Auto | Never | Always
+
+let threading_to_int = function
+  | Auto ->
+      0x00000000
+  | Never ->
+      0x00010000
+  | Always ->
+      0x00020000
+
+type window = Standard | Short | Long
+
+let window_to_int = function
+  | Standard ->
+      0x00000000
+  | Short ->
+      0x00100000
+  | Long ->
+      0x00200000
+
+type smoothing = Off | On
+
+let smoothing_to_int = function Off -> 0x00000000 | On -> 0x00800000
+
+type formant = Shifted | Preserved
+
+let formant_to_int = function Shifted -> 0x00000000 | Preserved -> 0x01000000
+
+type pitch = HighSpeed | HighQuality | HighConsistency
+
+let pitch_to_int = function
+  | HighSpeed ->
+      0x00000000
+  | HighQuality ->
+      0x02000000
+  | HighConsistency ->
+      0x04000000
 
 type channels = Apart | Together
 
-type process = RealTime | Offline
-
-module OptionBits = struct
-  let process_offline = 0x00000000
-
-  let process_realtime = 0x00000001
-
-  let transients_crisp = 0x00000000
-
-  let transients_mixed = 0x00000100
-
-  let transients_smooth = 0x00000200
-
-  let detector_compound = 0x00000000
-
-  let detector_percussive = 0x00000400
-
-  let detector_soft = 0x00000800
-
-  let phase_laminar = 0x00000000
-
-  let phase_independent = 0x00002000
-
-  let threading_auto = 0x00000000
-
-  let threading_never = 0x00010000
-
-  let threading_always = 0x00020000
-
-  let window_standard = 0x00000000
-
-  let window_short = 0x00100000
-
-  let window_long = 0x00200000
-
-  let smoothing_off = 0x00000000
-
-  let smoothing_on = 0x00800000
-
-  let formant_shifted = 0x00000000
-
-  let formant_preserved = 0x01000000
-
-  let pitch_high_speed = 0x00000000
-
-  let pitch_high_quality = 0x02000000
-
-  let pitch_high_consistency = 0x04000000
-
-  let channels_apart = 0x00000000
-
-  let channels_together = 0x10000000
-
-  let engine_faster = 0x00000000
-
-  let engine_finer = 0x20000000
-end
+let channels_to_int = function Apart -> 0x00000000 | Together -> 0x10000000
 
 module Config = struct
   type t =
     { engine: engine
-    ; quality: quality
-    ; formant: formant
+    ; transients: transients
+    ; detector: detector
+    ; phase: phase
+    ; threading: threading
     ; window: window
     ; smoothing: smoothing
-    ; threading: threading
-    ; phase: phase
-    ; detector: detector
-    ; transients: transients
-    ; channels: channels
-    ; process: process }
+    ; formant: formant
+    ; pitch: pitch
+    ; channels: channels }
 
-  let default =
+  let default : t =
     { engine= Faster
-    ; quality= HighSpeed
-    ; formant= Shifted
+    ; transients= Crisp
+    ; detector= Compound
+    ; phase= Laminar
+    ; threading= Auto
     ; window= Standard
     ; smoothing= Off
-    ; threading= Auto
-    ; phase= Laminar
-    ; detector= Compound
-    ; transients= Crisp
-    ; channels= Apart
-    ; process= Offline }
-
-  let percussive =
-    { engine= Faster
-    ; quality= HighSpeed
     ; formant= Shifted
-    ; window= Short
-    ; smoothing= Off
-    ; threading= Auto
-    ; phase= Independent
-    ; detector= Compound
-    ; transients= Crisp
-    ; channels= Apart
-    ; process= Offline }
+    ; pitch= HighSpeed
+    ; channels= Apart }
 
-  let set_engine engine config = {config with engine}
+  let percussive : t = {default with window= Short; phase= Independent}
 
-  let set_quality quality config = {config with quality}
+  let with_engine engine config = {config with engine}
 
-  let set_formant formant config = {config with formant}
+  let with_transients transients config = {config with transients}
 
-  let set_window window config = {config with window}
+  let with_detector detector config = {config with detector}
 
-  let set_smoothing smoothing config = {config with smoothing}
+  let with_phase phase config = {config with phase}
 
-  let set_threading threading config = {config with threading}
+  let with_threading threading config = {config with threading}
 
-  let set_phase phase config = {config with phase}
+  let with_window window config = {config with window}
 
-  let set_detector detector config = {config with detector}
+  let with_smoothing smoothing config = {config with smoothing}
 
-  let set_transients transients config = {config with transients}
+  let with_formant formant config = {config with formant}
 
-  let set_channels channels config = {config with channels}
+  let with_pitch pitch config = {config with pitch}
 
-  let set_process process config = {config with process}
+  let with_channels channels config = {config with channels}
 
-  let to_int config =
-    let engine_val =
-      match config.engine with
-      | Faster ->
-          OptionBits.engine_faster
-      | Finer ->
-          OptionBits.engine_finer
-    in
-    let quality_val =
-      match config.quality with
-      | HighSpeed ->
-          OptionBits.pitch_high_speed
-      | HighQuality ->
-          OptionBits.pitch_high_quality
-      | HighConsistency ->
-          OptionBits.pitch_high_consistency
-    in
-    let formant_val =
-      match config.formant with
-      | Shifted ->
-          OptionBits.formant_shifted
-      | Preserved ->
-          OptionBits.formant_preserved
-    in
-    let window_val =
-      match config.window with
-      | Standard ->
-          OptionBits.window_standard
-      | Short ->
-          OptionBits.window_short
-      | Long ->
-          OptionBits.window_long
-    in
-    let smoothing_val =
-      match config.smoothing with
-      | Off ->
-          OptionBits.smoothing_off
-      | On ->
-          OptionBits.smoothing_on
-    in
-    let threading_val =
-      match config.threading with
-      | Auto ->
-          OptionBits.threading_auto
-      | Always ->
-          OptionBits.threading_always
-      | Never ->
-          OptionBits.threading_never
-    in
-    let phase_val =
-      match config.phase with
-      | Laminar ->
-          OptionBits.phase_laminar
-      | Independent ->
-          OptionBits.phase_independent
-    in
-    let detector_val =
-      match config.detector with
-      | Compound ->
-          OptionBits.detector_compound
-      | Percussive ->
-          OptionBits.detector_percussive
-      | Soft ->
-          OptionBits.detector_soft
-    in
-    let transients_val =
-      match config.transients with
-      | Crisp ->
-          OptionBits.transients_crisp
-      | Mixed ->
-          OptionBits.transients_mixed
-      | Smooth ->
-          OptionBits.transients_smooth
-    in
-    let channels_val =
-      match config.channels with
-      | Apart ->
-          OptionBits.channels_apart
-      | Together ->
-          OptionBits.channels_together
-    in
-    let process_val =
-      match config.process with
-      | Offline ->
-          OptionBits.process_offline
-      | RealTime ->
-          OptionBits.process_realtime
-    in
-    engine_val lor quality_val lor formant_val lor window_val lor smoothing_val
-    lor threading_val lor phase_val lor detector_val lor transients_val
-    lor channels_val lor process_val
+  let to_int (cfg : t) : int =
+    0 lor engine_to_int cfg.engine
+    lor transients_to_int cfg.transients
+    lor detector_to_int cfg.detector
+    lor phase_to_int cfg.phase
+    lor threading_to_int cfg.threading
+    lor window_to_int cfg.window
+    lor smoothing_to_int cfg.smoothing
+    lor formant_to_int cfg.formant lor pitch_to_int cfg.pitch
+    lor channels_to_int cfg.channels
 end
 
-external rubberband_time_stretch :
+external rubberband_stretch :
      (float, Bigarray.float32_elt) Audio.G.t
-  -> float
-  -> int
-  -> int
-  -> int
-  -> (float, Bigarray.float32_elt) Audio.G.t = "caml_rubberband_time_stretch"
+  -> int * int * int * int * float * float
+  -> (float, Bigarray.float32_elt) Audio.G.t = "caml_rubberband_stretch"
 
-external rubberband_pitch_shift :
-     (float, Bigarray.float32_elt) Audio.G.t
-  -> int
-  -> int
-  -> int
-  -> int
-  -> (float, Bigarray.float32_elt) Audio.G.t = "caml_rubberband_pitch_shift"
+let to_float32 : type b.
+       (float, b) Bigarray.kind
+    -> (float, b) Audio.G.t
+    -> (float, Bigarray.float32_elt) Audio.G.t =
+ fun (kd : (float, b) Bigarray.kind) ->
+  match kd with
+  | Float32 ->
+      Fun.id
+  | Float64 ->
+      Audio.G.cast_d2s
+  | Float16 ->
+      raise
+        (Invalid_argument
+           "Float16 elements kind aren't supported. The array kind must be \
+            either Float32 or Float64." )
 
-let time_stretch ?(config : Config.t = Config.default)
-    (x : Bigarray.float32_elt Audio.audio) (rate : float) :
-    Bigarray.float32_elt Audio.audio =
-  if not (rate > 0.) then failwith "rate must be > 0."
+let of_float32 : type b.
+       (float, b) Bigarray.kind
+    -> (float, Bigarray.float32_elt) Audio.G.t
+    -> (float, b) Audio.G.t =
+ fun (kd : (float, b) Bigarray.kind) ->
+  match kd with
+  | Float32 ->
+      Fun.id
+  | Float64 ->
+      Audio.G.cast_s2d
+  | Float16 ->
+      raise
+        (Invalid_argument
+           "Float16 elements kind aren't supported. The array kind must be \
+            either Float32 or Float64." )
+
+let time_stretch : type a.
+       ?config:Config.t
+    -> (float, a) Audio.G.t
+    -> int
+    -> float
+    -> (float, a) Audio.G.t =
+ fun ?(config : Config.t = Config.default) (x : (float, a) Audio.G.t)
+     (sample_rate : int) (ratio : float) : (float, a) Audio.G.t ->
+  if not (ratio > 0.) then failwith "rate must be > 0."
   else
-    let data = Audio.data x in
-    let meta = Audio.meta x in
-    let sr = Audio.Metadata.sample_rate meta in
-    let channels = Audio.Metadata.channels meta in
+    let dshape = Audio.G.shape x in
+    let channels = if Array.length dshape > 1 then dshape.(0) else 1 in
+    let samples = if Array.length dshape > 1 then dshape.(1) else dshape.(0) in
     let config = Config.to_int config in
-    let y = rubberband_time_stretch data rate sr channels config in
-    Audio.set_data x y
+    let to_float32 = to_float32 (Audio.G.kind x) in
+    let of_float32 = of_float32 (Audio.G.kind x) in
+    of_float32
+      (rubberband_stretch (to_float32 x)
+         (samples, sample_rate, channels, config, ratio, 1.0) )
 
-let pitch_shift ?(config : Config.t = Config.default)
-    (x : Bigarray.float32_elt Audio.audio) (semitones : int) :
-    Bigarray.float32_elt Audio.audio =
-  let data = Audio.data x in
-  let meta = Audio.meta x in
-  let sr = Audio.Metadata.sample_rate meta in
-  let channels = Audio.Metadata.channels meta in
+let pitch_shift : type a.
+       ?config:Config.t
+    -> ?bins_per_octave:int
+    -> (float, a) Audio.G.t
+    -> int
+    -> int
+    -> (float, a) Audio.G.t =
+ fun ?(config : Config.t = Config.default) ?(bins_per_octave : int = 12)
+     (x : (float, a) Audio.G.t) (sample_rate : int) (steps : int) :
+     (float, a) Audio.G.t ->
+  let bins_per_octave = Float.of_int bins_per_octave in
+  let steps = Float.of_int steps in
+  let scale = Float.pow 2.0 (steps /. bins_per_octave) in
+  let dshape = Audio.G.shape x in
+  let channels = if Array.length dshape > 1 then dshape.(0) else 1 in
+  let samples = if Array.length dshape > 1 then dshape.(1) else dshape.(0) in
   let config = Config.to_int config in
-  let y = rubberband_pitch_shift data semitones sr channels config in
-  Audio.set_data x y
+  let to_float32 = to_float32 (Audio.G.kind x) in
+  let of_float32 = of_float32 (Audio.G.kind x) in
+  of_float32
+    (rubberband_stretch (to_float32 x)
+       (samples, sample_rate, channels, config, 1.0, scale) )
