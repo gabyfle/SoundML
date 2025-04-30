@@ -1,6 +1,6 @@
 #!/bin/bash
 
-OCAML_CMD="./perf.exe"
+OCAML_CMD="dune exec ./bench/read/perf.exe"
 PYTHON_CMD="python3 bench.py"
 CACHE_CLEAR_CMD="sync; echo 3 > /proc/sys/vm/drop_caches"
 
@@ -49,7 +49,6 @@ for (( i=1; i<=NUM_ITERATIONS; i++ )); do
     echo "Iteration $i / $NUM_ITERATIONS"
     if sudo bash -c "$CACHE_CLEAR_CMD"; then # ensure that files aren't cached by the system
         sleep 1.5
-        echo "(cc)"
     else
         echo "Error: Failed to clear cache. Probably error with sudo." >&2
         exit 1
@@ -62,6 +61,7 @@ for (( i=1; i<=NUM_ITERATIONS; i++ )); do
     fi
 
     if [[ "$result" =~ ^[+-]?[0-9]*\.?[0-9]+([eE][+-]?[0-9]+)?$ ]]; then
+        echo "Result: $result MiB/s"
         results_array+=("$result")
         ((valid_run_count++))
     fi

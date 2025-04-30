@@ -6,7 +6,7 @@ description:
 maintainer: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 authors: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 license: "Apache-2.0"
-tags: ["sound" "owl" "spectrogram" "fourier" "gabyfle"]
+tags: ["sound" "spectrogram" "fourier" "digital-filters"]
 homepage: "https://github.com/gabyfle/SoundML"
 doc: "https://soundml.gabyfle.dev"
 bug-reports: "https://github.com/gabyfle/SoundML/issues"

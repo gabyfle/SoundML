@@ -36,4 +36,4 @@
   (alcotest :with-test)
   (yojson :with-test))
  (tags
-  (sound owl spectrogram fourier gabyfle)))
+  (sound spectrogram fourier digital-filters)))
