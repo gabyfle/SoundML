@@ -88,7 +88,7 @@ type subtype =
 type endianness = FILE | LITTLE | BIG | CPU
 
 (** The type for an audio format specification. *)
-type t
+type t = {ftype: ftype; sub: subtype; endian: endianness}
 
 val create :
   ?subtype:subtype -> ?endian:endianness -> ftype -> (t, string) result
@@ -148,3 +148,10 @@ val of_ext : ?sub:subtype -> ?endian:endianness -> string -> (t, string) result
     
     {2 Returns}
     @return A result type, where [Ok t] is the created format and [Error msg] is an error message indicating why it failed. *)
+
+val pp : Format.formatter -> t -> unit
+(**
+    [pp fmt] pretty prints the audio format to the given formatter.
+    
+    {2 Parameters}
+    @param fmt is the formatter to use for printing the audio format. *)

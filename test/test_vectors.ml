@@ -19,7 +19,7 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Tutils
+open Vutils
 
 let tests = [("timeseries", (module Test_timeseries.Tests : Testable))]
 

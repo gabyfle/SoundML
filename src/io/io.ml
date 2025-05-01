@@ -48,8 +48,8 @@ let _ =
 
 type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
 
-(* nframes * channels * sample_rate * padded_frames * format *)
-type metadata = int * int * int * int * int
+(* nframes * channels * sample_rate * format *)
+type metadata = int * int * int * int
 
 external caml_read_audio_file_f32 :
      string
@@ -101,20 +101,15 @@ let read : type a.
   in
   let data, meta = read_func typ filename res_typ sample_rate in
   let dshape = Audio.G.shape data in
-  let nsamples = if Array.length dshape > 1 then dshape.(1) else dshape.(0) in
+  let nsamples = dshape.(0) in
   let data = if mono then to_mono data else data in
-  let frames, channels, sample_rate, padded_frames, format = meta in
+  let frames, channels, sample_rate, format = meta in
   let data =
     match (res_typ, frames, nsamples) with
     | NONE, real, pred ->
         if real = pred then data else Audio.G.sub_left data 0 real
-    | _, real, pred ->
-        if fix then
-          if nsamples <> padded_frames then
-            Audio.G.sub_left data 0 padded_frames
-          else data
-        else if real = pred then data
-        else Audio.G.sub_left data 0 real
+    | _, real, _ ->
+        if fix then data else Audio.G.sub_left data 0 real
   in
   let channels = if mono then 1 else channels in
   let format =
