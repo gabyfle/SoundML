@@ -66,6 +66,12 @@ let data (a : 'a audio) = a.data
 
 let sr (a : 'a audio) = Metadata.sample_rate @@ meta a
 
+let channels (a : 'a audio) = Metadata.channels @@ meta a
+
+let samples (a : 'a audio) = Metadata.frames @@ meta a
+
+let format (a : 'a audio) = Metadata.format @@ meta a
+
 let set_data (a : 'a audio) (d : (float, 'a) G.t) = {a with data= d}
 
 let sample_pos (a : 'a audio) (x : int) =

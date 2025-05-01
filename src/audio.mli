@@ -90,33 +90,45 @@ val create : Metadata.t -> (float, 'a) G.t -> 'a audio
 
 val meta : 'a audio -> Metadata.t
 (**
-    [meta audio] returns the metadata attached to the given audio element *)
+    [meta audio] returns the metadata attached to the given audio *)
 
 val rawsize : 'a audio -> int
 (**
-    [rawsize audio] returns the raw size of the given audio element *)
+    [rawsize audio] returns the raw size of the given audio *)
 
 val length : 'a audio -> int
 (**
-    [length audio] returns the length (in milliseconds) of the given audio element *)
+    [length audio] returns the length (in milliseconds) of the given audio *)
 
 val data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t
 (**
-    [data audio] returns the data of the given audio element *)
+    [data audio] returns the data of the given audio *)
 
 val sr : 'a audio -> int
 (**
-    [sr audio] returns the sample rate of the given audio element *)
+    [sr audio] returns the sample rate of the given audio *)
+
+val channels : 'a audio -> int
+(**
+    [channels audio] returns the number of channels of the given audio *)
+
+val samples : 'a audio -> int
+(**
+    [samples audio] returns the number of samples per channel in the given audio *)
+
+val format : 'a audio -> Aformat.t
+(**
+    [format audio] returns the format of the given audio *)
 
 val set_data : 'a audio -> (float, 'a) Owl.Dense.Ndarray.Generic.t -> 'a audio
 (**
-    [set_data audio data] sets the data of the given audio element *)
+    [set_data audio data] sets the data of the given audio *)
 
 val get : int -> 'a audio -> float
 (**
     [get x audio] returns the sample located at the position [x] in milliseconds.
 
-    The position [x] must be between 0 and the length of the audio element.
+    The position [x] must be between 0 and the length of the audio.
     
     Example:
 
@@ -127,12 +139,12 @@ val get : int -> 'a audio -> float
 
 val get_slice : int * int -> 'a audio -> 'a audio
 (**
-    [get_slice (start, stop) audio] returns a slice of the audio element from the position [start] to [stop].
+    [get_slice (start, stop) audio] returns a slice of the audio from the position [start] to [stop].
 
-    The position [start] and [stop] must be between 0 and the length of the audio element.
+    The position [start] and [stop] must be between 0 and the length of the audio.
 
     This function works like Owl's slicing. Giving negative values to [start] and [stop] will slice the audio
-    element from the end of the audio element.
+    from the end of the audio .
 
     Example:
 
@@ -143,7 +155,7 @@ val get_slice : int * int -> 'a audio -> 'a audio
 
 val normalize : ?factor:float -> 'a audio -> unit
 (**
-    [normalize ?factor audio] normalizes the data of the given audio data element by
+    [normalize ?factor audio] normalizes the data of the given audio data by
     the [?factor] parameter, by default equal to $2^31 - 1$.
 
     Use this function when you need to normalize the audio data by a certain factor.
@@ -167,7 +179,7 @@ val normalize : ?factor:float -> 'a audio -> unit
 val reverse : 'a audio -> 'a audio
 (**
     [reverse audio] reverses the audio data.
-    This function does not operate in place: a new audio element is created with the reversed data.
+    This function does not operate in place: a new audio is created with the reversed data.
 
     Example:
 

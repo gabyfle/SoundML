@@ -23,3 +23,9 @@
  (public_name soundml)
  (modules soundml)
  (libraries owl audio io feature effects))
+
+(executable
+ (name testing)
+ (public_name testing)
+ (modules testing)
+ (libraries soundml))

@@ -10,8 +10,8 @@
   (flags
    :standard
    (:include c_flags.sexp)
-   -std=c++23
    -O3
+   -std=c++23
    -llto))
  (c_library_flags
   (:include c_library_flags.sexp))

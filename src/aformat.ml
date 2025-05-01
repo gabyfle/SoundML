@@ -141,6 +141,86 @@ let show_ftype : ftype -> string = function
   | MP3 ->
       "MP3"
 
+let show_sub : subtype -> string = function
+  | PCM_S8 ->
+      "PCM_S8"
+  | PCM_16 ->
+      "PCM_16"
+  | PCM_24 ->
+      "PCM_24"
+  | PCM_32 ->
+      "PCM_32"
+  | PCM_U8 ->
+      "PCM_U8"
+  | FLOAT ->
+      "FLOAT"
+  | DOUBLE ->
+      "DOUBLE"
+  | ULAW ->
+      "ULAW"
+  | ALAW ->
+      "ALAW"
+  | IMA_ADPCM ->
+      "IMA_ADPCM"
+  | MS_ADPCM ->
+      "MS_ADPCM"
+  | GSM610 ->
+      "GSM610"
+  | VOX_ADPCM ->
+      "VOX_ADPCM"
+  | NMS_ADPCM_16 ->
+      "NMS_ADPCM_16"
+  | NMS_ADPCM_24 ->
+      "NMS_ADPCM_24"
+  | NMS_ADPCM_32 ->
+      "NMS_ADPCM_32"
+  | G721_32 ->
+      "G721_32"
+  | G723_24 ->
+      "G723_24"
+  | G723_40 ->
+      "G723_40"
+  | DVW_12 ->
+      "DVW_12"
+  | DVW_16 ->
+      "DVW_16"
+  | DVW_24 ->
+      "DVW_24"
+  | DVW_N ->
+      "DVW_N"
+  | DPCM_8 ->
+      "DPCM_8"
+  | DPCM_16 ->
+      "DPCM_16"
+  | VORBIS ->
+      "VORBIS"
+  | OPUS ->
+      "OPUS"
+  | ALAC_16 ->
+      "ALAC_16"
+  | ALAC_20 ->
+      "ALAC_20"
+  | ALAC_24 ->
+      "ALAC_24"
+  | ALAC_32 ->
+      "ALAC_32"
+  | MPEG_LAYER_I ->
+      "MPEG_LAYER_I"
+  | MPEG_LAYER_II ->
+      "MPEG_LAYER_II"
+  | MPEG_LAYER_III ->
+      "MPEG_LAYER_III"
+
+let show_endian : endianness -> string = function
+  | FILE ->
+      "FILE"
+  | LITTLE ->
+      "LITTLE"
+  | BIG ->
+      "BIG"
+  | CPU ->
+      "CPU"
+
 (* These assoc lists are directly extracted from
    https://github.com/libsndfile/libsndfile/blob/master/include/sndfile.h#L48-L129 *)
 let ftype_assoc =
@@ -364,3 +444,7 @@ let of_ext ?sub ?(endian = FILE) (ext : string) : (t, string) result =
           else Option.get sub
         in
         Ok {ftype; sub; endian}
+
+let pp (fmt : Format.formatter) afmt =
+  Format.fprintf fmt "{ format = %s; subtype = %s; endianness = %s }"
+    (show_ftype afmt.ftype) (show_sub afmt.sub) (show_endian afmt.endian)

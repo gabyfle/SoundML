@@ -32,22 +32,27 @@ namespace SoundML
         class AudioWriter
         {
         private:
-            SndfileHandle sndfile;
             sf_count_t nframes;
 
         public:
-            AudioWriter(SndfileHandle file, sf_count_t nframes)
-                : sndfile(file), nframes(nframes) {}
+            AudioWriter(sf_count_t nframes)
+                : nframes(nframes) {}
 
             /**
              * @brief Writes the given audio data to the file
+             * @param sndfile The SndfileHandle to write to
              * @param data Pointer to the data to write
              * @return An std::expected<void, Error> containing the error code on failure
              */
             template <typename T>
-            std::expected<void, Error> write(const T *data)
+            std::expected<void, Error> write(SndfileHandle &sndfile, const T *data)
             {
+                caml_release_runtime_system();
+
                 sf_count_t written = sndfile.writef(data, nframes);
+
+                caml_acquire_runtime_system();
+
                 if (written != nframes)
                 {
                     int err = sndfile.error() ? sndfile.error() : SF_ERR_SYSTEM;
@@ -70,12 +75,9 @@ namespace SoundML
  * @return An std::expected<void, Error> containing the error code on failure
  */
 template <typename T>
-CAMLprim value caml_write_audio_file(value filename, value ba_data, value metadata)
+value caml_write_audio_file(value filename, value ba_data, value metadata)
 {
     using namespace SoundML::IO;
-
-    CAMLparam3(filename, ba_data, metadata);
-
     std::string filename_str = String_val(filename);
     sf_count_t nframes_val = Long_val(Field(metadata, 0));
     int sample_rate_val = Long_val(Field(metadata, 1));
@@ -84,14 +86,12 @@ CAMLprim value caml_write_audio_file(value filename, value ba_data, value metada
 
     SndfileHandle sndfile(filename_str, SFM_WRITE, format_val, channels_val, sample_rate_val);
     if (int err = sndfile.error(); err)
-    {
         raise_caml_exception(Error(err, SNDFILE_ERR), filename_str);
-    }
 
-    AudioWriter writer(sndfile, nframes_val);
+    AudioWriter writer(nframes_val);
     T *data = (T *)Caml_ba_data_val(ba_data);
 
-    auto result = writer.write(data);
+    auto result = writer.write(sndfile, data);
     if (result.has_value())
         return Val_unit;
     else
@@ -100,7 +100,7 @@ CAMLprim value caml_write_audio_file(value filename, value ba_data, value metada
         raise_caml_exception(err, filename_str);
     }
 
-    CAMLreturn(Val_unit);
+    return Val_unit;
 }
 
 #endif /* SOUNDML_WRITER_H */
