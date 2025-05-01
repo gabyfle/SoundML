@@ -24,23 +24,30 @@
 
 extern "C"
 {
-    CAMLprim value caml_read_audio_file_f32(value filename, value res_typ, value sample_rate, value fix)
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+
+    CAMLprim value caml_read_audio_file_f32(value filename, value res_typ, value trgt_sr, value fix)
     {
-        return caml_read_audio_file<float>(filename, res_typ, sample_rate, fix);
+        CAMLparam4(filename, res_typ, trgt_sr, fix);
+        CAMLreturn(caml_read_audio_file<float>(filename, res_typ, trgt_sr, fix));
     }
 
-    CAMLprim value caml_read_audio_file_f64(value filename, value res_typ, value sample_rate, value fix)
+    CAMLprim value caml_read_audio_file_f64(value filename, value res_typ, value trgt_sr, value fix)
     {
-        return caml_read_audio_file<double>(filename, res_typ, sample_rate, fix);
+        CAMLparam4(filename, res_typ, trgt_sr, fix);
+        CAMLreturn(caml_read_audio_file<double>(filename, res_typ, trgt_sr, fix));
     }
 
     CAMLprim value caml_write_audio_file_f32(value filename, value ba_data, value metadata)
     {
-        return caml_write_audio_file<float>(filename, ba_data, metadata);
+        CAMLparam3(filename, ba_data, metadata);
+        CAMLreturn(caml_write_audio_file<float>(filename, ba_data, metadata));
     }
 
     CAMLprim value caml_write_audio_file_f64(value filename, value ba_data, value metadata)
     {
-        return caml_write_audio_file<double>(filename, ba_data, metadata);
+        CAMLparam3(filename, ba_data, metadata);
+        CAMLreturn(caml_write_audio_file<double>(filename, ba_data, metadata));
     }
 }

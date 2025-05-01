@@ -27,7 +27,6 @@
 
 #include <cmath>
 #include <cstring>
-
 #include <soxr.h>
 
 #include "common.hxx"
@@ -39,40 +38,29 @@ namespace SoundML
         /**
          * Abstract class for an audio reader
          */
+        template <typename T>
         class AudioReader
         {
-        private:
-            SndfileHandle sndfile;
-
         public:
             bool fix{true};
             virtual ~AudioReader() = default;
-            virtual std::expected<AudioData, Error> process_whole(value &) = 0;
+            virtual std::expected<sf_count_t, Error> process_whole(SndfileHandle &, T *) = 0;
         };
 
         template <typename T>
-        class SndfileReader : public AudioReader
+        class SndfileReader : public AudioReader<T>
         {
-            SndfileHandle sndfile;
-
             sf_count_t nframes;
             int channels;
             int sample_rate;
             int format;
 
         public:
-            SndfileReader(SndfileHandle file)
-                : sndfile(file)
-            {
-                nframes = sndfile.frames();
-                channels = sndfile.channels();
-                sample_rate = sndfile.samplerate();
-                format = sndfile.format();
-            }
+            SndfileReader(sf_count_t nframes, int channels, int sample_rate, int format)
+                : nframes(nframes), channels(channels), sample_rate(sample_rate), format(format) {}
 
-            std::expected<AudioData, Error> process_whole(value &bigarray)
+            std::expected<sf_count_t, Error> process_whole(SndfileHandle &sndfile, T *data)
             {
-
                 size_t nsamples = static_cast<size_t>(nframes * channels);
                 size_t size_in_bytes = nsamples * sizeof(T);
 
@@ -95,16 +83,15 @@ namespace SoundML
                 else
                     static_assert(!std::is_same_v<T, T>, "Unsupported type T for OCaml Bigarray conversion");
 
-                /* memory is managed by OCaml */
-                bigarray = caml_ba_alloc(type_flag | CAML_BA_C_LAYOUT, ndims, NULL, dims);
-                T *read_buffer = (T *)std::aligned_alloc(SOUNDML_BUFFER_SIZE, SOUNDML_BUFFER_SIZE * sizeof(T) * channels);
+                T *start = data;
+                T *read_buffer = new T[SOUNDML_BUFFER_SIZE * channels];
                 if (read_buffer == nullptr)
                     return std::unexpected(Error(-1, SOUNDML_ERR));
 
                 sf_count_t read_frames = 0;
                 sf_count_t total_read = 0;
 
-                T *start = static_cast<T *>(Caml_ba_data_val(bigarray));
+                caml_release_runtime_system();
 
                 while ((read_frames = sndfile.readf(read_buffer, SOUNDML_BUFFER_SIZE)) > 0)
                 {
@@ -118,17 +105,16 @@ namespace SoundML
                     total_read += read_frames;
                 }
 
+                caml_acquire_runtime_system();
+
                 if (int err = sndfile.error(); err)
                 {
-                    std::free(read_buffer);
+                    delete[] read_buffer;
                     return std::unexpected(Error(err, SNDFILE_ERR));
                 }
 
-                std::free(read_buffer);
-                read_buffer = nullptr;
-
-                AudioMetadata metadata{total_read, channels, sample_rate, total_read, format};
-                return AudioData(bigarray, metadata);
+                delete[] read_buffer;
+                return total_read;
             }
         };
 
@@ -137,9 +123,8 @@ namespace SoundML
          * @tparam T The type of the data
          */
         template <typename T>
-        class SoXrReader : public AudioReader
+        class SoXrReader : public AudioReader<T>
         {
-            SndfileHandle sndfile;
             soxr_error_t err;
 
             double target_sr;
@@ -152,10 +137,13 @@ namespace SoundML
             soxr_quality_spec_t quality_spec;
 
         public:
-            SoXrReader(SndfileHandle file,
-                       double out_sr,
+            bool fix{true};
+
+            SoXrReader(double out_sr,
+                       double in_sr,
                        resampling_t quality,
-                       unsigned threads = 1) : sndfile(file), target_sr(out_sr), input_sr((double)sndfile.samplerate())
+                       unsigned threads = 1) : target_sr(out_sr),
+                                               input_sr(in_sr)
             {
                 in_t = (std::is_same_v<T, float>) ? SOXR_FLOAT32_I : SOXR_FLOAT64_I;
                 /* soxr support outputing to planar format (split channels) */
@@ -170,36 +158,18 @@ namespace SoundML
 
             /**
              * @brief Reads the whole file and resamples it according to the target sample rate with the correct resampler
-             * @param bigarray The bigarray to fill with the read and resampled data.
+             * @param sndfile The SndfileHandle to read from
+             * @param data Pointer to the data to write
              */
-            std::expected<AudioData, Error> process_whole(value &bigarray) /* TODO: split this func in smaller funcsw */
+            std::expected<sf_count_t, Error> process_whole(SndfileHandle &sndfile, T *data)
             {
-                /* NOTE: for some formats (like MP3), this is just an estimate, not an accurate number */
                 sf_count_t frames = std::ceil((sndfile.frames() * target_sr) / input_sr);
                 int channels = sndfile.channels();
 
-                intnat ndims = (sndfile.channels() > 1) ? 2 : 1;
-                intnat dims[ndims];
+                size_t nsamples = static_cast<size_t>(frames * channels);
+                size_t size_in_bytes = static_cast<size_t>(nsamples * sizeof(T));
 
-                if (ndims == 1)
-                    dims[0] = static_cast<intnat>(frames);
-                else
-                {
-                    dims[0] = static_cast<intnat>(frames);
-                    dims[1] = static_cast<intnat>(channels);
-                }
-
-                int type_flag = 0;
-                if constexpr (std::is_same_v<T, float>)
-                    type_flag = CAML_BA_FLOAT32;
-                else if constexpr (std::is_same_v<T, double>)
-                    type_flag = CAML_BA_FLOAT64;
-                else
-                    static_assert(!std::is_same_v<T, T>, "Unsupported type T for OCaml Bigarray conversion");
-
-                /* memory is managed by OCaml */
-                bigarray = caml_ba_alloc(type_flag | CAML_BA_C_LAYOUT, ndims, NULL, dims);
-                T *ba_output = static_cast<T *>(Caml_ba_data_val(bigarray));
+                T *output = data;
 
                 sf_count_t total_read = 0;      /* total number of frames read from the source file */
                 sf_count_t total_generated = 0; /* total number of frames resampled by the resampler */
@@ -222,7 +192,7 @@ namespace SoundML
                 auto soxr_deleter = [](soxr_t ptr)
                 { if(ptr) soxr_delete(ptr); };
                 std::unique_ptr<struct soxr, decltype(soxr_deleter)> resampler(raw_resampler, soxr_deleter);
-                T *read_buffer = (T *)std::aligned_alloc(SOUNDML_BUFFER_SIZE, SOUNDML_BUFFER_SIZE * sizeof(T) * channels);
+                T *read_buffer = new T[SOUNDML_BUFFER_SIZE * channels];
 
                 bool input_finished = false;
                 while (true)
@@ -237,7 +207,7 @@ namespace SoundML
 
                         if (sndfile.error())
                         {
-                            std::free(read_buffer);
+                            delete[] read_buffer;
                             return std::unexpected(Error(sndfile.error(), SNDFILE_ERR));
                         }
 
@@ -259,7 +229,7 @@ namespace SoundML
 
                     if (remaining_output_frames == 0 && !input_finished)
                     {
-                        std::free(read_buffer);
+                        delete[] read_buffer;
                         return std::unexpected(Error("Output buffer insufficient based on estimate", SOUNDML_ERR));
                     }
 
@@ -268,25 +238,25 @@ namespace SoundML
                         current_in,   /* will be NULL if input_finished (flushing) */
                         current_ilen, /* will be 0 if input_finished (flushing) */
                         &idone,
-                        reinterpret_cast<soxr_out_t>(ba_output), /* output buffer is the big array */
+                        reinterpret_cast<soxr_out_t>(output), /* output buffer is the big array */
                         remaining_output_frames,
                         &odone);
 
                     if (err)
                     {
-                        std::free(read_buffer);
+                        delete[] read_buffer;
                         return std::unexpected(Error(std::string(err), SOXR_ERR));
                     }
 
                     if (odone > 0)
                     {
-                        ba_output += static_cast<size_t>(odone) * channels;
+                        output += static_cast<size_t>(odone) * channels;
                         total_generated += odone;
                     }
 
                     if (total_generated > frames)
                     {
-                        std::free(read_buffer);
+                        delete[] read_buffer;
                         return std::unexpected(Error("Output buffer overflow detected after soxr_process", SOUNDML_ERR));
                     }
 
@@ -305,66 +275,14 @@ namespace SoundML
                     if (padding_frames > 0)
                     {
                         size_t padding_samples = padding_frames * channels;
-                        std::fill_n(ba_output, padding_samples, static_cast<T>(0));
+                        std::fill_n(output, padding_samples, static_cast<T>(0));
                     }
                 }
 
-                std::free(read_buffer);
-                read_buffer = nullptr;
-
-                AudioMetadata metadata;
-                metadata.frames = total_generated; /* we can then access on the real number of resampled data on OCaml side */
-                metadata.channels = channels;
-                metadata.sample_rate = static_cast<int>(target_sr);
-                metadata.padded_frames = fix ? accurate_frames : total_generated;
-                metadata.format = sndfile.format();
-
-                return AudioData(bigarray, metadata);
+                delete[] read_buffer;
+                return total_generated;
             }
         };
-
-        /**
-         * Reads an audio file and returns the data into a vector.
-         *
-         * @param filename The name of the audio file to read.
-         * @param audio_data OCaml value that'll hold the audio data (Bigarray).
-         * @param res_typ The resampling type (from resampling_t).
-         * @param sample_rate The sample rate we're targeting for resampling.
-         * @param fix Whether to pad the output with zeros if the number of frames is less than expected.
-         * @param converter_type Converter type we need to use (from SRC).
-         * @tparam T The type of the audio data (float or double).
-         *
-         * @return A std::expected<AudioData> containing the audio data on success, an std::unexpected<int> containing the error code on failure.
-         */
-        template <typename T>
-        std::expected<AudioData, Error> read_audio_file(
-            const std::string &filename, const resampling_t &res_typ, const int &sample_rate, const bool &fix, value &audio_data)
-        {
-            SndfileHandle sndfile(filename);
-            if (int err = sndfile.error(); err)
-                return std::unexpected(Error(err, SNDFILE_ERR));
-
-            if (sndfile.frames() <= 0 || sndfile.channels() <= 0 || sndfile.samplerate() <= 0 || sndfile.format() <= 0)
-                return std::unexpected(Error(SF_ERR_MALFORMED_FILE, SNDFILE_ERR));
-
-            AudioReader *reader = nullptr;
-            if (res_typ != RS_NONE && sample_rate != sndfile.samplerate())
-            { /* resampling has been required + file's sr != target sr */
-                reader = new SoXrReader<T>(sndfile, static_cast<double>(sample_rate), res_typ);
-                reader->fix = fix;
-            }
-            else
-                reader = new SndfileReader<T>(sndfile);
-
-            if (reader == nullptr)
-                return std::unexpected(Error(-1, SOUNDML_ERR));
-
-            auto result = reader->process_whole(audio_data);
-
-            delete reader;
-
-            return result;
-        }
     } /* namespace SoundML::IO */
 } /* namespace SoundML */
 
@@ -380,41 +298,97 @@ namespace SoundML
  * @return A tuple containing the audio data and its metadata.
  */
 template <typename T>
-CAMLprim value caml_read_audio_file(value filename, value res_typ, value sample_rate, value fix)
+inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr, value fix)
 {
-    using namespace SoundML::IO;
-    CAMLparam4(filename, res_typ, sample_rate, fix);
-    CAMLlocal4(caml_buffer, audio_array, audio_metadata, returns);
+    CAMLparam0();
+    CAMLlocal3(audio_array, audio_metadata, returns);
 
+    using namespace SoundML::IO;
     std::string filename_str(String_val(filename));
-    int sample_rate_val = Long_val(sample_rate);
+    int trgt_sr_val = Long_val(trgt_sr);
     resampling_t resampling_type = static_cast<resampling_t>(Long_val(res_typ));
     bool fix_padding = Bool_val(fix);
 
-    auto result = read_audio_file<T>(filename_str, resampling_type, sample_rate_val, fix_padding, audio_array);
+    SndfileHandle sndfile(filename_str);
+    if (int err = sndfile.error(); err)
+        raise_caml_exception(Error(err, SNDFILE_ERR), filename_str);
+
+    if (sndfile.frames() <= 0 || sndfile.channels() <= 0 || sndfile.samplerate() <= 0 || sndfile.format() <= 0)
+        raise_caml_exception(Error(SF_ERR_MALFORMED_FILE, SNDFILE_ERR), filename_str);
+
+    sf_count_t nframes = sndfile.frames();
+    sf_count_t padded_frames = nframes;
+    int channels = sndfile.channels();
+    int format = sndfile.format();
+    int sample_rate = sndfile.samplerate();
+
+    AudioReader<T> *reader = nullptr;
+    bool resampling_required = resampling_type != RS_NONE && trgt_sr_val != sample_rate;
+
+    if (resampling_required)
+    { /* resampling has been required + file's sr != target sr */
+        padded_frames = static_cast<sf_count_t>(std::ceil((nframes * (double)trgt_sr_val) / (double)sample_rate));
+        reader = new SoXrReader<T>(static_cast<double>(trgt_sr_val), static_cast<double>(sample_rate), resampling_type);
+        reader->fix = fix;
+    }
+    else
+    {
+        trgt_sr = sample_rate;
+        reader = new SndfileReader<T>(nframes, channels, sample_rate, format);
+    }
+
+    if (reader == nullptr)
+    {
+        sndfile.~SndfileHandle();
+        raise_caml_exception(Error(-1, SOUNDML_ERR), filename_str);
+    }
+
+    AudioMetadata metadata{
+        nframes, channels, trgt_sr_val, padded_frames, format};
+
+    intnat ndims = metadata.channels > 1 ? 2 : 1;
+    intnat dims[ndims];
+
+    if (ndims == 1)
+        dims[0] = static_cast<intnat>(metadata.padded_frames);
+    else
+    {
+        dims[0] = static_cast<intnat>(metadata.padded_frames);
+        dims[1] = static_cast<intnat>(metadata.channels);
+    }
+
+    int type_flag = 0;
+    if constexpr (std::is_same_v<T, float>)
+        type_flag = CAML_BA_FLOAT32;
+    else if constexpr (std::is_same_v<T, double>)
+        type_flag = CAML_BA_FLOAT64;
+    else
+        static_assert(!std::is_same_v<T, T>, "Unsupported type T for OCaml Bigarray conversion");
+
+    /* memory will be managed by OCaml */
+    audio_array = caml_ba_alloc(type_flag | CAML_BA_C_LAYOUT, ndims, NULL, dims);
+
+    auto result = reader->process_whole(sndfile, static_cast<T *>(Caml_ba_data_val(audio_array)));
     if (!result.has_value())
     {
         Error err = result.error();
         raise_caml_exception(err, filename_str);
     }
 
-    AudioData audio_data = std::move(result.value());
+    sf_count_t read_frames = result.value();
+    metadata.frames = read_frames;
 
-    const value &audio_samples = audio_data.first;
-    const AudioMetadata &metadata = audio_data.second;
-
-    audio_metadata = caml_alloc_tuple(5);
+    audio_metadata = caml_alloc_tuple(4);
 
     Store_field(audio_metadata, 0, Val_long(metadata.frames));
     Store_field(audio_metadata, 1, Val_int(metadata.channels));
     Store_field(audio_metadata, 2, Val_int(metadata.sample_rate));
-    Store_field(audio_metadata, 3, Val_int(metadata.padded_frames));
-    Store_field(audio_metadata, 4, Val_int(metadata.format));
+    Store_field(audio_metadata, 3, Val_int(metadata.format));
 
     returns = caml_alloc_tuple(2);
-    Store_field(returns, 0, audio_samples);
+    Store_field(returns, 0, audio_array);
     Store_field(returns, 1, audio_metadata);
-    CAMLreturn(returns);
+    return returns;
 }
 
 #endif /* SOUNDFILE_READER_H */

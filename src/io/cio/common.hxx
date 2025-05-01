@@ -30,6 +30,7 @@ extern "C" /* OCaml imports */
 #include <caml/memory.h>
 #include <caml/alloc.h>
 #include <caml/callback.h>
+#include <caml/threads.h>
 #include <caml/bigarray.h>
 #include <caml/fail.h>
 }
@@ -120,13 +121,6 @@ namespace SoundML
             sf_count_t padded_frames;
             int format;
         };
-
-        /**
-         * @brief Type that represents the audio data (actual samples + its associated metadata)
-         * @param value OCaml value that holds the audio data (should be a bigarray)
-         * @param metadata The metadata of the audio data
-         */
-        using AudioData = std::pair<value, AudioMetadata>;
 
         /**
          * @brief Enum that represents the resampling types

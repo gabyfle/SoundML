@@ -21,6 +21,7 @@
 
 open Soundml
 open Tutils
+open Vutils
 
 let string_to_resample_typ = function
   | "soxr_vhq" ->
@@ -36,6 +37,8 @@ let string_to_resample_typ = function
 
 let read_audio (path : string) (res_typ : Io.resampling_t) (sample_rate : int)
     (mono : bool) : (float, Bigarray.float64_elt) Audio.G.t =
+  Printf.printf "file: %s\n" path ;
+  flush_all () ;
   let audio = Io.read ~res_typ ~sample_rate ~mono Bigarray.Float64 path in
   Audio.data audio
 

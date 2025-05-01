@@ -18,3 +18,9 @@
 (*  limitations under the License.                                           *)
 (*                                                                           *)
 (*****************************************************************************)
+
+module type FILTER = sig
+  type t
+
+  type params
+end
