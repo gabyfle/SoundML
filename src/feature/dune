@@ -4,4 +4,6 @@
  (name feature)
  (package soundml)
  (libraries audio utils owl)
+ (instrumentation
+  (backend bisect_ppx))
  (wrapped true))

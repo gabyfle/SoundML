@@ -1,4 +1,4 @@
-(lang dune 3.15)
+(lang dune 3.18)
 
 (name soundml)
 
@@ -17,8 +17,7 @@
 
 (package
  (name soundml)
- (synopsis
-  "An OCaml library to embed sound processing in your applications.")
+ (synopsis "An OCaml library to embed sound processing in your applications")
  (description
   "SoundML is a library built on top of Owl to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
@@ -34,6 +33,10 @@
    (>= 1.2))
   (odoc :with-doc)
   (alcotest :with-test)
-  (yojson :with-test))
+  (yojson :with-test)
+  (bisect_ppx
+   (and
+    :with-test
+    (>= 2.5.0))))
  (tags
   (sound spectrogram fourier digital-filters)))
