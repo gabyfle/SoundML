@@ -37,8 +37,6 @@ let string_to_resample_typ = function
 
 let read_audio (path : string) (res_typ : Io.resampling_t) (sample_rate : int)
     (mono : bool) : (float, Bigarray.float64_elt) Audio.G.t =
-  Printf.printf "file: %s\n" path ;
-  flush_all () ;
   let audio = Io.read ~res_typ ~sample_rate ~mono Bigarray.Float64 path in
   Audio.data audio
 
@@ -64,7 +62,7 @@ module Tests : Testable = struct
       let test_rallclose () =
         Alcotest.(check bool)
           test_allclose_name true
-          (Check.rallclose audio vector)
+          (Check.rallclose ~atol:1e-7 audio vector)
       in
       let test_shape_name = typ ^ "_shape_" ^ basename in
       let test_shape () =

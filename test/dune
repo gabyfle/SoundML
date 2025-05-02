@@ -11,7 +11,13 @@
  (libraries alcotest yojson soundml)
  (package soundml)
  (deps
-  (source_tree vectors)
+  generate_vectors.py
+  generate_audio.sh
   (source_tree audio))
  (action
-  (run %{test})))
+  (progn
+   (system "mkdir -p audio")
+   (system "./generate_audio.sh")
+   (system "mkdir -p vectors")
+   (system "python3 %{dep:generate_vectors.py}")
+   (run %{test}))))

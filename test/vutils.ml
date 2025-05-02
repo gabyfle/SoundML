@@ -23,7 +23,7 @@ let test_audio_dir = Sys.getcwd () ^ "/audio/"
 
 let test_vectors_dir = Sys.getcwd () ^ "/vectors/"
 
-let typ_to_readable = function "timeseries" -> "Io module" | _ -> "Unkown"
+let typ_to_readable = function "timeseries" -> "Io.Read" | _ -> "Unkown"
 
 module StrMap = Map.Make (String)
 
@@ -55,7 +55,8 @@ module Testdata = struct
 
   let get_test_filename (basename : string) : string option =
     let split = Str.(split (regexp {|_|}) basename) in
-    if List.length split >= 1 then Some (List.nth split 1) else None
+    if List.length split >= 1 then Some (String.concat "_" (List.tl split))
+    else None
 
   let list_filter_filename (dir : string) (name : string) : string option =
     try
