@@ -32,11 +32,21 @@ jobs:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
           dune-cache: true
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.3' 
+      - run: pip install --upgrade pip
+      - run: pip install numpy librosa==0.11.0
+
       # temporary, waiting for the conf-soxr package to be published to opam repo
       - name: Install libsoxr-dev
         run: |
             sudo apt-get update
             sudo apt-get install -y libsoxr-dev
+        shell: bash
+
+      - name: Install FFmpeg CLI (to generate test data)
+        run: sudo apt-get install -y ffmpeg
         shell: bash
 
       - name: Install SoundML dependencies (with test)

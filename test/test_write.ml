@@ -38,7 +38,6 @@ let delete_test_dir () =
       Unix.rmdir path )
     else Sys.remove path
   in
-  Printf.printf "%s" !temp_dir_name ;
   if !temp_dir_name <> "" && Sys.file_exists !temp_dir_name then
     rm_rf !temp_dir_name ;
   temp_dir_name := ""

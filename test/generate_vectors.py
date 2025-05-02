@@ -72,9 +72,6 @@ class VectorGenerator:
 
         for audio_path in self.audio_paths:
             identifier = os.path.splitext(os.path.basename(audio_path))[0]
-            print(
-                f"Generating {self.BASE_IDENTIFIER} vector for: {identifier} (Audio: {audio_path})"
-            )
             try:
                 data: Tuple[np.ndarray, Parameters] = self.vector(audio_path)
                 y: np.ndarray = data[0]
@@ -100,6 +97,7 @@ class TimeSeriesVectorGenerator(VectorGenerator):
     counter: int = 0
 
     resamplers: List[str] = ["soxr_vhq", "soxr_hq", "soxr_mq", "soxr_lq"]
+    srs = [None, 8000, 16000, 22050]
 
     def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
         """
@@ -107,7 +105,7 @@ class TimeSeriesVectorGenerator(VectorGenerator):
         """
         params = {}
         mono = False if self.counter % 2 == 0 or self.counter % 3 == 0 else False
-        sr = 22050 if (self.counter) % 2 == 0 and self.counter % 3 != 0 else None
+        sr = self.srs[self.counter % len(self.srs)]
         res_type = self.resamplers[self.counter % len(self.resamplers)]
         params["mono"] = mono
         if sr is not None:
