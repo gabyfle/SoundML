@@ -58,13 +58,13 @@ jobs:
         shell: bash
 
       - name: Run tests
-        if: ${{ matrix.send-coverage }} == false
+        if: matrix.send-coverage != true
         run: |
           opam exec -- dune runtest
         shell: bash
 
       - name: Run tests (and send converage to coveralls)
-        if: ${{ matrix.send-coverage }} == true
+        if: matrix.send-coverage == true
         run: |
           opam exec -- dune runtest --instrument-with bisect_ppx --force
           opam exec -- bisect-ppx-report send-to Coveralls
