@@ -53,6 +53,12 @@ jobs:
         run: opam install . --deps-only --with-test --yes --confirm-level=unsafe-yes --verbose
         shell: bash
 
-      - name: Run tests
-        run: opam exec -- dune runtest
+      - name: Run tests (and send converage to coveralls)
+        run: |
+          opam exec -- dune runtest --instrument-with bisect_ppx --force
+          opam exec -- bisect-ppx-report send-to Coveralls --coverage-path /coverage/bisect
         shell: bash
+        env:
+          BISECT_FILE: /coverage/bisect
+          COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ github.event.number }}
