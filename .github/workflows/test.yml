@@ -19,6 +19,10 @@ jobs:
         ocaml-compiler:
           - "5.3.0" # Latest stable
           - "5.2.0"
+        include:
+          - os: ubuntu-latest
+            ocaml-compiler: "5.3.0"
+            send-coverage: true
 
     runs-on: ${{ matrix.os }}
 
@@ -53,12 +57,18 @@ jobs:
         run: opam install . --deps-only --with-test --yes --confirm-level=unsafe-yes --verbose
         shell: bash
 
+      - name: Run tests
+        if: ${{ matrix.send-coverage }} == false
+        run: |
+          opam exec -- dune runtest
+        shell: bash
+
       - name: Run tests (and send converage to coveralls)
+        if: ${{ matrix.send-coverage }} == true
         run: |
           opam exec -- dune runtest --instrument-with bisect_ppx --force
-          opam exec -- bisect-ppx-report send-to Coveralls --coverage-path /coverage/bisect
+          opam exec -- bisect-ppx-report send-to Coveralls
         shell: bash
         env:
-          BISECT_FILE: /coverage/bisect
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PULL_REQUEST_NUMBER: ${{ github.event.number }}
