@@ -9,6 +9,7 @@
 
 [![Build](https://github.com/gabyfle/SoundML/actions/workflows/build.yml/badge.svg)](https://github.com/gabyfle/SoundML/actions/workflows/build.yml)
 [![Test](https://github.com/gabyfle/SoundML/actions/workflows/test.yml/badge.svg)](https://github.com/gabyfle/SoundML/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/gabyfle/SoundML/badge.svg)](https://coveralls.io/github/gabyfle/SoundML)
 </div>
 
 ## About the Project
