@@ -2,6 +2,8 @@
  (name aformat)
  (package soundml)
  (modules aformat)
+ (instrumentation
+  (backend bisect_ppx))
  (wrapped false))
 
 (library
@@ -9,20 +11,26 @@
  (package soundml)
  (libraries owl aformat)
  (modules audio)
+ (instrumentation
+  (backend bisect_ppx))
  (wrapped false))
 
 (library
  (name utils)
  (package soundml)
- (modules utils)
  (libraries audio owl)
+ (modules utils)
+ (instrumentation
+  (backend bisect_ppx))
  (wrapped false))
 
 (library
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries owl audio io feature effects))
+ (libraries owl audio io feature effects)
+ (instrumentation
+  (backend bisect_ppx)))
 
 (executable
  (name testing)
