@@ -18,3 +18,45 @@
 (*  limitations under the License.                                           *)
 (*                                                                           *)
 (*****************************************************************************)
+
+open Bigarray
+
+let of_owl : type a.
+       (int -> Owl.Dense.Ndarray.D.arr)
+    -> (float, a) kind
+    -> int
+    -> (float, a) Audio.G.t =
+ fun owl_window kd size ->
+  if size <= 0 then raise (Invalid_argument "Window size must be positive.") ;
+  match kd with
+  | Float64 ->
+      owl_window size
+  | Float32 ->
+      Audio.G.cast_d2s @@ owl_window size
+  | Float16 ->
+      raise
+        (Invalid_argument
+           "Float16 elements kind aren't supported for window functions. \
+            Please use Float32 or Float64." )
+
+let hanning (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
+  of_owl Owl.Signal.hann kd size
+
+let hamming (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
+  of_owl Owl.Signal.hamming kd size
+
+let blackman (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
+  of_owl Owl.Signal.blackman kd size
+
+let rectangular : type a. (float, a) kind -> int -> (float, a) Audio.G.t =
+ fun (kd : (float, a) kind) (size : int) ->
+  match kd with
+  | Float32 ->
+      Audio.G.ones Bigarray.Float32 [|size|]
+  | Float64 ->
+      Audio.G.ones Bigarray.Float64 [|size|]
+  | Float16 ->
+      raise
+        (Invalid_argument
+           "Float16 elements kind aren't supported. The array kind must be \
+            either Float32 or Float64." )
