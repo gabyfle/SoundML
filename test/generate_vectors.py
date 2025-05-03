@@ -137,7 +137,7 @@ class STFTVectorGenerator(VectorGenerator):
         return (stft, params)
 
 
-generators: list[VectorGenerator] = [TimeSeriesVectorGenerator]
+generators: list[VectorGenerator] = [TimeSeriesVectorGenerator, STFTVectorGenerator]
 
 if __name__ == "__main__":
     audio_files = [

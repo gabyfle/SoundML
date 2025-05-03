@@ -16,6 +16,15 @@
  (wrapped false))
 
 (library
+ (name window)
+ (package soundml)
+ (libraries owl audio)
+ (modules window)
+ (instrumentation
+  (backend bisect_ppx))
+ (wrapped false))
+
+(library
  (name utils)
  (package soundml)
  (libraries audio owl)
