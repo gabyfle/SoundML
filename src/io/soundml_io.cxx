@@ -27,16 +27,16 @@ extern "C"
 #include <caml/mlvalues.h>
 #include <caml/memory.h>
 
-    CAMLprim value caml_read_audio_file_f32(value filename, value res_typ, value trgt_sr, value fix)
+    CAMLprim value caml_read_audio_file_f32(value filename, value res_typ, value trgt_sr)
     {
-        CAMLparam4(filename, res_typ, trgt_sr, fix);
-        CAMLreturn(caml_read_audio_file<float>(filename, res_typ, trgt_sr, fix));
+        CAMLparam3(filename, res_typ, trgt_sr);
+        CAMLreturn(caml_read_audio_file<float>(filename, res_typ, trgt_sr));
     }
 
-    CAMLprim value caml_read_audio_file_f64(value filename, value res_typ, value trgt_sr, value fix)
+    CAMLprim value caml_read_audio_file_f64(value filename, value res_typ, value trgt_sr)
     {
-        CAMLparam4(filename, res_typ, trgt_sr, fix);
-        CAMLreturn(caml_read_audio_file<double>(filename, res_typ, trgt_sr, fix));
+        CAMLparam3(filename, res_typ, trgt_sr);
+        CAMLreturn(caml_read_audio_file<double>(filename, res_typ, trgt_sr));
     }
 
     CAMLprim value caml_write_audio_file_f32(value filename, value ba_data, value metadata)

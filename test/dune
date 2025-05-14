@@ -1,13 +1,13 @@
 (data_only_dirs vectors audio)
 
 (tests
- (names test_aformat test_write)
+ (names test_aformat test_write test_utils test_time)
  (libraries alcotest soundml)
  (action
   (run %{test})))
 
 (tests
- (names test_vectors test_time)
+ (names test_stft test_timeseries)
  (libraries alcotest yojson soundml)
  (package soundml)
  (deps

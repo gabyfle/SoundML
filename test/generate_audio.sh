@@ -7,10 +7,9 @@ declare -A AUDIO_FORMATS=(
   ["aif"]="pcm_s16be"
   ["flac"]="flac"
   ["mp3"]="libmp3lame"
-  ["au"]="pcm_mulaw"
 )
 
-SAMPLE_RATES=(8000 22050 44100)
+SAMPLE_RATES=(8000 44100)
 DURATION=1
 
 declare -A SOURCES=(

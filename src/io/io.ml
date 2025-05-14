@@ -72,12 +72,11 @@ let read : type a.
        ?res_typ:resampling_t
     -> ?sample_rate:int
     -> ?mono:bool
-    -> ?fix:bool
     -> (float, a) kind
     -> string
     -> a audio =
- fun ?(res_typ : resampling_t = SOXR_HQ) ?sample_rate ?(mono : bool = true)
-     ?(fix : bool = true) typ (filename : string) ->
+ fun ?(res_typ : resampling_t = SOXR_HQ) ?sample_rate ?(mono : bool = true) typ
+     (filename : string) ->
   let read_func : type a.
          (float, a) kind
       -> string
@@ -108,8 +107,8 @@ let read : type a.
     match (res_typ, frames, nsamples) with
     | NONE, real, pred ->
         if real = pred then data else Audio.G.sub_left data 0 real
-    | _, real, _ ->
-        if fix then data else Audio.G.sub_left data 0 real
+    | _ ->
+        data
   in
   let channels = if mono then 1 else channels in
   let format =

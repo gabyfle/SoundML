@@ -31,6 +31,7 @@ module Check = struct
   let rallclose ?(rtol = 1e-05) ?(atol = 1e-10) (x : ('a, 'b) Audio.G.t)
       (y : ('a, 'b) Audio.G.t) : bool =
     if not (shape x y) then false
+    else if Audio.G.numel x = 0 && Audio.G.numel y = 0 then true
     else
       let abs_diff = Audio.G.abs (Audio.G.sub x y) in
       let tolerance = Audio.G.(add_scalar (mul_scalar (abs y) rtol) atol) in
@@ -46,6 +47,7 @@ module Check = struct
    fun ?(rtol = 1e-05) ?(atol = 1e-08) (x : (Complex.t, a) Audio.G.t)
        (y : (Complex.t, a) Audio.G.t) ->
     if not (shape x y) then false
+    else if Audio.G.numel x = 0 && Audio.G.numel y = 0 then true
     else
       let x, y =
         match Audio.G.kind x with

@@ -42,7 +42,6 @@ namespace SoundML
         class AudioReader
         {
         public:
-            bool fix{true};
             virtual ~AudioReader() = default;
             virtual std::expected<sf_count_t, Error> process_whole(SndfileHandle &, T *) = 0;
         };
@@ -137,8 +136,6 @@ namespace SoundML
             soxr_quality_spec_t quality_spec;
 
         public:
-            bool fix{true};
-
             SoXrReader(double out_sr,
                        double in_sr,
                        resampling_t quality,
@@ -268,7 +265,7 @@ namespace SoundML
                 size_t accurate_frames = std::ceil((total_read * target_sr) / input_sr);
 
                 /* if we lost some samples due to the resampling, we're padding the BA with zeros on each dim */
-                if (fix && total_generated < accurate_frames)
+                if (total_generated < accurate_frames)
                 {
                     /* padding_frames is the number of samples we "lost" during resampling */
                     size_t padding_frames = accurate_frames - total_generated;
@@ -292,13 +289,12 @@ namespace SoundML
  * @param filename The name of the audio file to read.
  * @param res_typ The resampling type (from resampling_t).
  * @param sample_rate The sample rate we're targeting for resampling.
- * @param fix Whether to pad the output with zeros if the number of frames is less than expected.
  * @tparam T The type of the audio data (float or double).
  *
  * @return A tuple containing the audio data and its metadata.
  */
 template <typename T>
-inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr, value fix)
+inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
 {
     CAMLparam0();
     CAMLlocal3(audio_array, audio_metadata, returns);
@@ -307,7 +303,6 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr, 
     std::string filename_str(String_val(filename));
     int trgt_sr_val = Long_val(trgt_sr);
     resampling_t resampling_type = static_cast<resampling_t>(Long_val(res_typ));
-    bool fix_padding = Bool_val(fix);
 
     SndfileHandle sndfile(filename_str);
     if (int err = sndfile.error(); err)
@@ -329,7 +324,6 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr, 
     { /* resampling has been required + file's sr != target sr */
         padded_frames = static_cast<sf_count_t>(std::ceil((nframes * (double)trgt_sr_val) / (double)sample_rate));
         reader = new SoXrReader<T>(static_cast<double>(trgt_sr_val), static_cast<double>(sample_rate), resampling_type);
-        reader->fix = fix;
     }
     else
     {

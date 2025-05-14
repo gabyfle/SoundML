@@ -20,64 +20,34 @@
 (*****************************************************************************)
 
 open Soundml
-open Tutils
 open Vutils
 
-let string_to_resample_typ = function
-  | "soxr_vhq" ->
-      Io.SOXR_VHQ
-  | "soxr_hq" ->
-      Io.SOXR_HQ
-  | "soxr_mq" ->
-      Io.SOXR_MQ
-  | "soxr_lq" ->
-      Io.SOXR_LQ
-  | _ ->
-      Io.NONE
+module Timeseries = struct
+  type t = Float.t
 
-let read_audio (path : string) (res_typ : Io.resampling_t) (sample_rate : int)
-    (mono : bool) : (float, Bigarray.float64_elt) Audio.G.t =
-  let audio = Io.read ~res_typ ~sample_rate ~mono Bigarray.Float64 path in
-  Audio.data audio
+  type p = Bigarray.float64_elt
 
-module Tests : Testable = struct
+  type pf = Bigarray.float64_elt
+
+  type pc = Bigarray.complex64_elt
+
+  type ('a, 'b) precision = ('a, 'b) Types.precision
+
+  let precision = Types.B64
+
+  let kd = Bigarray.Float64
+
   let typ = "timeseries"
 
-  let create_test_set (data : (string * string * Parameters.t) list) =
-    let create_tests (basename : string) (case : string * string * Parameters.t)
-        =
-      let vector_path, audio_path, params = case in
-      let sr = Option.value ~default:22050 @@ Parameters.get_int "sr" params in
-      let mono =
-        Option.value ~default:true @@ Parameters.get_bool "mono" params
-      in
-      let resampler =
-        string_to_resample_typ
-          ( Option.value ~default:"None"
-          @@ Parameters.get_string "res_type" params )
-      in
-      let audio = read_audio audio_path resampler sr mono in
-      let vector = load_npy vector_path Bigarray.Float64 in
-      let test_allclose_name = typ ^ "_allclose_" ^ basename in
-      let test_rallclose () =
-        Alcotest.(check bool)
-          test_allclose_name true
-          (Check.rallclose ~atol:1e-7 audio vector)
-      in
-      let test_shape_name = typ ^ "_shape_" ^ basename in
-      let test_shape () =
-        Alcotest.(check bool) test_shape_name true (Check.shape audio vector)
-      in
-      (test_shape, test_rallclose)
-    in
-    let aux acc x =
-      let f, _, _ = x in
-      let basename = Filename.basename f |> Filename.remove_extension in
-      let basename = Option.get @@ Testdata.get_test_filename basename in
-      let tshape, tallclose = create_tests basename x in
-      ("SHAPE:    " ^ basename, `Slow, tshape)
-      :: ("ALLCLOSE: " ^ basename, `Slow, tallclose)
-      :: acc
-    in
-    List.fold_left aux [] data
+  let generate (_ : (pf, pc) precision) (_ : string * string * Parameters.t)
+      (audio : (float, 'c) Owl_dense_ndarray.Generic.t) =
+    audio
 end
+
+module Tests = Tests_cases (Timeseries)
+
+let () =
+  let name = "Vectors: Timeseries Comparison" in
+  let data = Testdata.get Timeseries.typ Vutils.data in
+  let tests = Tests.create_tests data in
+  Tests.run name tests
