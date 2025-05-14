@@ -176,26 +176,6 @@ end
 module Tests_cases (T : Testable) = struct
   include T
 
-  let allclose : type a b.
-         (a, b) Bigarray.kind
-      -> ?rtol:float
-      -> ?atol:float
-      -> (a, b) Owl_dense_ndarray.Generic.t
-      -> (a, b) Owl_dense_ndarray.Generic.t
-      -> bool =
-   fun kd ->
-    match kd with
-    | Bigarray.Complex32 ->
-        Check.callclose
-    | Bigarray.Complex64 ->
-        Check.callclose
-    | Bigarray.Float32 ->
-        Check.rallclose
-    | Bigarray.Float64 ->
-        Check.rallclose
-    | _ ->
-        failwith "Unsupported datatype."
-
   let akind : type a b. (a, b) precision -> (float, a) Bigarray.kind =
    fun prec ->
     match prec with
@@ -208,18 +188,6 @@ module Tests_cases (T : Testable) = struct
       (sample_rate : int) (mono : bool) =
     let audio = Io.read ~res_typ ~sample_rate ~mono kd path in
     Audio.data audio
-
-  let pp_shape fmt arr =
-    Format.fprintf fmt "[%a]"
-      (Format.pp_print_list
-         ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
-         Format.pp_print_int )
-      (Array.to_list arr)
-
-  let equal_shape (a : int array) (b : int array) = a = b
-
-  let shape_testable : int array Alcotest.testable =
-    Alcotest.testable pp_shape equal_shape
 
   let create_tests (data : (string * string * Parameters.t) list) :
       unit Alcotest.test_case list =
@@ -248,22 +216,14 @@ module Tests_cases (T : Testable) = struct
         let audio = read_audio audio_kind audio_path resampler sr mono in
         let generated = generate precision case audio in
         let vector = load_npy vector_path kd in
-        let test_allclose_name = typ ^ "_allclose_" ^ basename in
-        let test_rallclose () =
-          Alcotest.(check bool)
-            test_allclose_name true
-            (allclose kd ~atol:1e-7 generated vector)
+        let test_dense () =
+          Alcotest.check
+            (Tutils.get_dense_testable kd)
+            (typ ^ "_dense_" ^ basename)
+            generated vector
         in
-        let test_shape_name = typ ^ "_shape_" ^ basename in
-        let generated_shape = Audio.G.shape generated in
-        let expected_shape = Audio.G.shape vector in
-        let test_shape () =
-          Alcotest.(check shape_testable)
-            test_shape_name expected_shape generated_shape
-        in
-        let test_shape = ("SHAPE:    " ^ basename, `Slow, test_shape) in
-        let test_rallclose = ("ALLCLOSE: " ^ basename, `Slow, test_rallclose) in
-        [test_shape; test_rallclose] )
+        let test_dense = ("DENSE:    " ^ basename, `Slow, test_dense) in
+        [test_dense] )
       data
 
   let run (name : string) (tests : unit Alcotest.test_case list) =
