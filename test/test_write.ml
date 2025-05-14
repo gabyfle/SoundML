@@ -101,8 +101,8 @@ let check_write_read name
         (file_exists filename) true ;
       let read_audio =
         try
-          Io.read ~fix:false ~mono:(channels = 1) ~sample_rate:target_sr
-            Bigarray.Float32 filename
+          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Bigarray.Float32
+            filename
         with ex ->
           Alcotest.failf "Failed to read back file %s: %s" filename
             (Printexc.to_string ex)

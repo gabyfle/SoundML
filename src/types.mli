@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2025                                                       *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -19,11 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module Audio = Audio
-module Io = Io
-module Types = Types
-module Transform = Transform
-module Window = Window
-module Feature = Feature
-module Effects = Effects
-module Utils = Utils
+type (_, _) precision =
+  | B32 : (Bigarray.float32_elt, Bigarray.complex32_elt) precision
+  | B64 : (Bigarray.float64_elt, Bigarray.complex64_elt) precision

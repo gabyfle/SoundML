@@ -3,7 +3,7 @@
 (library
  (name feature)
  (package soundml)
- (libraries audio utils owl)
+ (libraries audio utils window owl)
  (instrumentation
   (backend bisect_ppx))
  (wrapped true))

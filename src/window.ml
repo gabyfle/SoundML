@@ -48,7 +48,7 @@ let hamming (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
 let blackman (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
   of_owl Owl.Signal.blackman kd size
 
-let rectangular : type a. (float, a) kind -> int -> (float, a) Audio.G.t =
+let boxcar : type a. (float, a) kind -> int -> (float, a) Audio.G.t =
  fun (kd : (float, a) kind) (size : int) ->
   match kd with
   | Float32 ->

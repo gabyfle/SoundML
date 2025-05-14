@@ -19,11 +19,31 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+open Tutils
+
 let test_audio_dir = Sys.getcwd () ^ "/audio/"
 
 let test_vectors_dir = Sys.getcwd () ^ "/vectors/"
 
-let typ_to_readable = function "timeseries" -> "Io.Read" | _ -> "Unkown"
+let typ_to_readable = function
+  | "timeseries" ->
+      "Io.Read"
+  | "stft" ->
+      "Spectral.stft"
+  | _ ->
+      "Unkown"
+
+let string_to_resample_typ = function
+  | "soxr_vhq" ->
+      Io.SOXR_VHQ
+  | "soxr_hq" ->
+      Io.SOXR_HQ
+  | "soxr_mq" ->
+      Io.SOXR_MQ
+  | "soxr_lq" ->
+      Io.SOXR_LQ
+  | _ ->
+      Io.NONE
 
 module StrMap = Map.Make (String)
 
@@ -130,9 +150,113 @@ module Testdata = struct
 end
 
 module type Testable = sig
+  type t
+
+  type p
+
+  type pf
+
+  type pc
+
+  type ('a, 'b) precision = ('a, 'b) Types.precision
+
+  val precision : (pf, pc) precision
+
+  val kd : (t, p) Bigarray.kind
+
   val typ : string
 
-  val create_test_set :
-       (string * string * Parameters.t) list
-    -> (string * [> `Slow] * (unit -> unit)) list
+  val generate :
+       (pf, pc) precision
+    -> string * string * Parameters.t
+    -> (float, pf) Owl_dense_ndarray.Generic.t
+    -> (t, p) Owl_dense_ndarray.Generic.t
 end
+
+module Tests_cases (T : Testable) = struct
+  include T
+
+  let allclose : type a b.
+         (a, b) Bigarray.kind
+      -> ?rtol:float
+      -> ?atol:float
+      -> (a, b) Owl_dense_ndarray.Generic.t
+      -> (a, b) Owl_dense_ndarray.Generic.t
+      -> bool =
+   fun kd ->
+    match kd with
+    | Bigarray.Complex32 ->
+        Check.callclose
+    | Bigarray.Complex64 ->
+        Check.callclose
+    | Bigarray.Float32 ->
+        Check.rallclose
+    | Bigarray.Float64 ->
+        Check.rallclose
+    | _ ->
+        failwith "Unsupported datatype."
+
+  let akind : type a b. (a, b) precision -> (float, a) Bigarray.kind =
+   fun prec ->
+    match prec with
+    | Types.B32 ->
+        Bigarray.Float32
+    | Types.B64 ->
+        Bigarray.Float64
+
+  let read_audio kd (path : string) (res_typ : Io.resampling_t)
+      (sample_rate : int) (mono : bool) =
+    let audio = Io.read ~res_typ ~sample_rate ~mono kd path in
+    Audio.data audio
+
+  let create_tests (data : (string * string * Parameters.t) list) :
+      unit Alcotest.test_case list =
+    List.concat_map
+      (fun (case : string * string * Parameters.t) ->
+        let vector_path, audio_path, params = case in
+        let raw_basename =
+          Filename.basename vector_path |> Filename.remove_extension
+        in
+        let basename =
+          Option.value ~default:raw_basename
+            (Testdata.get_test_filename raw_basename)
+        in
+        let sr =
+          Option.value ~default:22050 @@ Parameters.get_int "sr" params
+        in
+        let mono =
+          Option.value ~default:true @@ Parameters.get_bool "mono" params
+        in
+        let resampler =
+          string_to_resample_typ
+            ( Option.value ~default:"None"
+            @@ Parameters.get_string "res_type" params )
+        in
+        let audio_kind = akind precision in
+        let audio = read_audio audio_kind audio_path resampler sr mono in
+        let generated = generate precision case audio in
+        let vector = load_npy vector_path kd in
+        let test_allclose_name = typ ^ "_allclose_" ^ basename in
+        let test_rallclose () =
+          Alcotest.(check bool)
+            test_allclose_name true
+            (allclose kd ~atol:1e-7 generated vector)
+        in
+        let test_shape_name = typ ^ "_shape_" ^ basename in
+        let test_shape () =
+          Alcotest.(check bool)
+            test_shape_name true
+            (Check.shape generated vector)
+        in
+        let test_shape = ("SHAPE:    " ^ basename, `Slow, test_shape) in
+        let test_rallclose = ("ALLCLOSE: " ^ basename, `Slow, test_rallclose) in
+        [test_shape; test_rallclose] )
+      data
+
+  let run (name : string) (tests : unit Alcotest.test_case list) =
+    Alcotest.run name [(typ_to_readable typ, tests)]
+end
+
+let tests = ["timeseries"; "stft"]
+
+let data = Testdata.create test_vectors_dir test_audio_dir tests
