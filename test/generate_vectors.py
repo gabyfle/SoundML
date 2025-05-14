@@ -47,6 +47,8 @@ class VectorGenerator:
     audio_paths: list[str]
     output_dir: str
 
+    counter: int = 0
+
     def __init__(self, audio_paths: list[str], output_dir: str):
         self.audio_paths = audio_paths
         self.output_dir = os.path.join(output_dir, f"{self.BASE_IDENTIFIER}/")
@@ -74,6 +76,9 @@ class VectorGenerator:
             identifier = os.path.splitext(os.path.basename(audio_path))[0]
             try:
                 data: Tuple[np.ndarray, Parameters] = self.vector(audio_path)
+
+                self.counter += 1
+
                 y: np.ndarray = data[0]
                 params = data[1]
                 filename: str = self.normalize_name(
@@ -94,8 +99,6 @@ class TimeSeriesVectorGenerator(VectorGenerator):
 
     BASE_IDENTIFIER: str = "timeseries"
 
-    counter: int = 0
-
     resamplers: List[str] = ["soxr_vhq", "soxr_hq", "soxr_mq", "soxr_lq"]
     srs = [None, 8000, 16000, 22050]
 
@@ -115,7 +118,7 @@ class TimeSeriesVectorGenerator(VectorGenerator):
         )
         params["sr"] = sr
         y = np.ascontiguousarray(y, dtype=np.float64)
-        self.counter += 1
+
         return (y, Parameters(params))
 
 
@@ -126,11 +129,11 @@ class STFTVectorGenerator(VectorGenerator):
 
     BASE_IDENTIFIER: str = "stft"
 
-    counter: int = 0
-
-    nffts = [512, 1024, 2048, 4096]
-    hop_lengths = [64, 128, 256, 512]
-    window_types = ["hann", "hamming", "blackman", "boxcar"]
+    nffts = [512]#, #1024, 2048, 4096]
+    window_lengths = [512]#64, 128, 256, 512]
+    hop_sizes = [128]#, 256, 512]
+    centers = [False, False, False]
+    window_types = ["hann"]#, "hamming", "blackman", "boxcar"]
 
     def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
         """
@@ -138,21 +141,31 @@ class STFTVectorGenerator(VectorGenerator):
         """
         params = {}
         n_fft = self.nffts[self.counter % len(self.nffts)]
-        hop_length = self.hop_lengths[self.counter % len(self.hop_lengths)]
+        hop_size = self.hop_sizes[self.counter % len(self.hop_sizes)]
         window_type = self.window_types[self.counter % len(self.window_types)]
+        window_length = self.window_lengths[self.counter % len(self.window_lengths)]
+        center = self.centers[self.counter % len(self.centers)]
+        params["window_length"] = window_length
         params["n_fft"] = n_fft
-        params["hop_length"] = hop_length
+        params["hop_size"] = hop_size
         params["window_type"] = window_type
+        params["center"] = center
         params["res_type"] = "soxr_hq"
 
         y, sr = librosa.load(audio_path)
         y = y.astype(np.float64)
-        stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, window=window_type, dtype=np.complex64)
+        stft = librosa.stft(
+            y,
+            n_fft=n_fft,
+            hop_length=hop_size,
+            win_length=window_length,
+            window=window_type,
+            dtype=np.complex64,
+            center=center,
+        )
         stft = np.ascontiguousarray(stft, dtype=np.complex64)
         params = Parameters(params)
 
-        self.counter += 1
-        
         return (stft, params)
 
 

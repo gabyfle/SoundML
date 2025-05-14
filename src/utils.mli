@@ -60,9 +60,12 @@ val pad_center :
 (**
     Pads a ndarray such that *)
 
-(**
-    Various utility functions that are used inside the library and that can be usefull
-    as well outside of it. *)
+val frame :
+     ('a, 'b) Owl_dense_ndarray.Generic.t
+  -> int
+  -> int
+  -> int
+  -> ('a, 'b) Owl_dense_ndarray.Generic.t
 
 val fftfreq :
   int -> float -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t

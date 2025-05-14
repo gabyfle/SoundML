@@ -15,15 +15,6 @@
  (wrapped false))
 
 (library
- (name transform)
- (package soundml)
- (modules transform)
- (libraries owl types utils)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped false))
-
-(library
  (name audio)
  (package soundml)
  (libraries owl types aformat)
@@ -46,6 +37,15 @@
  (package soundml)
  (libraries audio types owl)
  (modules utils)
+ (instrumentation
+  (backend bisect_ppx))
+ (wrapped false))
+
+(library
+ (name transform)
+ (package soundml)
+ (modules transform)
+ (libraries owl window types utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))

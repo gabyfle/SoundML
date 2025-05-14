@@ -1,7 +1,7 @@
 (data_only_dirs vectors audio)
 
 (tests
- (names test_aformat test_write test_utils test_time)
+ (names test_aformat test_write test_utils test_time test_window)
  (libraries alcotest soundml)
  (action
   (run %{test})))

@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2023-2025                                                  *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -109,6 +109,44 @@ let pad_center (data : ('a, 'b) Audio.G.t) (target_size : int) (value : 'a) :
     let pad_right = pad_total - pad_left in
     let padding = [[pad_left; pad_right]] in
     Audio.G.pad ~v:value padding data
+
+let frame (x : ('a, 'b) Audio.G.t) (frame_size : int) (hop_size : int)
+    (axis : int) : ('a, 'b) Audio.G.t =
+  if frame_size <= 0 then invalid_arg "frame_size must be positive" ;
+  if hop_size <= 0 then invalid_arg "hop_size must be positive" ;
+  let shape_in = Audio.G.shape x in
+  let num_dims_in = Array.length shape_in in
+  let len_axis = shape_in.(axis) in
+  let num_frames =
+    if len_axis < frame_size then 0
+    else ((len_axis - frame_size) / hop_size) + 1
+  in
+  let shape_out_list =
+    let prefix_dims = Array.to_list (Array.sub shape_in 0 axis) in
+    let suffix_dims =
+      if axis + 1 < num_dims_in then
+        Array.to_list (Array.sub shape_in (axis + 1) (num_dims_in - (axis + 1)))
+      else []
+    in
+    prefix_dims @ [num_frames; frame_size] @ suffix_dims
+  in
+  let shape_out = Array.of_list shape_out_list in
+  if num_frames <= 0 then Audio.G.empty (Audio.G.kind x) shape_out
+  else
+    let get_value_for_output_indices (out_indices : int array) : 'a =
+      let in_indices = Array.make num_dims_in 0 in
+      for d = 0 to axis - 1 do
+        in_indices.(d) <- out_indices.(d)
+      done ;
+      let frame_idx = out_indices.(axis) in
+      let offset_in_frame = out_indices.(axis + 1) in
+      in_indices.(axis) <- (frame_idx * hop_size) + offset_in_frame ;
+      for d = axis + 1 to num_dims_in - 1 do
+        in_indices.(d) <- out_indices.(d + 1)
+      done ;
+      Audio.G.get x in_indices
+    in
+    Audio.G.init_nd (Audio.G.kind x) shape_out get_value_for_output_indices
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
