@@ -209,6 +209,18 @@ module Tests_cases (T : Testable) = struct
     let audio = Io.read ~res_typ ~sample_rate ~mono kd path in
     Audio.data audio
 
+  let pp_shape fmt arr =
+    Format.fprintf fmt "[%a]"
+      (Format.pp_print_list
+         ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
+         Format.pp_print_int )
+      (Array.to_list arr)
+
+  let equal_shape (a : int array) (b : int array) = a = b
+
+  let shape_testable : int array Alcotest.testable =
+    Alcotest.testable pp_shape equal_shape
+
   let create_tests (data : (string * string * Parameters.t) list) :
       unit Alcotest.test_case list =
     List.concat_map
@@ -243,10 +255,11 @@ module Tests_cases (T : Testable) = struct
             (allclose kd ~atol:1e-7 generated vector)
         in
         let test_shape_name = typ ^ "_shape_" ^ basename in
+        let generated_shape = Audio.G.shape generated in
+        let expected_shape = Audio.G.shape vector in
         let test_shape () =
-          Alcotest.(check bool)
-            test_shape_name true
-            (Check.shape generated vector)
+          Alcotest.(check shape_testable)
+            test_shape_name expected_shape generated_shape
         in
         let test_shape = ("SHAPE:    " ^ basename, `Slow, test_shape) in
         let test_rallclose = ("ALLCLOSE: " ^ basename, `Slow, test_rallclose) in
