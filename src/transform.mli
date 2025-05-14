@@ -22,7 +22,12 @@
 open Types
 
 module Config : sig
-  type t = {n_fft: int; hop_size: int; win_length: int; center: bool}
+  type t =
+    { n_fft: int
+    ; hop_size: int
+    ; win_length: int
+    ; window: Window.window
+    ; center: bool }
 
   val default : t
 end

@@ -19,52 +19,110 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Bigarray
+open Types
 
 (** {1 Window Functions}
 
     This module provides a few commonly used window functions.  *)
 
-val hanning : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
+(** The type of window functions. *)
+type window = [`Hanning | `Hamming | `Blackman | `Boxcar]
+
+val get :
+     window
+  -> ('a, 'b) precision
+  -> ?fftbins:bool
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
 (** 
-    [hanning kind n] generates a Hanning window of size [n].
+    [get window precision n] generates a window of size [n] using the given window function type.
 
     {2 Parameters}
 
-    @param kind The kind of the Bigarray elements. It must be either [Bigarray.Float32] or [Bigarray.Float64] or it'll raise.
+    @param window The type of window to generate. 
+    @param precision The precision of the Bigarray elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
-    @raise Invalid_argument if [n] is less than or equal to 0 or if the given kind is unsupported. *)
+    @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val hamming : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
+val cosine_sum :
+     ?fftbins:bool
+  -> ('a, 'b) precision
+  -> float array
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
+(**
+    [cosine_sum precision coeffs n] generates a cosine-sum window of size [n] using the given coefficients.
+
+    {2 Parameters}
+    @param precision The precision of the Bigarray elements.
+    @param coeffs The coefficients of the cosine-sum window. The length of the coefficients array must be greater than 0.
+    @param n The size of the window to generate. The size of the window must be greater than 0.
+
+    {2 Raises}
+    @raise Invalid_argument if [n] is less than or equal to 0.
+    @raise Invalid_argument if the length of [coeffs] is less than 1.
+
+    {2 References}
+    @see https://en.wikipedia.org/wiki/Window_function#Cosine-sum_windows
+    @see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.general_cosine.html *)
+
+val hanning :
+     ?fftbins:bool
+  -> ('a, 'b) precision
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
 (** 
-    [hamming kind n] generates a Hamming window of size [n].
+    [hanning precision n] generates a Hanning window of size [n].
 
     {2 Parameters}
 
-    @param kind The kind of the Bigarray elements. It must be either [Bigarray.Float32] or [Bigarray.Float64] or it'll raise.
+    @param precision The precision of the Bigarray elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
-    @raise Invalid_argument if [n] is less than or equal to 0 or if the given kind is unsupported. *)
+    @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val blackman : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
+val hamming :
+     ?fftbins:bool
+  -> ('a, 'b) precision
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
 (** 
-    [blackman kind n] generates a Blackman window of size [n].
+    [hamming precision n] generates a Hamming window of size [n].
 
     {2 Parameters}
 
-    @param kind The kind of the Bigarray elements. It must be either [Bigarray.Float32] or [Bigarray.Float64] or it'll raise.
+    @param precision The precision of the Bigarray elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
-    @raise Invalid_argument if [n] is less than or equal to 0 or if the given kind is unsupported. *)
+    @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val boxcar : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
+val blackman :
+     ?fftbins:bool
+  -> ('a, 'b) precision
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
 (** 
-    [boxcar  kind n] generates a Rectangular window of size [n].
+    [blackman precision n] generates a Blackman window of size [n].
 
     {2 Parameters}
 
-    @param kind The kind of the Bigarray elements. It must be either [Bigarray.Float32] or [Bigarray.Float64] or it'll raise.
+    @param precision The precision of the Bigarray elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
-    @raise Invalid_argument if [n] is less than or equal to 0 or if the given kind is unsupported. *)
+    @raise Invalid_argument if [n] is less than or equal to 0. *)
+
+val boxcar :
+     ?fftbins:bool
+  -> ('a, 'b) precision
+  -> int
+  -> (float, 'a) Owl_dense_ndarray.Generic.t
+(** 
+    [boxcar precision n] generates a Rectangular window of size [n].
+
+    {2 Parameters}
+
+    @param precision The precision of the Bigarray elements.
+    @param n The size of the window to generate. The size of the window must be greater than 0.
+    
+    @raise Invalid_argument if [n] is less than or equal to 0. *)

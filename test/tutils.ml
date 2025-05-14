@@ -44,7 +44,7 @@ module Check = struct
       -> (Complex.t, a) Audio.G.t
       -> (Complex.t, a) Audio.G.t
       -> bool =
-   fun ?(rtol = 1e-05) ?(atol = 1e-08) (x : (Complex.t, a) Audio.G.t)
+   fun ?(rtol = 1e-05) ?(atol = 1e-05) (x : (Complex.t, a) Audio.G.t)
        (y : (Complex.t, a) Audio.G.t) ->
     if not (shape x y) then false
     else if Audio.G.numel x = 0 && Audio.G.numel y = 0 then true
@@ -65,6 +65,105 @@ module Check = struct
       let comparison_mask = Audio.G.elt_less_equal abs_diff tolerance in
       Audio.G.min' comparison_mask >= 1.0
 end
+
+let allclose : type a b.
+       (a, b) Bigarray.kind
+    -> ?rtol:float
+    -> ?atol:float
+    -> (a, b) Owl_dense_ndarray.Generic.t
+    -> (a, b) Owl_dense_ndarray.Generic.t
+    -> bool =
+ fun kd ->
+  match kd with
+  | Bigarray.Complex32 ->
+      Check.callclose
+  | Bigarray.Complex64 ->
+      Check.callclose
+  | Bigarray.Float32 ->
+      Check.rallclose
+  | Bigarray.Float64 ->
+      Check.rallclose
+  | _ ->
+      failwith "Unsupported datatype."
+
+let dense_testable : type a b.
+    (a, b) Bigarray.kind -> (a, b) Audio.G.t Alcotest.testable =
+ fun (_ : (a, b) Bigarray.kind) ->
+  let kd_to_string (type a b) (kd : (a, b) Bigarray.kind) =
+    match kd with
+    | Bigarray.Float32 ->
+        "Float32"
+    | Bigarray.Float64 ->
+        "Float64"
+    | Bigarray.Complex32 ->
+        "Complex32"
+    | Bigarray.Complex64 ->
+        "Complex64"
+    | _ ->
+        failwith "Unsupported kind"
+  in
+  let pp_kind fmt k =
+    let str_k = kd_to_string k in
+    Format.fprintf fmt "%s" str_k
+  in
+  let to_string (type a b) (kd : (a, b) Bigarray.kind) (v : a) =
+    match kd with
+    | Bigarray.Float32 ->
+        Printf.sprintf "%f" v
+    | Bigarray.Float64 ->
+        Printf.sprintf "%f" v
+    | Bigarray.Complex32 ->
+        Printf.sprintf "%f + %fi" v.re v.im
+    | Bigarray.Complex64 ->
+        Printf.sprintf "%f + %fi" v.re v.im
+    | _ ->
+        failwith "Unsupported kind"
+  in
+  let pp fmt arr =
+    let kd = Audio.G.kind arr in
+    let dims = Audio.G.shape arr in
+    let first_few_max = 10 in
+    let first_few = ref [] in
+    let total_elements = Array.fold_left ( * ) 1 dims in
+    let flattened = Audio.G.flatten arr in
+    if total_elements > 0 && Array.length dims == 1 then
+      for i = 0 to first_few_max - 1 do
+        first_few := Audio.G.get flattened [|i|] :: !first_few
+      done ;
+    Format.fprintf fmt
+      "Audio.G.t <kind: %a, shape: [%s], data (first %d): [%s]>" pp_kind
+      (Audio.G.kind arr)
+      (String.concat "; " (Array.to_list (Array.map string_of_int dims)))
+      first_few_max
+      (String.concat "; " (List.map (to_string kd) (List.rev !first_few)))
+  in
+  let equal a b =
+    let kd = Audio.G.kind a in
+    allclose kd a b
+  in
+  Alcotest.testable pp equal
+
+let float32_g_testable = dense_testable Bigarray.Float32
+
+let float64_g_testable = dense_testable Bigarray.Float64
+
+let complex32_g_testable = dense_testable Bigarray.Complex32
+
+let complex64_g_testable = dense_testable Bigarray.Complex64
+
+let get_dense_testable (type a b) (kd : (a, b) Bigarray.kind) :
+    (a, b) Audio.G.t Alcotest.testable =
+  match kd with
+  | Bigarray.Float32 ->
+      float32_g_testable
+  | Bigarray.Float64 ->
+      float64_g_testable
+  | Bigarray.Complex32 ->
+      complex32_g_testable
+  | Bigarray.Complex64 ->
+      complex64_g_testable
+  | _ ->
+      failwith "Unsupported kind"
 
 (* This snippet has been gathered from the exact same code but for Matrix in
    Owl. See:

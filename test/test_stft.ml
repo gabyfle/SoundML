@@ -22,6 +22,18 @@
 open Soundml
 open Vutils
 
+let string_to_window = function
+  | "hann" ->
+      `Hanning
+  | "hamming" ->
+      `Hamming
+  | "blackman" ->
+      `Blackman
+  | "boxcar" ->
+      `Boxcar
+  | _ ->
+      failwith "Unknown window type"
+
 module StftTestable = struct
   type t = Complex.t
 
@@ -40,9 +52,29 @@ module StftTestable = struct
   let typ = "stft"
 
   let generate (precision : (pf, pc) precision)
-      (_cases : string * string * Parameters.t)
+      (case : string * string * Parameters.t)
       (audio : (float, 'c) Owl_dense_ndarray.Generic.t) =
-    let stft = Transform.stft precision audio in
+    let _, _, params = case in
+    let n_fft =
+      Option.value ~default:2048 @@ Parameters.get_int "n_fft" params
+    in
+    let hop_size =
+      Option.value ~default:512 @@ Parameters.get_int "hop_size" params
+    in
+    let win_length =
+      Option.value ~default:2048 @@ Parameters.get_int "window_length" params
+    in
+    let window =
+      string_to_window
+        (Option.value ~default:"hann" @@ Parameters.get_string "window" params)
+    in
+    let center =
+      Option.value ~default:false @@ Parameters.get_bool "center" params
+    in
+    let config =
+      Transform.Config.{n_fft; hop_size; win_length; window; center}
+    in
+    let stft = Transform.stft ~config precision audio in
     let _kd = kd in
     stft
 end

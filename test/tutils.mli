@@ -45,6 +45,21 @@ module Check : sig
   (** Check the shape of two ndarrays are equal *)
 end
 
+val allclose :
+  'a 'b.
+     ('a, 'b) Bigarray.kind
+  -> ?rtol:float
+  -> ?atol:float
+  -> ('a, 'b) Owl_dense_ndarray.Generic.t
+  -> ('a, 'b) Owl_dense_ndarray.Generic.t
+  -> bool
+(** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
+
+val get_dense_testable :
+     ('a, 'b) Bigarray.kind
+  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
+(** Function that returns a correctly-typed testable based on the passed kind for Dense.Ndarray. *)
+
 val load_npy :
   string -> ('a, 'b) Bigarray.kind -> ('a, 'b) Owl_dense_ndarray.Generic.t
 (** Load a numpy file and return the ndarray. 

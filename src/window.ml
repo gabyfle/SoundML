@@ -19,44 +19,67 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Bigarray
+open Types
 
-let of_owl : type a.
-       (int -> Owl.Dense.Ndarray.D.arr)
-    -> (float, a) kind
-    -> int
-    -> (float, a) Audio.G.t =
- fun owl_window kd size ->
-  if size <= 0 then raise (Invalid_argument "Window size must be positive.") ;
-  match kd with
-  | Float64 ->
-      owl_window size
-  | Float32 ->
-      Audio.G.cast_d2s @@ owl_window size
-  | Float16 ->
-      raise
-        (Invalid_argument
-           "Float16 elements kind aren't supported for window functions. \
-            Please use Float32 or Float64." )
+type window = [`Hanning | `Hamming | `Blackman | `Boxcar]
 
-let hanning (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
-  of_owl Owl.Signal.hann kd size
+let kind_of_precision : type a b. (a, b) precision -> (float, a) Bigarray.kind =
+ fun prec -> match prec with B32 -> Bigarray.Float32 | B64 -> Bigarray.Float64
 
-let hamming (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
-  of_owl Owl.Signal.hamming kd size
+let cosine_sum ?(fftbins = false) (prec : ('a, 'b) precision) (a : float array)
+    m =
+  let kd = kind_of_precision prec in
+  if m < 0 then invalid_arg "Window length M must be a non-negative integer"
+  else if m = 0 then Audio.G.empty kd [|0|]
+  else if m = 1 then Audio.G.ones kd [|1|]
+  else
+    let sym = not fftbins in
+    let m_extended, needs_trunc =
+      if not sym then (m + 1, true) else (m, false)
+    in
+    let fac = Audio.G.linspace kd (-.Owl_const.pi) Owl_const.pi m_extended in
+    let w = Audio.G.zeros kd [|m_extended|] in
+    Array.iteri
+      (fun k coeff_val ->
+        if coeff_val <> 0.0 then
+          let term =
+            if k = 0 then Audio.G.create kd [|m_extended|] coeff_val
+            else
+              let k_float = float_of_int k in
+              let cos_args = Audio.G.mul_scalar fac k_float in
+              let cos_terms = Audio.G.cos cos_args in
+              Audio.G.mul_scalar cos_terms coeff_val
+          in
+          Audio.G.add_ ~out:w w term )
+      a ;
+    if needs_trunc then Audio.G.get_slice [[0; m - 1]] w else w
 
-let blackman (kd : (float, 'a) kind) (size : int) : (float, 'a) Audio.G.t =
-  of_owl Owl.Signal.blackman kd size
+let hanning ?(fftbins = false) (prec : ('a, 'b) precision) m =
+  cosine_sum ~fftbins prec [|0.5; 1. -. 0.5|] m
 
-let boxcar : type a. (float, a) kind -> int -> (float, a) Audio.G.t =
- fun (kd : (float, a) kind) (size : int) ->
-  match kd with
-  | Float32 ->
-      Audio.G.ones Bigarray.Float32 [|size|]
-  | Float64 ->
-      Audio.G.ones Bigarray.Float64 [|size|]
-  | Float16 ->
-      raise
-        (Invalid_argument
-           "Float16 elements kind aren't supported. The array kind must be \
-            either Float32 or Float64." )
+let hamming ?(fftbins = false) (prec : ('a, 'b) precision) m =
+  cosine_sum ~fftbins prec [|0.54; 1. -. 0.54|] m
+
+let blackman ?(fftbins = false) (prec : ('a, 'b) precision) m =
+  cosine_sum ~fftbins prec [|0.42; 0.5; 0.08|] m
+
+let boxcar ?(fftbins = false) (prec : ('a, 'b) precision) (size : int) :
+    (float, 'a) Audio.G.t =
+  let kd = kind_of_precision prec in
+  if size < 0 then failwith "Window length M must be non-negative"
+  else if size = 0 then Audio.G.empty kd [|0|]
+  else Audio.G.ones kd [|size|]
+[@@warning "-27"]
+
+let get (typ : window) (prec : ('a, 'b) precision) :
+    ?fftbins:bool -> int -> (float, 'a) Audio.G.t =
+ fun ?fftbins size ->
+  match typ with
+  | `Hanning ->
+      hanning ?fftbins prec size
+  | `Hamming ->
+      hamming ?fftbins prec size
+  | `Blackman ->
+      blackman ?fftbins prec size
+  | `Boxcar ->
+      boxcar ?fftbins prec size
