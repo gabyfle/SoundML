@@ -52,12 +52,11 @@ val read :
      ?res_typ:resampling_t
   -> ?sample_rate:int
   -> ?mono:bool
-  -> ?fix:bool
   -> (float, 'a) kind
   -> string
   -> 'a audio
 (**
-    [read ?res_typ ?sample_rate ?mono ?fix kind filename] reads an audio file and returns an [audio].
+    [read ?res_typ ?sample_rate ?fix kind filename] reads an audio file and returns an [audio].
 
     @return an [audio] type that contains the audio data read from the file. The type of the audio's data is determined by the [kind] parameter.
 
@@ -65,7 +64,6 @@ val read :
     @param ?res_typ is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
     @param ?sample_rate is the target sample rate to use when reading the file. Default is 22050 Hz.
     @param ?mono is a boolean that indicates if we want to convert to a mono audio. Default is [true].
-    @param ?fix if a boolean that indicates if, after resampling the audio, we want it to match the expected number of samples of {m \lceil n \times \frac{tsr}{isr} \rceil} where {m n} is the number of frames in the file, {m tsr} is the target sample rate and {m isr} is the input sample rate.
     @param kind is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
     @param filename is the path to the file to read audio from.
 

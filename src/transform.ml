@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2025                                                       *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -19,11 +19,31 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module Audio = Audio
-module Io = Io
-module Types = Types
-module Transform = Transform
-module Window = Window
-module Feature = Feature
-module Effects = Effects
-module Utils = Utils
+open Bigarray
+open Types
+
+module Config = struct
+  type t = {n_fft: int; hop_size: int; win_length: int; center: bool}
+
+  let default = {n_fft= 2048; hop_size= 512; win_length= 2048; center= true}
+end
+
+module G = Owl.Dense.Ndarray.Generic
+
+let stft : type a b.
+    ?config:Config.t -> (a, b) precision -> (float, a) G.t -> (Complex.t, b) G.t
+    =
+ fun ?(config : Config.t = Config.default) p (x : (float, a) G.t) ->
+  let kd : (Complex.t, b) kind =
+    match p with B32 -> Complex32 | B64 -> Complex64
+  in
+  let signal_length = Float.of_int @@ Audio.G.numel x in
+  let m =
+    Float.to_int
+      (Float.ceil
+         ( signal_length
+         -. (Float.of_int config.win_length /. Float.of_int config.hop_size) ) )
+    + 1
+  in
+  let spectrum = Audio.G.create kd [|m; config.n_fft|] Complex.zero in
+  spectrum

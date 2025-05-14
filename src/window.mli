@@ -18,6 +18,7 @@
 (*  limitations under the License.                                           *)
 (*                                                                           *)
 (*****************************************************************************)
+
 open Bigarray
 
 (** {1 Window Functions}
@@ -57,9 +58,9 @@ val blackman : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
     
     @raise Invalid_argument if [n] is less than or equal to 0 or if the given kind is unsupported. *)
 
-val rectangular : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
+val boxcar : (float, 'a) kind -> int -> (float, 'a) Audio.G.t
 (** 
-    [rectangular kind n] generates a Rectangular window of size [n].
+    [boxcar  kind n] generates a Rectangular window of size [n].
 
     {2 Parameters}
 

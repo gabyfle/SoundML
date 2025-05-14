@@ -96,6 +96,7 @@ end
 
 let pad_center (data : ('a, 'b) Audio.G.t) (target_size : int) (value : 'a) :
     ('a, 'b) Audio.G.t =
+  (*if Audio.G.numel data = 0 then data else*)
   let size = Audio.G.shape data |> fun s -> s.(0) in
   if size = target_size then data
   else if size > target_size then

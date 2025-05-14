@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2025                                                       *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -19,11 +19,38 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module Audio = Audio
-module Io = Io
-module Types = Types
-module Transform = Transform
-module Window = Window
-module Feature = Feature
-module Effects = Effects
-module Utils = Utils
+open Soundml
+open Vutils
+
+module StftTestable = struct
+  type t = Complex.t
+
+  type p = Bigarray.complex32_elt
+
+  type pf = Bigarray.float32_elt
+
+  type pc = Bigarray.complex32_elt
+
+  type ('a, 'b) precision = ('a, 'b) Types.precision
+
+  let precision = Types.B32
+
+  let kd = Bigarray.Complex32
+
+  let typ = "stft"
+
+  let generate (precision : (pf, pc) precision)
+      (_cases : string * string * Parameters.t)
+      (audio : (float, 'c) Owl_dense_ndarray.Generic.t) =
+    let stft = Transform.stft precision audio in
+    let _kd = kd in
+    stft
+end
+
+module Tests = Tests_cases (StftTestable)
+
+let () =
+  let name = "Vectors: STFT Comparison" in
+  let data = Testdata.get StftTestable.typ Vutils.data in
+  let tests = Tests.create_tests data in
+  Tests.run name tests

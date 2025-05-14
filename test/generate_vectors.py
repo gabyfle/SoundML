@@ -68,7 +68,7 @@ class VectorGenerator:
         Generate the audio vectors
         """
         if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+            os.makedirs(self.output_dir, exist_ok=True)
 
         for audio_path in self.audio_paths:
             identifier = os.path.splitext(os.path.basename(audio_path))[0]
@@ -81,7 +81,7 @@ class VectorGenerator:
                 )
                 output_filename: str = os.path.join(self.output_dir, f"{filename}.npy")
                 params_filename: str = os.path.join(self.output_dir, f"{filename}.json")
-                np.save(output_filename, np.ascontiguousarray(y, dtype=np.float64))
+                np.save(output_filename, y)
                 params.write(params_filename)
             except Exception as e:
                 print(f"ERROR generating for {identifier}: {e}")
@@ -126,14 +126,33 @@ class STFTVectorGenerator(VectorGenerator):
 
     BASE_IDENTIFIER: str = "stft"
 
+    counter: int = 0
+
+    nffts = [512, 1024, 2048, 4096]
+    hop_lengths = [64, 128, 256, 512]
+    window_types = ["hann", "hamming", "blackman", "boxcar"]
+
     def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
         """
         Generate the STFT vector for the given file
         """
-        y, sr = librosa.load(audio_path, sr=None)
+        params = {}
+        n_fft = self.nffts[self.counter % len(self.nffts)]
+        hop_length = self.hop_lengths[self.counter % len(self.hop_lengths)]
+        window_type = self.window_types[self.counter % len(self.window_types)]
+        params["n_fft"] = n_fft
+        params["hop_length"] = hop_length
+        params["window_type"] = window_type
+        params["res_type"] = "soxr_hq"
+
+        y, sr = librosa.load(audio_path)
         y = y.astype(np.float64)
-        stft = librosa.stft(y)
-        params = Parameters({"sr": sr, "n_fft": 2048, "hop_length": 512})
+        stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length, window=window_type, dtype=np.complex64)
+        stft = np.ascontiguousarray(stft, dtype=np.complex64)
+        params = Parameters(params)
+
+        self.counter += 1
+        
         return (stft, params)
 
 
@@ -147,5 +166,5 @@ if __name__ == "__main__":
         os.makedirs(VECTOR_DIRECTORY)
 
     for generator in generators:
-        generator = generator(audio_files, VECTOR_DIRECTORY)
+        generator: VectorGenerator = generator(audio_files, VECTOR_DIRECTORY)
         generator.generate()

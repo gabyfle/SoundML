@@ -19,19 +19,17 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Vutils
+open Types
 
-let tests = [("timeseries", (module Test_timeseries.Tests : Testable))]
+module Config : sig
+  type t = {n_fft: int; hop_size: int; win_length: int; center: bool}
 
-let () =
-  let types = List.fold_left (fun acc (x, _) -> x :: acc) [] tests in
-  let data = Testdata.create test_vectors_dir test_audio_dir types in
-  let tests =
-    let aux acc (typ, md) =
-      let module Tests = (val md : Testable) in
-      (typ_to_readable typ, Tests.create_test_set (Testdata.get typ data))
-      :: acc
-    in
-    List.fold_left aux [] tests
-  in
-  Alcotest.run "SoundML: Vectors Comparison" tests
+  val default : t
+end
+
+val stft :
+  'a 'b.
+     ?config:Config.t
+  -> ('a, 'b) precision
+  -> (float, 'a) Audio.G.t
+  -> (Complex.t, 'b) Audio.G.t
