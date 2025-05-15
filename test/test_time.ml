@@ -125,6 +125,44 @@ let test_modifiers () =
   Alcotest.check config_testable "Manual percussive matches preset"
     Config.percussive modified_window_phase
 
+let test_time_stretch () =
+  let config = Config.default in
+  let sin_freq = 440.0 in
+  let sample_rate = 44100 in
+  let ratio = 2.0 in
+  let audio_input =
+    Audio.G.init Bigarray.Float32 [|sample_rate|] (fun i ->
+        let t = float_of_int i /. float_of_int sample_rate in
+        sin_freq *. (2.0 *. Float.pi *. t) |> Float.sin )
+  in
+  let _ = time_stretch ~config audio_input sample_rate ratio in
+  Alcotest.(check pass)
+    "time_stretch completed without raising an exception" () ()
+
+let test_time_stretch_invalid_ratio_raises () =
+  let config = Config.default in
+  let sample_rate = 44100 in
+  let ratio = 0.0 in
+  let audio_input = Audio.G.create Bigarray.Float32 [|100|] 0.0 in
+  let expected_exn = Invalid_argument "rate must be > 0." in
+  Alcotest.check_raises "Stretching with zero ratio raises Invalid_argument"
+    expected_exn (fun () ->
+      ignore (time_stretch ~config audio_input sample_rate ratio) )
+
+let test_pitch_shift () =
+  let config = Config.default in
+  let sin_freq = 440.0 in
+  let sample_rate = 44100 in
+  let ratio = 2.0 in
+  let audio_input =
+    Audio.G.init Bigarray.Float32 [|sample_rate|] (fun i ->
+        let t = float_of_int i /. float_of_int sample_rate in
+        sin_freq *. (2.0 *. Float.pi *. t) |> Float.sin )
+  in
+  let _ = time_stretch ~config audio_input sample_rate ratio in
+  Alcotest.(check pass)
+    "pitch_shift completed without raising an exception" () ()
+
 let () =
   Alcotest.run "Effects.Time: Config"
     [ ( "Presets"
@@ -139,4 +177,10 @@ let () =
             test_combinations ] )
     ; ( "Modifiers"
       , [ Alcotest.test_case "Modifiers create correct configs" `Quick
-            test_modifiers ] ) ]
+            test_modifiers ] )
+    ; ( "Time Stretch/Pitch Shift"
+      , [ Alcotest.test_case "Time stretch" `Quick test_time_stretch
+        ; Alcotest.test_case "Time stretch raise" `Quick
+            test_time_stretch_invalid_ratio_raises ] )
+    ; ("Pitch Shift", [Alcotest.test_case "Pitch shift" `Quick test_pitch_shift])
+    ]

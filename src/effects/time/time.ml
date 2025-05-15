@@ -193,7 +193,7 @@ let time_stretch : type a.
     -> (float, a) Audio.G.t =
  fun ?(config : Config.t = Config.default) (x : (float, a) Audio.G.t)
      (sample_rate : int) (ratio : float) : (float, a) Audio.G.t ->
-  if not (ratio > 0.) then failwith "rate must be > 0."
+  if not (ratio > 0.) then invalid_arg "rate must be > 0."
   else
     let dshape = Audio.G.shape x in
     let channels = if Array.length dshape > 1 then dshape.(0) else 1 in
