@@ -50,20 +50,26 @@ let stft : type a b.
     match p with B32 -> Complex32 | B64 -> Complex64
   in
   let window = (Window.get config.window p ~fftbins:true) config.win_length in
-  let framed = Utils.frame x config.win_length config.hop_size 0 in
-  let out_shape = G.shape framed in
-  out_shape.(1) <- (config.n_fft / 2) + 1 ;
+  let out_shape =
+    [| (config.n_fft / 2) + 1
+     ; ((G.numel x - config.win_length) / config.hop_size) + 1 |]
+  in
   let spectrum = Audio.G.create kd out_shape Complex.zero in
-  for m = 0 to out_shape.(0) - 1 do
-    let ym = Audio.G.zeros kd [|1; config.n_fft|] in
+  let ym = Audio.G.zeros kd [|config.n_fft; 1|] in
+  for m = 0 to out_shape.(1) - 1 do
+    Audio.G.fill ym Complex.zero ;
     for p = 0 to config.win_length - 1 do
       Audio.G.(
-        ym.%{0; p} <- to_complex @@ Float.mul (get framed [|m; p|]) window.%{p} )
+        ym.%{p; 0} <-
+          to_complex
+          @@ Float.mul
+               (get x [|Int.(add p (mul m config.hop_size))|])
+               window.%{p} )
     done ;
-    let ym_fft = Owl.Fft.Generic.fft ~axis:1 ym in
+    let ym_fft = Owl.Fft.Generic.fft ~axis:0 ym in
     let spectrum_slice =
-      Audio.G.get_slice [[0]; [0; out_shape.(1) - 1]] ym_fft
+      Audio.G.get_slice [[0; out_shape.(0) - 1]; [0]] ym_fft
     in
-    Audio.G.set_slice_ ~out:spectrum [[m]; []] spectrum spectrum_slice
+    Audio.G.set_slice_ ~out:spectrum [[]; [m]] spectrum spectrum_slice
   done ;
-  Audio.G.transpose spectrum
+  spectrum
