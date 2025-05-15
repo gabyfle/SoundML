@@ -75,8 +75,8 @@ let read : type a.
     -> (float, a) kind
     -> string
     -> a audio =
- fun ?(res_typ : resampling_t = SOXR_HQ) ?sample_rate ?(mono : bool = true) typ
-     (filename : string) ->
+ fun ?(res_typ : resampling_t = SOXR_HQ) ?(sample_rate : int = 22050)
+     ?(mono : bool = true) typ (filename : string) ->
   let read_func : type a.
          (float, a) kind
       -> string
@@ -94,9 +94,6 @@ let read : type a.
           (Invalid_argument
              "Float16 elements kind aren't supported. The array kind must be \
               either Float32 or Float64." )
-  in
-  let sample_rate =
-    match sample_rate with None -> 22050 | Some rate -> rate
   in
   let data, meta = read_func typ filename res_typ sample_rate in
   let dshape = Audio.G.shape data in
