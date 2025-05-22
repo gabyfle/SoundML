@@ -22,6 +22,8 @@
  - Feature extraction
  - Audio effects
    - Time stretching and pitch shifting
+   - Filtering
+     - IIR filters (Lowpass, Highpass)
 
 ## License
 
