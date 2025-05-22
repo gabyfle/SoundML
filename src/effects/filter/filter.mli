@@ -19,8 +19,84 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module type FILTER = sig
+module type S = sig
   type t
 
   type params
+
+  val reset : t -> t
+
+  val create : params -> t
+
+  val process_sample : t -> float -> float
+end
+
+module Make : functor (S : S) -> sig
+  type t = S.t
+
+  type params = S.params
+
+  val reset : S.t -> S.t
+
+  val create : S.params -> S.t
+
+  val process_sample : S.t -> float -> float
+
+  val process :
+       S.t
+    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+end
+
+module IIR : sig
+  module Generic : sig
+    type t = Iir.t
+
+    type params = Iir.params
+
+    val reset : t -> t
+
+    val create : params -> t
+
+    val process_sample : t -> float -> float
+
+    val process :
+         t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  end
+
+  module HighPass : sig
+    type t = Highpass.t
+
+    type params = Highpass.params
+
+    val reset : t -> t
+
+    val create : params -> t
+
+    val process_sample : t -> float -> float
+
+    val process :
+         t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  end
+
+  module LowPass : sig
+    type t = Lowpass.t
+
+    type params = Lowpass.params
+
+    val reset : t -> t
+
+    val create : params -> t
+
+    val process_sample : t -> float -> float
+
+    val process :
+         t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+  end
 end

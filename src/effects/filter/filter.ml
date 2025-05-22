@@ -19,8 +19,40 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module type FILTER = sig
+module type S = sig
   type t
 
   type params
+
+  val reset : t -> t
+
+  val create : params -> t
+
+  val process_sample : t -> float -> float
+end
+
+module Make (S : S) = struct
+  type t = S.t
+
+  type params = S.params
+
+  let reset = S.reset
+
+  let create = S.create
+
+  let process_sample = S.process_sample
+
+  let process t (x : (Float.t, Bigarray.float32_elt) Audio.G.t) =
+    let n = Audio.G.numel x in
+    let y = Audio.G.create Bigarray.Float32 [|n|] 0. in
+    for i = 0 to n - 1 do
+      Audio.G.set y [|i|] (process_sample t (Audio.G.get x [|i|]))
+    done ;
+    y
+end
+
+module IIR = struct
+  module Generic = Make (Iir)
+  module HighPass = Make (Highpass)
+  module LowPass = Make (Lowpass)
 end
