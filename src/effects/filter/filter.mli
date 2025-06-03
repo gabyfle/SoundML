@@ -44,8 +44,8 @@ module Make : functor (S : S) -> sig
 
   val process :
        S.t
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+    -> (float, 'a) Owl_dense_ndarray.Generic.t
+    -> (float, 'a) Owl_dense_ndarray.Generic.t
 end
 
 module IIR : sig
@@ -62,8 +62,8 @@ module IIR : sig
 
     val process :
          t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
   end
 
   module HighPass : sig
@@ -79,8 +79,8 @@ module IIR : sig
 
     val process :
          t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
   end
 
   module LowPass : sig
@@ -96,7 +96,26 @@ module IIR : sig
 
     val process :
          t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-      -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
+  end
+end
+
+module FIR : sig
+  module Generic : sig
+    type t = Fir.t
+
+    type params = Fir.params
+
+    val reset : t -> t
+
+    val create : params -> t
+
+    val process_sample : t -> float -> float
+
+    val process :
+         t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
+      -> (float, 'a) Owl_dense_ndarray.Generic.t
   end
 end

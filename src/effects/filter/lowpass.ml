@@ -26,13 +26,13 @@ type t = Iir.t
 type params = {cutoff: float; sample_rate: int}
 
 let create ({cutoff; sample_rate} : params) =
-  let fs = sample_rate |> float_of_int in
+  let fs = float_of_int sample_rate in
   let fc = cutoff in
   let r = Float.tan (Float.pi *. fc /. fs) in
   let c = (r -. 1.) /. (r +. 1.) in
   let a = [|1.0; c|] in
-  let b = [|(1.0 +. c) /. 2.0; (c +. 1.0) /. 2.0|] in
-  create {a; b}
+  let b = [|(1.0 +. c) /. 2.0; (1.0 +. c) /. 2.0|] in
+  Iir.create {a; b}
 
 let reset = reset
 
