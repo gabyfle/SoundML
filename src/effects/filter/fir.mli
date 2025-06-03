@@ -18,3 +18,13 @@
 (*  limitations under the License.                                           *)
 (*                                                                           *)
 (*****************************************************************************)
+
+type t
+
+type params = {b: float array}
+
+val reset : t -> t
+
+val create : params -> t
+
+val process_sample : t -> float -> float

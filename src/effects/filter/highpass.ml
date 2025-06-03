@@ -19,54 +19,21 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Module providing usefull checking functions for the tests *)
-module Check : sig
-  val rallclose :
-       ?rtol:float
-    -> ?atol:float
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Real-valued all-close function *)
+open Iir
 
-  val callclose :
-    'a.
-       ?rtol:float
-    -> ?atol:float
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Complex-valued all-close function *)
+type t = Iir.t
 
-  val shape :
-       ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Check the shape of two ndarrays are equal *)
-end
+type params = {cutoff: float; sample_rate: int}
 
-val allclose :
-  'a 'b.
-     ('a, 'b) Bigarray.kind
-  -> ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> bool
-(** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
+let create ({cutoff; sample_rate} : params) =
+  let fs = sample_rate |> float_of_int in
+  let fc = cutoff in
+  let r = Float.tan (Float.pi *. fc /. fs) in
+  let c = (r -. 1.) /. (r +. 1.) in
+  let a = [|1.0; c|] in
+  let b = [|(1.0 -. c) /. 2.0; (c -. 1.0) /. 2.0|] in
+  create {a; b}
 
-val dense_testable :
-     ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
+let reset = reset
 
-val get_dense_testable :
-     ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-(** Function that returns a correctly-typed testable based on the passed kind for Dense.Ndarray. *)
-
-val load_npy :
-  string -> ('a, 'b) Bigarray.kind -> ('a, 'b) Owl_dense_ndarray.Generic.t
-(** Load a numpy file and return the ndarray. 
-    @see https://github.com/tachukao/owl/blob/046f703a6890a5ed5ecf4a8c5750d4e392e4ec54/src/owl/dense/owl_dense_matrix_generic.ml#L606-L609 *)
+let process_sample = process_sample
