@@ -55,6 +55,12 @@ val allclose :
   -> bool
 (** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
 
+val dense_testable :
+     ?rtol:float
+  -> ?atol:float
+  -> ('a, 'b) Bigarray.kind
+  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
+
 val get_dense_testable :
      ('a, 'b) Bigarray.kind
   -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable

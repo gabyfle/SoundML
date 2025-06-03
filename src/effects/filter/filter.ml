@@ -42,9 +42,10 @@ module Make (S : S) = struct
 
   let process_sample = S.process_sample
 
-  let process t (x : (Float.t, Bigarray.float32_elt) Audio.G.t) =
+  let process (t : t) (x : (Float.t, 'a) Audio.G.t) =
+    let kd = Audio.G.kind x in
     let n = Audio.G.numel x in
-    let y = Audio.G.create Bigarray.Float32 [|n|] 0. in
+    let y = Audio.G.create kd [|n|] 0. in
     for i = 0 to n - 1 do
       Audio.G.set y [|i|] (process_sample t (Audio.G.get x [|i|]))
     done ;
@@ -55,4 +56,8 @@ module IIR = struct
   module Generic = Make (Iir)
   module HighPass = Make (Highpass)
   module LowPass = Make (Lowpass)
+end
+
+module FIR = struct
+  module Generic = Make (Fir)
 end
