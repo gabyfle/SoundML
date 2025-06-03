@@ -19,54 +19,45 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Module providing usefull checking functions for the tests *)
-module Check : sig
-  val rallclose :
-       ?rtol:float
-    -> ?atol:float
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Real-valued all-close function *)
+module type S = sig
+  type t
 
-  val callclose :
-    'a.
-       ?rtol:float
-    -> ?atol:float
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Complex-valued all-close function *)
+  type params
 
-  val shape :
-       ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Check the shape of two ndarrays are equal *)
+  val reset : t -> t
+
+  val create : params -> t
+
+  val process_sample : t -> float -> float
 end
 
-val allclose :
-  'a 'b.
-     ('a, 'b) Bigarray.kind
-  -> ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> bool
-(** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
+module Make (S : S) = struct
+  type t = S.t
 
-val dense_testable :
-     ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
+  type params = S.params
 
-val get_dense_testable :
-     ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-(** Function that returns a correctly-typed testable based on the passed kind for Dense.Ndarray. *)
+  let reset = S.reset
 
-val load_npy :
-  string -> ('a, 'b) Bigarray.kind -> ('a, 'b) Owl_dense_ndarray.Generic.t
-(** Load a numpy file and return the ndarray. 
-    @see https://github.com/tachukao/owl/blob/046f703a6890a5ed5ecf4a8c5750d4e392e4ec54/src/owl/dense/owl_dense_matrix_generic.ml#L606-L609 *)
+  let create = S.create
+
+  let process_sample = S.process_sample
+
+  let process (t : t) (x : (Float.t, 'a) Audio.G.t) =
+    let kd = Audio.G.kind x in
+    let n = Audio.G.numel x in
+    let y = Audio.G.create kd [|n|] 0. in
+    for i = 0 to n - 1 do
+      Audio.G.set y [|i|] (process_sample t (Audio.G.get x [|i|]))
+    done ;
+    y
+end
+
+module IIR = struct
+  module Generic = Make (Iir)
+  module HighPass = Make (Highpass)
+  module LowPass = Make (Lowpass)
+end
+
+module FIR = struct
+  module Generic = Make (Fir)
+end

@@ -19,54 +19,39 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Module providing usefull checking functions for the tests *)
-module Check : sig
-  val rallclose :
-       ?rtol:float
-    -> ?atol:float
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Real-valued all-close function *)
+type params = {a: float array; b: float array}
 
-  val callclose :
-    'a.
-       ?rtol:float
-    -> ?atol:float
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Complex-valued all-close function *)
+type t =
+  { b: (float, Bigarray.float32_elt) Audio.G.t
+  ; a: (float, Bigarray.float32_elt) Audio.G.t
+  ; state: (float, Bigarray.float32_elt) Audio.G.t }
 
-  val shape :
-       ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
-  (** Check the shape of two ndarrays are equal *)
-end
+let reset t = Audio.G.fill t.state 0. ; t
 
-val allclose :
-  'a 'b.
-     ('a, 'b) Bigarray.kind
-  -> ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> bool
-(** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
+let create ({a; b} : params) =
+  let a = Audio.G.of_array Bigarray.Float32 a [|Array.length a|] in
+  let b = Audio.G.of_array Bigarray.Float32 b [|Array.length b|] in
+  let size = max (Audio.G.numel a) (Audio.G.numel b) in
+  let a = Audio.G.(a /$ get a [|0|]) in
+  (*let b = Audio.G.(b /$ get b [|0|]) in*)
+  let state = Audio.G.create Bigarray.Float32 [|size|] 0. in
+  {b; a; state}
 
-val dense_testable :
-     ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-
-val get_dense_testable :
-     ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-(** Function that returns a correctly-typed testable based on the passed kind for Dense.Ndarray. *)
-
-val load_npy :
-  string -> ('a, 'b) Bigarray.kind -> ('a, 'b) Owl_dense_ndarray.Generic.t
-(** Load a numpy file and return the ndarray. 
-    @see https://github.com/tachukao/owl/blob/046f703a6890a5ed5ecf4a8c5750d4e392e4ec54/src/owl/dense/owl_dense_matrix_generic.ml#L606-L609 *)
+let process_sample t (x : float) =
+  let n = Audio.G.numel t.state in
+  let y =
+    if n > 0 then (Audio.G.get t.b [|0|] *. x) +. Audio.G.get t.state [|0|]
+    else 0.
+  in
+  let nb = Audio.G.numel t.b in
+  let na = Audio.G.numel t.a in
+  for i = 0 to Audio.G.numel t.state - 1 do
+    let b = if i + 1 < nb then Audio.G.get t.b [|i + 1|] *. x else 0. in
+    let a =
+      if i + 1 < na then Float.neg (Audio.G.get t.a [|i + 1|]) *. y else 0.
+    in
+    if i < n - 1 then
+      Audio.G.set t.state [|i|] (Audio.G.get t.state [|i + 1|] +. b +. a)
+    else Audio.G.set t.state [|i|] (b +. a)
+  done ;
+  y
