@@ -33,7 +33,7 @@ let create ({a; b} : params) =
   let b = Audio.G.of_array Bigarray.Float32 b [|Array.length b|] in
   let size = max (Audio.G.numel a) (Audio.G.numel b) in
   let a = Audio.G.(a /$ get a [|0|]) in
-  let b = Audio.G.(b /$ get b [|0|]) in
+  (*let b = Audio.G.(b /$ get b [|0|]) in*)
   let state = Audio.G.create Bigarray.Float32 [|size|] 0. in
   {b; a; state}
 
