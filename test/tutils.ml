@@ -87,8 +87,11 @@ let allclose : type a b.
       failwith "Unsupported datatype."
 
 let dense_testable : type a b.
-    (a, b) Bigarray.kind -> (a, b) Audio.G.t Alcotest.testable =
- fun (_ : (a, b) Bigarray.kind) ->
+       ?rtol:float
+    -> ?atol:float
+    -> (a, b) Bigarray.kind
+    -> (a, b) Audio.G.t Alcotest.testable =
+ fun ?rtol ?atol (_ : (a, b) Bigarray.kind) ->
   let kd_to_string (type a b) (kd : (a, b) Bigarray.kind) =
     match kd with
     | Bigarray.Float32 ->
@@ -139,7 +142,7 @@ let dense_testable : type a b.
   in
   let equal a b =
     let kd = Audio.G.kind a in
-    allclose kd a b
+    allclose ?rtol ?atol kd a b
   in
   Alcotest.testable pp equal
 

@@ -19,8 +19,12 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-module type FILTER = sig
-  type t
+type t
 
-  type params
-end
+type params = {cutoff: float; sample_rate: int}
+
+val reset : t -> t
+
+val create : params -> t
+
+val process_sample : t -> float -> float
