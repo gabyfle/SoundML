@@ -51,9 +51,18 @@
  (wrapped false))
 
 (library
+ (name filterbank)
+ (package soundml)
+ (modules filterbank)
+ (libraries owl utils)
+ (instrumentation
+  (backend bisect_ppx))
+ (wrapped false))
+
+(library
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries owl audio io types feature transform effects window)
+ (libraries owl audio io types feature filterbank transform effects window)
  (instrumentation
   (backend bisect_ppx)))

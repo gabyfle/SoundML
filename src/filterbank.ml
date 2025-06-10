@@ -1,7 +1,7 @@
 (*****************************************************************************)
 (*                                                                           *)
 (*                                                                           *)
-(*  Copyright (C) 2023                                                       *)
+(*  Copyright (C) 2025                                                       *)
 (*    Gabriel Santamaria                                                     *)
 (*                                                                           *)
 (*                                                                           *)
@@ -21,12 +21,46 @@
 
 type norm = Slaney | PNorm of float
 
-val mel :
-     ?fmax:float option
-  -> ?htk:bool
-  -> ?norm:norm option
-  -> sample_rate:int
-  -> nfft:int
-  -> nmels:int
-  -> fmin:float
-  -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+let mel ?(fmax : float option = None) ?(htk : bool = false)
+    ?(norm : norm option = None) (kd : ('a, 'b) Bigarray.kind)
+    (sample_rate : int) (nfft : int) (nmels : int) (fmin : float) =
+  if nmels = 0 then Audio.G.empty kd [|0; (nfft / 2) + 1|]
+  else
+    let fmax =
+      match fmax with
+      | Some fmax ->
+          fmax
+      | None ->
+          float_of_int sample_rate /. 2.
+    in
+    let fftfreqs = Utils.rfftfreq kd nfft (1. /. float_of_int sample_rate) in
+    let mel_freqs = Utils.melfreq kd ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
+    let fdiff = Audio.G.diff mel_freqs in
+    let ramps = Utils.outer Audio.G.sub mel_freqs fftfreqs in
+    let open Audio.G in
+    let lower =
+      neg ramps.${[0; Int.sub nmels 1]}
+      / reshape fdiff.${[0; Int.sub nmels 1]} [|nmels; 1|]
+    in
+    let upper =
+      ramps.${[2; Int.add nmels 1]} / reshape fdiff.${[1; nmels]} [|nmels; 1|]
+    in
+    (* Intersect slopes *)
+    let weights = max2 (zeros kd (shape lower)) (min2 lower upper) in
+    let weights =
+      match norm with
+      | Some Slaney ->
+          let enorm =
+            2.0
+            $/ sub
+                 mel_freqs.${[2; Int.add nmels 1]}
+                 mel_freqs.${[0; Int.sub nmels 1]}
+          in
+          let enorm = reshape enorm [|nmels; 1|] in
+          weights * enorm
+      | Some (PNorm p) ->
+          Audio.G.vecnorm ~p ~axis:(-1) weights
+      | None ->
+          weights
+    in
+    weights
