@@ -159,24 +159,17 @@ let fftfreq (n : int) (d : float) =
   let v = Audio.G.concatenate ~axis:0 [|fhalf; shalf|] in
   Arr.(1. /. (d *. float_of_int n) $* v)
 
-let rfftfreq (n : int) (d : float) =
+let rfftfreq (kd : ('a, 'b) Bigarray.kind) (n : int) (d : float) =
   let nslice = n / 2 in
-  let res =
-    Audio.G.linspace Bigarray.Float32 0. (float_of_int nslice) (nslice + 1)
-  in
+  let res = Audio.G.linspace kd 0. (float_of_int nslice) (nslice + 1) in
   Arr.(1. /. (d *. float_of_int n) $* res)
 
 let melfreq ?(nmels : int = 128) ?(fmin : float = 0.) ?(fmax : float = 11025.)
-    ?(htk : bool = false) =
+    ?(htk : bool = false) (kd : ('a, 'b) Bigarray.kind) =
   let open Audio.G in
-  let bounds =
-    of_array Bigarray.Float32 [|fmin; fmax|] [|2|] |> Convert.hz_to_mel ~htk
-  in
-  let mel_f =
-    linspace Bigarray.Float32 (get bounds [|0|]) (get bounds [|1|]) nmels
-  in
+  let bounds = of_array kd [|fmin; fmax|] [|2|] |> Convert.hz_to_mel ~htk in
+  let mel_f = linspace kd (get bounds [|0|]) (get bounds [|1|]) nmels in
   Convert.mel_to_hz mel_f ~htk
-[@@warning "-unerasable-optional-argument"]
 
 let roll (x : ('a, 'b) Audio.G.t) (shift : int) =
   let n = Array.get (Audio.G.shape x) 0 in

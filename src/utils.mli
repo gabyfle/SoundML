@@ -74,7 +74,10 @@ val fftfreq :
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html}numpy.fft.fftfreq} for more information. *)
 
 val rfftfreq :
-  int -> float -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+     (float, 'b) Bigarray.kind
+  -> int
+  -> float
+  -> (float, 'b) Owl.Dense.Ndarray.Generic.t
 (**
     Implementation of the Numpy's rfftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.rfftfreq.html}numpy.fft.rfftfreq} for more information. *)
@@ -84,7 +87,8 @@ val melfreq :
   -> ?fmin:float
   -> ?fmax:float
   -> ?htk:bool
-  -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+  -> (float, 'b) Bigarray.kind
+  -> (float, 'b) Owl.Dense.Ndarray.Generic.t
 (**
   Implementation of librosa's mel_frequencies. Compute an [Owl.Dense.Ndarray] of acoustic frequencies tuned to the mel scale.
   See: {{:https://librosa.org/doc/main/generated/librosa.mel_frequencies.html}librosa.mel_frequencies} for more information. *)
