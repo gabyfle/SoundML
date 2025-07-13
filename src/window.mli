@@ -19,8 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Types
-
 (** {1 Window Functions}
 
     This module provides a few commonly used window functions.  *)
@@ -29,33 +27,29 @@ open Types
 type window = [`Hanning | `Hamming | `Blackman | `Boxcar]
 
 val get :
-     window
-  -> ('a, 'b) precision
-  -> ?fftbins:bool
-  -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+  window -> (float, 'b) Nx.dtype -> ?fftbins:bool -> int -> (float, 'b) Nx.t
 (** 
-    [get window precision n] generates a window of size [n] using the given window function type.
+    [get window dtype n] generates a window of size [n] using the given window function type.
 
     {2 Parameters}
 
     @param window The type of window to generate. 
-    @param precision The precision of the Bigarray elements. 
+    @param dtype The datatype of the tensor elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
     @raise Invalid_argument if [n] is less than or equal to 0. *)
 
 val cosine_sum :
      ?fftbins:bool
-  -> ('a, 'b) precision
+  -> (float, 'b) Nx.dtype
   -> float array
   -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+  -> (float, 'b) Nx.t
 (**
-    [cosine_sum precision coeffs n] generates a cosine-sum window of size [n] using the given coefficients.
+    [cosine_sum datatype coeffs n] generates a cosine-sum window of size [n] using the given coefficients.
 
     {2 Parameters}
-    @param precision The precision of the Bigarray elements.
+    @param dtype The datatype of the tensor elements.
     @param coeffs The coefficients of the cosine-sum window. The length of the coefficients array must be greater than 0.
     @param n The size of the window to generate. The size of the window must be greater than 0.
 
@@ -67,62 +61,46 @@ val cosine_sum :
     @see https://en.wikipedia.org/wiki/Window_function#Cosine-sum_windows
     @see https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.general_cosine.html *)
 
-val hanning :
-     ?fftbins:bool
-  -> ('a, 'b) precision
-  -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+val hanning : ?fftbins:bool -> (float, 'b) Nx.dtype -> int -> (float, 'b) Nx.t
 (** 
-    [hanning precision n] generates a Hanning window of size [n].
+    [hanning dtype n] generates a Hanning window of size [n].
 
     {2 Parameters}
 
-    @param precision The precision of the Bigarray elements. 
+    @param dtype The datatype of the tensor elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
     @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val hamming :
-     ?fftbins:bool
-  -> ('a, 'b) precision
-  -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+val hamming : ?fftbins:bool -> (float, 'b) Nx.dtype -> int -> (float, 'b) Nx.t
 (** 
-    [hamming precision n] generates a Hamming window of size [n].
+    [hamming dtype n] generates a Hamming window of size [n].
 
     {2 Parameters}
 
-    @param precision The precision of the Bigarray elements. 
+    @param dtype The datatype of the tensor elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
     @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val blackman :
-     ?fftbins:bool
-  -> ('a, 'b) precision
-  -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+val blackman : ?fftbins:bool -> (float, 'b) Nx.dtype -> int -> (float, 'b) Nx.t
 (** 
-    [blackman precision n] generates a Blackman window of size [n].
+    [blackman dtype n] generates a Blackman window of size [n].
 
     {2 Parameters}
 
-    @param precision The precision of the Bigarray elements. 
+    @param dtype The datatype of the tensor elements. 
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
     @raise Invalid_argument if [n] is less than or equal to 0. *)
 
-val boxcar :
-     ?fftbins:bool
-  -> ('a, 'b) precision
-  -> int
-  -> (float, 'a) Owl_dense_ndarray.Generic.t
+val boxcar : ('a, 'b) Nx.dtype -> int -> ('a, 'b) Nx.t
 (** 
-    [boxcar precision n] generates a Rectangular window of size [n].
+    [boxcar dtype n] generates a Rectangular window of size [n].
 
     {2 Parameters}
 
-    @param precision The precision of the Bigarray elements.
+    @param dtype The datatype of the tensor elements.
     @param n The size of the window to generate. The size of the window must be greater than 0.
     
     @raise Invalid_argument if [n] is less than or equal to 0. *)

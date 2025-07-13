@@ -19,12 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
-
-(* generic multi-dimensionnal array *)
-module G = Dense.Ndarray.Generic
-module Aformat = Aformat
-
 module Metadata = struct
   type t =
     { name: string
@@ -47,40 +41,36 @@ module Metadata = struct
   let format (m : t) = m.format
 end
 
-type 'a audio = {meta: Metadata.t; data: (float, 'a) G.t}
+type 'a t = {meta: Metadata.t; data: (float, 'a) Nx.t}
 
 let create (meta : Metadata.t) data = {meta; data}
 
-let meta (a : 'a audio) = a.meta
+let rawsize (a : 'a t) = Nx.numel a.data
 
-let rawsize (a : 'a audio) = G.numel a.data
-
-let length (a : 'a audio) : int =
-  let meta = meta a in
+let duration (a : 'a t) : float =
+  let meta = a.meta in
   let channels = float_of_int (Metadata.channels meta) in
   let sr = float_of_int (Metadata.sample_rate meta) in
   let size = float_of_int (rawsize a) /. channels in
-  Int.of_float (size /. sr *. 1000.)
+  size /. sr *. 1000.
 
-let data (a : 'a audio) = a.data
+let data (a : 'a t) = a.data
 
-let sr (a : 'a audio) = Metadata.sample_rate @@ meta a
+let sr (a : 'a t) = Metadata.sample_rate @@ a.meta
 
-let channels (a : 'a audio) = Metadata.channels @@ meta a
+let channels (a : 'a t) = Metadata.channels @@ a.meta
 
-let samples (a : 'a audio) = Metadata.frames @@ meta a
+let samples (a : 'a t) = Metadata.frames @@ a.meta
 
-let format (a : 'a audio) = Metadata.format @@ meta a
+let format (a : 'a t) = Metadata.format @@ a.meta
 
-let set_data (a : 'a audio) (d : (float, 'a) G.t) = {a with data= d}
+let set_data (d : (float, 'a) Nx.t) (a : 'a t) = {a with data= d}
 
-let sample_pos (a : 'a audio) (x : int) =
+let sample_pos (a : 'a t) (x : int) =
   Int.of_float
-    ( float_of_int x /. 1000.
-    *. float_of_int (Metadata.sample_rate (meta a))
-    *. float_of_int (Metadata.channels (meta a)) )
+    (float_of_int x /. 1000. *. float_of_int (sr a) *. float_of_int (channels a))
 
-let get_slice (slice : int * int) (a : 'a audio) : 'a audio =
+let get_slice (slice : int * int) (a : 'a t) : 'a t =
   let x, y = slice in
   let x, y =
     match (sample_pos a x, sample_pos a y) with
@@ -102,24 +92,9 @@ let get_slice (slice : int * int) (a : 'a audio) : 'a audio =
       (Invalid_argument
          "Audio.get_slice: slice out of bounds, values greater than rawsize" )
   else
-    let data = G.get_slice [[x; y]] a.data in
+    let data = Nx.slice [R [x; y]] a.data in
     {a with data}
 
-let get (x : int) (a : 'a audio) : float =
+let get (x : int) (a : 'a t) : float =
   let slice = get_slice (x, x) a |> data in
-  G.get slice [|0|]
-
-let normalize ?(factor : float = 2147483647.) (a : 'a audio) : unit =
-  G.scalar_mul_ (1. /. factor) a.data
-
-let reverse (x : 'a audio) : 'a audio =
-  let data = G.reverse x.data in
-  {x with data}
-
-let ( .${} ) x s = get_slice s x
-
-let ( .%{} ) i x = get x i
-
-let ( $/ ) x f = normalize ~factor:f x
-
-let ( /$ ) f x = normalize ~factor:f x
+  Nx.get_item [0] slice

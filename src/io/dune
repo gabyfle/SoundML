@@ -1,27 +1,27 @@
 (include_subdirs qualified)
 
-(library
- (name io)
- (package soundml)
- (foreign_stubs
-  (language cxx)
-  (names soundml_io)
-  (include_dirs cio)
-  (flags
-   :standard
-   (:include c_flags.sexp)
-   -O3
-   -std=c++23
-   -llto))
- (c_library_flags
-  (:include c_library_flags.sexp))
- (modules io)
- (libraries audio utils owl)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped true))
+;(library
+; (name io)
+; (package soundml)
+; (foreign_stubs
+;  (language cxx)
+;  (names soundml_io)
+;  (include_dirs cio)
+;  (flags
+;   :standard
+;   (:include c_flags.sexp)
+;   -O3
+;   -std=c++23
+;   -llto))
+; (c_library_flags
+;  (:include c_library_flags.sexp))
+; (modules io)
+; (libraries audio utils)
+; (instrumentation
+;  (backend bisect_ppx))
+; (wrapped true))
 
-(rule
- (targets c_flags.sexp c_library_flags.sexp)
- (action
-  (run ./config/discover.exe)))
+;(rule
+; (targets c_flags.sexp c_library_flags.sexp)
+; (action
+;  (run ./config/discover.exe)))

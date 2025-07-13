@@ -22,9 +22,9 @@
 type norm = Slaney | PNorm of float
 
 let mel ?(fmax : float option = None) ?(htk : bool = false)
-    ?(norm : norm option = None) (kd : ('a, 'b) Bigarray.kind)
-    (sample_rate : int) (nfft : int) (nmels : int) (fmin : float) =
-  if nmels = 0 then Audio.G.empty kd [|0; (nfft / 2) + 1|]
+    ?(norm : norm option = None) (dtype : ('a, 'b) Nx.dtype) (sample_rate : int)
+    (nfft : int) (nmels : int) (fmin : float) =
+  if nmels = 0 then Nx.empty dtype [|0; (nfft / 2) + 1|]
   else
     let fmax =
       match fmax with
@@ -33,33 +33,43 @@ let mel ?(fmax : float option = None) ?(htk : bool = false)
       | None ->
           float_of_int sample_rate /. 2.
     in
-    let fftfreqs = Utils.rfftfreq kd nfft (1. /. float_of_int sample_rate) in
-    let mel_freqs = Utils.melfreq kd ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
-    let fdiff = Audio.G.diff mel_freqs in
-    let ramps = Utils.outer Audio.G.sub mel_freqs fftfreqs in
-    let open Audio.G in
+    let fftfreqs = Utils.rfftfreq dtype nfft (1. /. float_of_int sample_rate) in
+    let mel_freqs = Utils.melfreq dtype ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
+    let fdiff =
+      let n = Nx.size mel_freqs in
+      Nx.sub (Nx.slice [R [1; n]] mel_freqs) (Nx.slice [R [0; n - 1]] mel_freqs)
+    in
+    let ramps = Utils.outer Nx.sub mel_freqs fftfreqs in
     let lower =
-      neg ramps.${[0; Int.sub nmels 1]}
-      / reshape fdiff.${[0; Int.sub nmels 1]} [|nmels; 1|]
+      Nx.div
+        (Nx.neg (Nx.slice [R [0; nmels]] ramps))
+        (Nx.reshape [|nmels; 1|] (Nx.slice [R [0; nmels]] fdiff))
     in
     let upper =
-      ramps.${[2; Int.add nmels 1]} / reshape fdiff.${[1; nmels]} [|nmels; 1|]
+      Nx.div
+        (Nx.slice [R [2; nmels + 2]] ramps)
+        (Nx.reshape [|nmels; 1|] (Nx.slice [R [1; nmels + 1]] fdiff))
     in
     (* Intersect slopes *)
-    let weights = max2 (zeros kd (shape lower)) (min2 lower upper) in
+    let weights = Nx.maximum (Nx.zeros_like lower) (Nx.minimum lower upper) in
     let weights =
       match norm with
       | Some Slaney ->
           let enorm =
-            2.0
-            $/ sub
-                 mel_freqs.${[2; Int.add nmels 1]}
-                 mel_freqs.${[0; Int.sub nmels 1]}
+            Nx.rdiv_s 2.0
+              (Nx.sub
+                 (Nx.slice [R [2; nmels + 2]] mel_freqs)
+                 (Nx.slice [R [0; nmels]] mel_freqs) )
           in
-          let enorm = reshape enorm [|nmels; 1|] in
-          weights * enorm
+          let enorm = Nx.reshape [|nmels; 1|] enorm in
+          Nx.mul weights enorm
       | Some (PNorm p) ->
-          Audio.G.vecnorm ~p ~axis:(-1) weights
+          let norm =
+            Nx.pow_s
+              (Nx.sum ~axes:[|-1|] ~keepdims:true (Nx.pow_s (Nx.abs weights) p))
+              (1. /. p)
+          in
+          Nx.div weights (Nx.add_s norm 1e-8)
       | None ->
           weights
     in
