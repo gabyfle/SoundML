@@ -20,165 +20,69 @@
 (*****************************************************************************)
 
 module Check = struct
-  open Soundml
-
-  let shape (x : ('a, 'b) Audio.G.t) (y : ('a, 'b) Audio.G.t) =
-    let shape_x = Audio.G.shape x in
-    let shape_y = Audio.G.shape y in
+  let shape (x : ('a, 'b) Nx.t) (y : ('a, 'b) Nx.t) =
+    let shape_x = Nx.shape x in
+    let shape_y = Nx.shape y in
     if Array.length shape_x <> Array.length shape_y then false
     else Array.for_all2 (fun x y -> x = y) shape_x shape_y
 
-  let rallclose ?(rtol = 1e-05) ?(atol = 1e-10) (x : ('a, 'b) Audio.G.t)
-      (y : ('a, 'b) Audio.G.t) : bool =
+  let rallclose ?(rtol = 1e-05) ?(atol = 1e-10) (x : (float, 'b) Nx.t)
+      (y : (float, 'b) Nx.t) : bool =
     if not (shape x y) then false
-    else if Audio.G.numel x = 0 && Audio.G.numel y = 0 then true
+    else if Nx.numel x = 0 && Nx.numel y = 0 then true
     else
-      let abs_diff = Audio.G.abs (Audio.G.sub x y) in
-      let tolerance = Audio.G.(add_scalar (mul_scalar (abs y) rtol) atol) in
-      let comparison_mask = Audio.G.elt_less_equal abs_diff tolerance in
-      Audio.G.min' comparison_mask >= 1.0
+      let abs_diff = Nx.abs (Nx.sub x y) in
+      let tolerance = Nx.(add_s (mul_s (abs y) rtol) atol) in
+      let comparison_mask = Nx.less_equal abs_diff tolerance in
+      Nx.get_item [] (Nx.all comparison_mask) = 1
 
   let callclose : type a.
          ?rtol:float
       -> ?atol:float
-      -> (Complex.t, a) Audio.G.t
-      -> (Complex.t, a) Audio.G.t
+      -> (Complex.t, a) Nx.t
+      -> (Complex.t, a) Nx.t
       -> bool =
-   fun ?(rtol = 1e-05) ?(atol = 1e-05) (x : (Complex.t, a) Audio.G.t)
-       (y : (Complex.t, a) Audio.G.t) ->
+   fun ?(rtol = 1e-05) ?(atol = 1e-05) (x : (Complex.t, a) Nx.t)
+       (y : (Complex.t, a) Nx.t) ->
     if not (shape x y) then false
-    else if Audio.G.numel x = 0 && Audio.G.numel y = 0 then true
+    else if Nx.numel x = 0 && Nx.numel y = 0 then true
     else
-      let x, y =
-        match Audio.G.kind x with
-        | Bigarray.Complex32 ->
-            (Audio.G.cast_c2z x, Audio.G.cast_c2z y)
-        | Bigarray.Complex64 ->
-            (x, y)
-        | _ ->
-            .
-      in
-      let diff = Audio.G.sub x y in
-      let abs_diff = Audio.G.abs2_z2d diff in
-      let abs_y = Audio.G.abs2_z2d y in
-      let tolerance = Audio.G.(add_scalar (mul_scalar abs_y rtol) atol) in
-      let comparison_mask = Audio.G.elt_less_equal abs_diff tolerance in
-      Audio.G.min' comparison_mask >= 1.0
+      let diff = Nx.sub x y in
+      let abs_diff = Nx.cast Float64 (Nx.abs diff) in
+      let abs_y = Nx.cast Float64 (Nx.abs y) in
+      let tolerance = Nx.(add_s (mul_s abs_y rtol) atol) in
+      let comparison_mask = Nx.less_equal abs_diff tolerance in
+      Nx.get_item [] (Nx.all comparison_mask) = 1
 end
 
-let allclose : type a b.
-       (a, b) Bigarray.kind
+let allclose_aux : type a b.
+       (a, b) Nx.dtype
     -> ?rtol:float
     -> ?atol:float
-    -> (a, b) Owl_dense_ndarray.Generic.t
-    -> (a, b) Owl_dense_ndarray.Generic.t
+    -> (a, b) Nx.t
+    -> (a, b) Nx.t
     -> bool =
- fun kd ->
+ fun kd ?(rtol = 1e-5) ?(atol = 1e-8) x y ->
   match kd with
-  | Bigarray.Complex32 ->
-      Check.callclose
-  | Bigarray.Complex64 ->
-      Check.callclose
-  | Bigarray.Float32 ->
-      Check.rallclose
-  | Bigarray.Float64 ->
-      Check.rallclose
+  | Complex32 ->
+      Check.callclose ~rtol ~atol x y
+  | Complex64 ->
+      Check.callclose ~rtol ~atol x y
+  | Float16 ->
+      Check.rallclose ~rtol ~atol x y
+  | Float32 ->
+      Check.rallclose ~rtol ~atol x y
+  | Float64 ->
+      Check.rallclose ~rtol ~atol x y
   | _ ->
       failwith "Unsupported datatype."
 
-let dense_testable : type a b.
-       ?rtol:float
-    -> ?atol:float
-    -> (a, b) Bigarray.kind
-    -> (a, b) Audio.G.t Alcotest.testable =
- fun ?rtol ?atol (_ : (a, b) Bigarray.kind) ->
-  let kd_to_string (type a b) (kd : (a, b) Bigarray.kind) =
-    match kd with
-    | Bigarray.Float32 ->
-        "Float32"
-    | Bigarray.Float64 ->
-        "Float64"
-    | Bigarray.Complex32 ->
-        "Complex32"
-    | Bigarray.Complex64 ->
-        "Complex64"
-    | _ ->
-        failwith "Unsupported kind"
-  in
-  let pp_kind fmt k =
-    let str_k = kd_to_string k in
-    Format.fprintf fmt "%s" str_k
-  in
-  let to_string (type a b) (kd : (a, b) Bigarray.kind) (v : a) =
-    match kd with
-    | Bigarray.Float32 ->
-        Printf.sprintf "%f" v
-    | Bigarray.Float64 ->
-        Printf.sprintf "%f" v
-    | Bigarray.Complex32 ->
-        Printf.sprintf "%f + %fi" v.re v.im
-    | Bigarray.Complex64 ->
-        Printf.sprintf "%f + %fi" v.re v.im
-    | _ ->
-        failwith "Unsupported kind"
-  in
-  let pp fmt arr =
-    let kd = Audio.G.kind arr in
-    let dims = Audio.G.shape arr in
-    let first_few_max = 10 in
-    let first_few = ref [] in
-    let total_elements = Array.fold_left ( * ) 1 dims in
-    let flattened = Audio.G.flatten arr in
-    if total_elements > 0 && Array.length dims == 1 then
-      for i = 0 to first_few_max - 1 do
-        first_few := Audio.G.get flattened [|i|] :: !first_few
-      done ;
-    Format.fprintf fmt
-      "Audio.G.t <kind: %a, shape: [%s], data (first %d): [%s]>" pp_kind
-      (Audio.G.kind arr)
-      (String.concat "; " (Array.to_list (Array.map string_of_int dims)))
-      first_few_max
-      (String.concat "; " (List.map (to_string kd) (List.rev !first_few)))
-  in
-  let equal a b =
-    let kd = Audio.G.kind a in
-    allclose ?rtol ?atol kd a b
-  in
-  Alcotest.testable pp equal
+let allclose : type a b.
+    ?rtol:float -> ?atol:float -> (a, b) Nx.t -> (a, b) Nx.t -> bool =
+ fun ?rtol ?atol x y -> allclose_aux (Nx.dtype x) ?rtol ?atol x y
 
-let float32_g_testable = dense_testable Bigarray.Float32
-
-let float64_g_testable = dense_testable Bigarray.Float64
-
-let complex32_g_testable = dense_testable Bigarray.Complex32
-
-let complex64_g_testable = dense_testable Bigarray.Complex64
-
-let get_dense_testable (type a b) (kd : (a, b) Bigarray.kind) :
-    (a, b) Audio.G.t Alcotest.testable =
-  match kd with
-  | Bigarray.Float32 ->
-      float32_g_testable
-  | Bigarray.Float64 ->
-      float64_g_testable
-  | Bigarray.Complex32 ->
-      complex32_g_testable
-  | Bigarray.Complex64 ->
-      complex64_g_testable
-  | _ ->
-      failwith "Unsupported kind"
-
-(* This snippet has been gathered from the exact same code but for Matrix in
-   Owl. See:
-   https://github.com/tachukao/owl/blob/046f703a6890a5ed5ecf4a8c5750d4e392e4ec54/src/owl/dense/owl_dense_matrix_generic.ml#L606-L609
-   Unfortunately, for the moment this is not yet available for Ndarrays. *)
-let load_npy (path : string) (kind : ('a, 'b) Bigarray.kind) :
-    ('a, 'b) Audio.G.t =
-  let npy : ('a, 'b) Audio.G.t =
-    match Npy.read_copy path |> Npy.to_bigarray Bigarray.c_layout kind with
-    | Some x ->
-        x
-    | None ->
-        failwith Printf.(sprintf "%s: incorrect format" path)
-  in
-  npy
+let tensor_testable : type a b.
+    rtol:float -> atol:float -> (a, b) Nx.t Alcotest.testable =
+ fun ~rtol ~atol ->
+  let equal a b = allclose ~rtol ~atol a b in
+  Alcotest.testable Nx.pp equal

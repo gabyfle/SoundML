@@ -19,256 +19,244 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Owl
-open Bigarray
+open Nx
 
 module Convert = struct
-  let mel_to_hz ?(htk : bool = false) mels =
-    let open Audio.G in
-    if htk then 700. $* (10. $** (mels /$ 2595.) -$ 1.)
+  let mel_to_hz ?(htk = false) mels =
+    let dtype = Nx.dtype mels in
+    if htk then
+      let term = Nx.div_s mels 2595. in
+      let term = Nx.pow (Nx.scalar dtype 10.) term in
+      let term = Nx.sub_s term 1. in
+      Nx.mul_s term 700.
     else
       let f_min = 0.0 in
       let f_sp = 200.0 /. 3. in
       let min_log_hz = 1000. in
       let min_log_mel = (min_log_hz -. f_min) /. f_sp in
-      let logstep = Maths.log 6.4 /. 27.0 in
-      let linear_mask = mels <=.$ min_log_mel in
-      let log_mask = mels >=.$ min_log_mel in
-      let linear_result = f_min $+ (f_sp $* mels) in
-      let log_result = min_log_hz $* exp (logstep $* mels -$ min_log_mel) in
-      (linear_mask * linear_result) + (log_mask * log_result)
+      let logstep = Float.log 6.4 /. 27.0 in
+      let linear_mask = Nx.less_equal mels (Nx.scalar dtype min_log_mel) in
+      let linear_result = Nx.(add_s (mul_s mels f_sp) f_min) in
+      let log_result =
+        Nx.(mul_s (exp (mul_s (sub_s mels min_log_mel) logstep)) min_log_hz)
+      in
+      Nx.where linear_mask linear_result log_result
 
-  let hz_to_mel ?(htk : bool = false) freqs =
-    let open Audio.G in
-    if htk then 2595. $* log10 (1. $+ freqs /$ 700.)
+  let hz_to_mel ?(htk = false) freqs =
+    let dtype = Nx.dtype freqs in
+    if htk then
+      let term = Nx.div_s freqs 700. in
+      let term = Nx.add_s term 1. in
+      let term = Nx.log term in
+      let term = Nx.div_s term (Float.log 10.) in
+      Nx.mul_s term 2595.
     else
       let f_min = 0.0 in
       let f_sp = 200.0 /. 3. in
       let min_log_hz = 1000. in
       let min_log_mel = (min_log_hz -. f_min) /. f_sp in
-      let logstep = Maths.log 6.4 /. 27.0 in
-      let linear_mask = freqs <=.$ min_log_hz in
-      let log_mask = freqs >=.$ min_log_hz in
-      let linear_result = (freqs -$ f_min) /$ f_sp in
-      let log_result = min_log_mel $+ log (freqs /$ min_log_hz) /$ logstep in
-      (linear_mask * linear_result)
-      (* we need to filter out possible nans here since log can result in
-         nans *)
-      + map (fun x -> if Float.is_nan x then 0.0 else x) (log_mask * log_result)
+      let logstep = Float.log 6.4 /. 27.0 in
+      let linear_mask = Nx.less_equal freqs (Nx.scalar dtype min_log_hz) in
+      let linear_result = Nx.(div_s (sub_s freqs f_min) f_sp) in
+      let log_result =
+        Nx.(add_s (div_s (log (div_s freqs min_log_hz)) logstep) min_log_mel)
+      in
+      let res = Nx.where linear_mask linear_result log_result in
+      Nx.map_item (fun x -> if Float.is_nan x then 0.0 else x) res
 
   type reference =
     | RefFloat of float
-    | RefFunction of ((float, float32_elt) Audio.G.t -> float)
+    | RefFunction of ((float, float32_elt) t -> float)
 
-  let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.)
-      (ref : reference) (s : (float, float32_elt) Audio.G.t) =
+  let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.) ref
+      (s : (float, float32_elt) t) =
     assert (amin > 0.) ;
-    let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
-    let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
-    let ref = Audio.G.(init (kind s) (shape s) (fun _ -> ref)) in
-    let log_spec = Audio.G.(10.0 $* log10 (max2 amin s)) in
-    Audio.G.(log_spec -= (10.0 $* log10 (max2 amin ref))) ;
-    let res =
-      match top_db with
-      | None ->
-          log_spec
-      | Some top_db ->
-          assert (top_db >= 0.0) ;
-          let max_spec = Audio.G.max' log_spec in
-          let max_spec = max_spec -. top_db in
-          let max_spec =
-            Audio.G.(init (kind log_spec) (shape log_spec) (fun _ -> max_spec))
-          in
-          Audio.G.max2 log_spec max_spec
+    let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
+    let log_spec =
+      Nx.mul_s (Nx.div_s (Nx.log (Nx.maximum_s s amin)) (Float.log 10.)) 10.
     in
-    res
+    let log_spec =
+      Nx.sub log_spec
+        (Nx.mul_s
+           (Nx.div_s
+              (Nx.log
+                 (Nx.maximum
+                    (Nx.scalar (Nx.dtype s) amin)
+                    (Nx.scalar (Nx.dtype s) ref_value) ) )
+              (Float.log 10.) )
+           10. )
+    in
+    match top_db with
+    | None ->
+        log_spec
+    | Some top_db ->
+        assert (top_db >= 0.0) ;
+        let max_val = Nx.max log_spec |> Nx.to_array in
+        Nx.maximum_s log_spec (max_val.(0) -. top_db)
 
-  let db_to_power ?(amin = 1e-10) (ref : reference)
-      (s : ('a, Bigarray.float32_elt) Audio.G.t) =
+  let db_to_power ?(amin = 1e-10) (ref : reference) (s : ('a, float32_elt) t) =
     assert (amin > 0.) ;
-    let ref = match ref with RefFloat x -> x | RefFunction f -> f s in
-    let amin = Audio.G.(init (kind s) (shape s) (fun _ -> amin)) in
-    let ref = Audio.G.(init (kind s) (shape s) (fun _ -> ref)) in
-    let spec = Audio.G.(10.0 $* s /$ 10.0) in
-    Audio.G.(spec += (10.0 $* log10 (max2 amin ref))) ;
-    Audio.G.(exp10 spec)
+    let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
+    let amin = Nx.scalar (Nx.dtype s) amin in
+    let ref_value = Nx.scalar (Nx.dtype s) ref_value in
+    let spec = Nx.div_s (Nx.mul_s s 10.) 10. in
+    let log_ref =
+      Nx.div_s (Nx.log (Nx.maximum amin ref_value)) (Float.log 10.)
+    in
+    let log_ref = Nx.mul_s log_ref 10. in
+    let spec = Nx.add spec log_ref in
+    Nx.pow (Nx.scalar (Nx.dtype s) 10.) spec
 end
 
-let pad_center (data : ('a, 'b) Audio.G.t) (target_size : int) (value : 'a) :
-    ('a, 'b) Audio.G.t =
-  (*if Audio.G.numel data = 0 then data else*)
-  let size = Audio.G.shape data |> fun s -> s.(0) in
+let pad_center (data : ('a, 'b) t) (target_size : int) (value : 'a) : ('a, 'b) t
+    =
+  let size = (Nx.shape data).(0) in
   if size = target_size then data
   else if size > target_size then
     raise
       (Invalid_argument
          "An error occured while trying to pad: current_size > target_size" )
+  else if size = 0 then
+    Nx.full (Nx.dtype data) [|target_size|] value
   else
     let pad_total = target_size - size in
     let pad_left = pad_total / 2 in
     let pad_right = pad_total - pad_left in
-    let padding = [[pad_left; pad_right]] in
-    Audio.G.pad ~v:value padding data
+    Nx.pad [|(pad_left, pad_right)|] value data
 
-let frame (x : ('a, 'b) Audio.G.t) (frame_size : int) (hop_size : int)
-    (axis : int) : ('a, 'b) Audio.G.t =
-  if frame_size <= 0 then invalid_arg "frame_size must be positive" ;
-  if hop_size <= 0 then invalid_arg "hop_size must be positive" ;
-  let shape_in = Audio.G.shape x in
-  let num_dims_in = Array.length shape_in in
-  let len_axis = shape_in.(axis) in
-  let num_frames =
-    if len_axis < frame_size then 0
-    else ((len_axis - frame_size) / hop_size) + 1
-  in
-  let shape_out_list =
-    let prefix_dims = Array.to_list (Array.sub shape_in 0 axis) in
-    let suffix_dims =
-      if axis + 1 < num_dims_in then
-        Array.to_list (Array.sub shape_in (axis + 1) (num_dims_in - (axis + 1)))
-      else []
-    in
-    prefix_dims @ [num_frames; frame_size] @ suffix_dims
-  in
-  let shape_out = Array.of_list shape_out_list in
-  if num_frames <= 0 then Audio.G.empty (Audio.G.kind x) shape_out
+let frame (x : ('a, 'b) t) (frame_size : int) (hop_size : int) (axis : int) :
+    ('a, 'b) t =
+  if frame_size <= 0 then invalid_arg "frame_size must be positive"
+  else if hop_size <= 0 then invalid_arg "hop_size must be positive"
   else
-    let get_value_for_output_indices (out_indices : int array) : 'a =
-      let in_indices = Array.make num_dims_in 0 in
-      for d = 0 to axis - 1 do
-        in_indices.(d) <- out_indices.(d)
-      done ;
-      let frame_idx = out_indices.(axis) in
-      let offset_in_frame = out_indices.(axis + 1) in
-      in_indices.(axis) <- (frame_idx * hop_size) + offset_in_frame ;
-      for d = axis + 1 to num_dims_in - 1 do
-        in_indices.(d) <- out_indices.(d + 1)
-      done ;
-      Audio.G.get x in_indices
+    let shape_in = Nx.shape x in
+    let num_dims_in = Array.length shape_in in
+    let len_axis = shape_in.(axis) in
+    let num_frames =
+      if len_axis < frame_size then 0
+      else ((len_axis - frame_size) / hop_size) + 1
     in
-    Audio.G.init_nd (Audio.G.kind x) shape_out get_value_for_output_indices
+    let shape_out_list =
+      let prefix_dims = Array.to_list (Array.sub shape_in 0 axis) in
+      let suffix_dims =
+        if axis + 1 < num_dims_in then
+          Array.to_list
+            (Array.sub shape_in (axis + 1) (num_dims_in - (axis + 1)))
+        else []
+      in
+      prefix_dims @ [num_frames; frame_size] @ suffix_dims
+    in
+    let shape_out = Array.of_list shape_out_list in
+    if num_frames <= 0 then Nx.empty (Nx.dtype x) shape_out
+    else
+      let get_value_for_output_indices (out_indices : int array) : 'a =
+        let in_indices = Array.make num_dims_in 0 in
+        for d = 0 to axis - 1 do
+          in_indices.(d) <- out_indices.(d)
+        done ;
+        let frame_idx = out_indices.(axis) in
+        let offset_in_frame = out_indices.(axis + 1) in
+        in_indices.(axis) <- (frame_idx * hop_size) + offset_in_frame ;
+        for d = axis + 1 to num_dims_in - 1 do
+          in_indices.(d) <- out_indices.(d + 1)
+        done ;
+        Nx.get_item (Array.to_list in_indices) x
+      in
+      Nx.init (Nx.dtype x) shape_out get_value_for_output_indices
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
-  let fhalf =
-    Audio.G.linspace Bigarray.Float32 0. (float_of_int nslice) nslice
-  in
-  let shalf =
-    Audio.G.linspace Bigarray.Float32 (-.float_of_int nslice) (-1.) nslice
-  in
-  let v = Audio.G.concatenate ~axis:0 [|fhalf; shalf|] in
-  Arr.(1. /. (d *. float_of_int n) $* v)
+  let fhalf = Nx.arange Float32 0 nslice 1 in
+  let shalf = Nx.arange Float32 (-n / 2) 0 1 in
+  let v = Nx.concatenate ~axis:0 [fhalf; shalf] in
+  Nx.mul (Nx.scalar Float32 (1. /. (d *. float_of_int n))) v
 
-let rfftfreq (kd : ('a, 'b) Bigarray.kind) (n : int) (d : float) =
+let rfftfreq (kd : ('a, 'b) Nx.dtype) (n : int) (d : float) =
   let nslice = n / 2 in
-  let res = Audio.G.linspace kd 0. (float_of_int nslice) (nslice + 1) in
-  Arr.(1. /. (d *. float_of_int n) $* res)
+  let res = Nx.arange kd 0 (nslice + 1) 1 in
+  let factor = 1. /. (d *. float_of_int n) in
+  let factor_nx = Nx.scalar kd factor in
+  Nx.mul factor_nx res
 
-let melfreq ?(nmels : int = 128) ?(fmin : float = 0.) ?(fmax : float = 11025.)
-    ?(htk : bool = false) (kd : ('a, 'b) Bigarray.kind) =
-  let open Audio.G in
-  let bounds = of_array kd [|fmin; fmax|] [|2|] |> Convert.hz_to_mel ~htk in
-  let mel_f = linspace kd (get bounds [|0|]) (get bounds [|1|]) nmels in
+let melfreq ?(nmels = 128) ?(fmin = 0.) ?(fmax = 11025.) ?(htk = false)
+    (kd : ('a, 'b) Nx.dtype) =
+  let bounds = Nx.create kd [|2|] [|fmin; fmax|] |> Convert.hz_to_mel ~htk in
+  let mel_f =
+    Nx.linspace kd (Nx.get_item [0] bounds) (Nx.get_item [1] bounds) nmels
+  in
   Convert.mel_to_hz mel_f ~htk
 
-let roll (x : ('a, 'b) Audio.G.t) (shift : int) =
-  let n = Array.get (Audio.G.shape x) 0 in
-  let shift = if n = 0 then 0 else shift mod n in
-  if shift = 0 then x
-  else
-    let shift = if shift < 0 then shift + n else shift in
-    let result = Audio.G.copy x in
-    Audio.G.set_slice_ ~out:result
-      [[shift; n - 1]]
-      result
-      (Audio.G.get_slice [[0; n - shift - 1]; []] x) ;
-    Audio.G.set_slice_ ~out:result
-      [[0; shift - 1]]
-      result
-      (Audio.G.get_slice [[n - shift; n - 1]; []] x) ;
-    result
-
-let _float_typ_elt : type a b. (a, b) kind -> float -> a = function
-  | Float32 ->
-      fun a -> a
-  | Float64 ->
-      fun a -> a
-  | Complex32 ->
-      fun a -> Complex.{re= a; im= 0.}
-  | Complex64 ->
-      fun a -> Complex.{re= a; im= 0.}
-  | Int8_signed ->
-      int_of_float
-  | Int8_unsigned ->
-      int_of_float
-  | Int16_signed ->
-      int_of_float
-  | Int16_unsigned ->
-      int_of_float
-  | Int32 ->
-      fun a -> int_of_float a |> Int32.of_int
-  | Int64 ->
-      fun a -> int_of_float a |> Int64.of_int
-  | _ ->
-      failwith "_float_typ_elt: unsupported operation"
-
-let cov ?(b : ('a, 'b) Audio.G.t option) ~(a : ('a, 'b) Audio.G.t) =
-  let a =
-    match b with
-    | Some b ->
-        let na = Audio.G.numel a in
-        let nb = Audio.G.numel b in
-        assert (na = nb) ;
-        let a = Audio.G.reshape a [|na; 1|] in
-        let b = Audio.G.reshape b [|nb; 1|] in
-        Audio.G.concat_horizontal a b
-    | None ->
-        a
+let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Float.pi)
+    (p : (float, 'a) t) =
+  let ndim = Nx.ndim p in
+  let axis = if axis < 0 then ndim + axis else axis in
+  let diff (p : (float, 'a) t) =
+    let p_swapped = Nx.swapaxes axis (-1) p in
+    let ndim = Nx.ndim p_swapped in
+    let shape = Nx.shape p_swapped in
+    let n = shape.(ndim - 1) in
+    if n <= 1 then (
+      let new_shape = Array.copy (Nx.shape p) in
+      new_shape.(axis) <- 0 ;
+      Nx.empty (Nx.dtype p) new_shape )
+    else
+      let starts1 = Array.make ndim 0 in
+      starts1.(ndim - 1) <- 1 ;
+      let stops1 = shape in
+      let p1 =
+        Nx.slice_ranges (Array.to_list starts1) (Array.to_list stops1) p_swapped
+      in
+      let starts2 = Array.make ndim 0 in
+      let stops2 = Array.copy shape in
+      stops2.(ndim - 1) <- n - 1 ;
+      let p2 =
+        Nx.slice_ranges (Array.to_list starts2) (Array.to_list stops2) p_swapped
+      in
+      let d = Nx.sub p1 p2 in
+      Nx.swapaxes axis (-1) d
   in
-  let mu = Audio.G.mean ~axis:0 ~keep_dims:true a in
-  let a = Audio.G.sub a mu in
-  let a' = Audio.G.transpose a in
-  let c = Audio.G.dot a' a in
-  let n =
-    Audio.G.row_num a - 1
-    |> Stdlib.max 1 |> float_of_int
-    |> _float_typ_elt (Genarray.kind a)
+  let cumsum (x : (float, 'a) t) =
+    let x_moved = Nx.moveaxis axis 0 x in
+    let shape = Nx.shape x_moved in
+    let n = shape.(0) in
+    if n = 0 then x
+    else
+      let result = Nx.copy x_moved in
+      for i = 1 to n - 1 do
+        let current_slice = Nx.slice [I i] result in
+        let prev_slice = Nx.slice [I (i - 1)] result in
+        let new_slice = Nx.add current_slice prev_slice in
+        Nx.set_slice [I i] result new_slice
+      done ;
+      Nx.moveaxis 0 axis result
   in
-  Audio.G.div_scalar c n
-[@@warning "-unerasable-optional-argument"]
-
-let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Owl.Const.pi)
-    (p : (float, 'a) Owl.Dense.Ndarray.Generic.t) =
-  let nd = Audio.G.num_dims p in
-  let dd = Audio.G.diff ~axis p in
+  let d = diff p in
+  let d =
+    let pad_shape = Array.copy (Nx.shape p) in
+    pad_shape.(axis) <- 1 ;
+    let padding = Nx.zeros (Nx.dtype p) pad_shape in
+    Nx.concatenate ~axis [padding; d]
+  in
   let discont = match discont with Some d -> d | None -> period /. 2. in
-  let slices = Array.init nd (fun _ -> R [0; -1]) in
-  slices.(axis) <- R [1; -1] ;
-  let boundary_ambiguous, interval_high =
-    if Float.is_integer period then (mod_float period 2. = 0., period /. 2.)
-    else (true, period /. 2.)
+  let d_mod =
+    Nx.sub_s (Nx.mod_s (Nx.add_s d (period /. 2.)) period) (period /. 2.)
   in
-  let open Audio.G in
-  let interval_low = -.interval_high in
-  let ddmod = (dd -$ interval_low) %$ period in
-  let mask = ddmod <.$ 0. in
-  ddmod += (mask *$ period) ;
-  ddmod +$= interval_low ;
-  if boundary_ambiguous then (
-    let mask = (ddmod =.$ interval_low) * (dd >.$ 0.) in
-    ddmod *= (1. $- mask) ;
-    ddmod += (mask *$ interval_high) ) ;
-  let ph_correct = ddmod - dd in
-  let mask = abs dd >.$ discont in
-  let ph_correct = ph_correct * mask in
-  let up = copy p in
-  set_fancy_ext slices up (get_fancy_ext slices p + cumsum ~axis ph_correct) ;
-  up
+  let php = period /. 2. in
+  let cond1 = Nx.equal d_mod (Nx.scalar (Nx.dtype p) (-.php)) in
+  let cond2 = Nx.greater d (Nx.scalar (Nx.dtype p) 0.) in
+  let cond = Nx.logical_and cond1 cond2 in
+  let php_scalar = Nx.full_like d_mod php in
+  let d_mod = Nx.where cond php_scalar d_mod in
+  let ph_correct = Nx.sub d_mod d in
+  let cond_abs = Nx.less (Nx.abs d) (Nx.scalar (Nx.dtype p) discont) in
+  let p_correct = Nx.where cond_abs (Nx.zeros_like ph_correct) ph_correct in
+  let up = cumsum p_correct in
+  Nx.add p up
 
-let outer (op : ('a, 'b) Audio.G.t -> ('a, 'b) Audio.G.t -> ('a, 'b) Audio.G.t)
-    (x : ('a, 'b) Audio.G.t) (y : ('a, 'b) Audio.G.t) =
-  let nx = (Audio.G.shape x).(0) in
-  let ny = (Audio.G.shape y).(0) in
-  let x = Audio.G.reshape x [|nx; 1|] in
-  let y = Audio.G.reshape y [|1; ny|] in
+let outer (op : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t) (x : ('a, 'b) t)
+    (y : ('a, 'b) t) =
+  let nx = (Nx.shape x).(0) in
+  let ny = (Nx.shape y).(0) in
+  let x = Nx.reshape [|nx; 1|] x in
+  let y = Nx.reshape [|1; ny|] y in
   op x y

@@ -13,7 +13,7 @@
 
 (license Apache-2.0)
 
-(documentation https://soundml.gabyfle.dev)
+(documentation https://soundml.dev)
 
 (package
  (name soundml)
@@ -29,8 +29,7 @@
   ; Samplerate is already a requirement of rubberband
   (conf-samplerate :build)
   (dune-configurator :build)
-  (owl ; Version 1.2 is required to have the DC transform
-   (>= 1.2))
+  raven
   (odoc :with-doc)
   (alcotest :with-test)
   (yojson :with-test)

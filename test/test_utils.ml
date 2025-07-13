@@ -19,7 +19,7 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-type data = (float, Bigarray.float32_elt) Audio.G.t
+type data = (float, Bigarray.float32_elt) Nx.t
 
 let data_testable : data Alcotest.testable =
   ( module struct
@@ -27,7 +27,7 @@ let data_testable : data Alcotest.testable =
 
     let pp : t Fmt.t =
      fun fmt ndarray ->
-      let shape_array = Audio.G.shape ndarray in
+      let shape_array = Nx.shape ndarray in
       let pp_shape = Fmt.brackets (Fmt.array ~sep:Fmt.semi Fmt.int) in
       Fmt.pf fmt "%a" pp_shape shape_array
 
@@ -36,7 +36,7 @@ let data_testable : data Alcotest.testable =
 
 module Test_pad_center = struct
   let create_data (arr : float array) : data =
-    Audio.G.of_array Bigarray.Float32 arr [|Array.length arr|]
+    Nx.create Float32 [|Array.length arr|] arr
   (* Create 1D Ndarray *)
 
   let test_no_padding () =

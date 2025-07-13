@@ -19,54 +19,31 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Module providing usefull checking functions for the tests *)
+(** Module providing usefull checking functions for the tests
+*)
 module Check : sig
   val rallclose :
-       ?rtol:float
-    -> ?atol:float
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> (float, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
+    ?rtol:float -> ?atol:float -> (float, 'b) Nx.t -> (float, 'b) Nx.t -> bool
   (** Real-valued all-close function *)
 
   val callclose :
     'a.
        ?rtol:float
     -> ?atol:float
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
-    -> (Complex.t, 'a) Owl_dense_ndarray.Generic.t
+    -> (Complex.t, 'a) Nx.t
+    -> (Complex.t, 'a) Nx.t
     -> bool
   (** Complex-valued all-close function *)
 
-  val shape :
-       ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> ('a, 'b) Owl_dense_ndarray.Generic.t
-    -> bool
+  val shape : ('a, 'b) Nx.t -> ('a, 'b) Nx.t -> bool
   (** Check the shape of two ndarrays are equal *)
 end
 
 val allclose :
-  'a 'b.
-     ('a, 'b) Bigarray.kind
-  -> ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> bool
-(** Checks if two Ndarrays are allclose. This is equivalent to NumPy's allclose function. *)
+  'a 'b. ?rtol:float -> ?atol:float -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t -> bool
+(** Checks if two Ndarrays are allclose. This is equivalent to
+    NumPy's allclose function. *)
 
-val dense_testable :
-     ?rtol:float
-  -> ?atol:float
-  -> ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-
-val get_dense_testable :
-     ('a, 'b) Bigarray.kind
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t Alcotest.testable
-(** Function that returns a correctly-typed testable based on the passed kind for Dense.Ndarray. *)
-
-val load_npy :
-  string -> ('a, 'b) Bigarray.kind -> ('a, 'b) Owl_dense_ndarray.Generic.t
-(** Load a numpy file and return the ndarray. 
-    @see https://github.com/tachukao/owl/blob/046f703a6890a5ed5ecf4a8c5750d4e392e4ec54/src/owl/dense/owl_dense_matrix_generic.ml#L606-L609 *)
+val tensor_testable :
+  'a 'b. rtol:float -> atol:float -> ('a, 'b) Nx.t Alcotest.testable
+(** An Alcotest.testable for Nx tensors. *)

@@ -22,62 +22,42 @@
 (**
    Utility conversion module. *)
 module Convert : sig
-  val mel_to_hz :
-       ?htk:bool
-    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
-    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
+  val mel_to_hz : ?htk:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
   (** Converts mel-scale values to Hz. *)
 
-  val hz_to_mel :
-       ?htk:bool
-    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
-    -> (float, 'a) Owl.Dense.Ndarray.Generic.t
+  val hz_to_mel : ?htk:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
   (** Reverse function of {!mel_to_hz}. *)
 
   type reference =
     | RefFloat of float
-    | RefFunction of ((float, Bigarray.float32_elt) Audio.G.t -> float)
+    | RefFunction of ((float, Bigarray.float32_elt) Nx.t -> float)
 
   val power_to_db :
        ?amin:float
     -> ?top_db:float option
     -> reference
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray.Generic.t
-    -> (float, Bigarray.float32_elt) Owl_dense_ndarray_generic.t
+    -> (float, Bigarray.float32_elt) Nx.t
+    -> (float, Bigarray.float32_elt) Nx.t
 
   val db_to_power :
        ?amin:float
     -> reference
-    -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
-    -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+    -> (float, Bigarray.float32_elt) Nx.t
+    -> (float, Bigarray.float32_elt) Nx.t
 end
 
-val pad_center :
-     ('a, 'b) Owl.Dense.Ndarray.Generic.t
-  -> int
-  -> 'a
-  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+val pad_center : ('a, 'b) Nx.t -> int -> 'a -> ('a, 'b) Nx.t
 (**
     Pads a ndarray such that *)
 
-val frame :
-     ('a, 'b) Owl_dense_ndarray.Generic.t
-  -> int
-  -> int
-  -> int
-  -> ('a, 'b) Owl_dense_ndarray.Generic.t
+val frame : ('a, 'b) Nx.t -> int -> int -> int -> ('a, 'b) Nx.t
 
-val fftfreq :
-  int -> float -> (float, Bigarray.float32_elt) Owl.Dense.Ndarray.Generic.t
+val fftfreq : int -> float -> (float, Bigarray.float32_elt) Nx.t
 (**
     Implementation of the Numpy's fftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.fftfreq.html}numpy.fft.fftfreq} for more information. *)
 
-val rfftfreq :
-     (float, 'b) Bigarray.kind
-  -> int
-  -> float
-  -> (float, 'b) Owl.Dense.Ndarray.Generic.t
+val rfftfreq : (float, 'b) Nx.dtype -> int -> float -> (float, 'b) Nx.t
 (**
     Implementation of the Numpy's rfftfreq function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.fft.rfftfreq.html}numpy.fft.rfftfreq} for more information. *)
@@ -87,49 +67,26 @@ val melfreq :
   -> ?fmin:float
   -> ?fmax:float
   -> ?htk:bool
-  -> (float, 'b) Bigarray.kind
-  -> (float, 'b) Owl.Dense.Ndarray.Generic.t
+  -> (float, 'b) Nx.dtype
+  -> (float, 'b) Nx.t
 (**
-  Implementation of librosa's mel_frequencies. Compute an [Owl.Dense.Ndarray] of acoustic frequencies tuned to the mel scale.
+  Implementation of librosa's mel_frequencies. Compute an [Nx.t] of acoustic frequencies tuned to the mel scale.
   See: {{:https://librosa.org/doc/main/generated/librosa.mel_frequencies.html}librosa.mel_frequencies} for more information. *)
-
-val roll :
-     ('a, 'b) Owl.Dense.Ndarray.Generic.t
-  -> int
-  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
-(**
-    Implementation of the Numpy's roll function on the 0th axis of the given ndarray.
-    This function is used to shift elements of an array inside the library and is exposed
-    as it can be sometimes usefull.
-
-    This function returns a copy of the given ndarray.
-
-    See {{:https://numpy.org/doc/stable/reference/generated/numpy.roll.html}numpy.roll} for more information. *)
-
-val cov : ?b:('a, 'b) Audio.G.t -> a:('a, 'b) Audio.G.t -> ('a, 'b) Audio.G.t
-(**
-    (re)Implementation of the matrix covariance function from Owl.
-    
-    Note: this is temporary and done only because Owl doesn't export any
-    cov function for the [Ndarray] module on which [Audio.G] is based. This function is
-    likely to be deleted when Owl library will export such a cov function for n-dimensional arrays. *)
 
 val unwrap :
      ?discont:float option
   -> ?axis:int
   -> ?period:float
-  -> (float, 'a) Owl.Dense.Ndarray.Generic.t
-  -> (float, 'a) Owl.Dense.Ndarray.Generic.t
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
 (**
     Implementation of the Numpy's unwrap function.
     See {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} for more information. *)
 
 val outer :
-     (   ('a, 'b) Owl.Dense.Ndarray.Generic.t
-      -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
-      -> ('a, 'b) Owl.Dense.Ndarray.Generic.t )
-  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
-  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
-  -> ('a, 'b) Owl.Dense.Ndarray.Generic.t
+     (('a, 'b) Nx.t -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t)
+  -> ('a, 'b) Nx.t
+  -> ('a, 'b) Nx.t
+  -> ('a, 'b) Nx.t
 (**
-  Generalized outer product of any given operator that supports broadcasting (basically all the common Owl's Ndarray operators.) *)
+  Generalized outer product of any given operator that supports broadcasting (basically all the common Nx operators.) *)
