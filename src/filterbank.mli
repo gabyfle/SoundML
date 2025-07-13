@@ -19,19 +19,28 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+(** This module provides functions to create filterbanks. A
+    filterbank is a set of filters that are applied to a
+    signal. *)
+
 type norm = Slaney | PNorm of float
 
 val mel :
      ?fmax:float option
   -> ?htk:bool
   -> ?norm:norm option
-  -> (float, 'b) Bigarray.kind
+  -> (float, 'b) Nx.dtype
   -> int
   -> int
   -> int
   -> float
-  -> (float, 'b) Owl_dense_ndarray.Generic.t
-(** 
-   [mel ?fmax ?htk ?norm sample_rate nfft nmels fmin]
-   
-   Returns a matrix of shape [nmels, nfft/2+1] containing the mel filterbank. *)
+  -> (float, 'b) Nx.t
+(** Creates a Mel filterbank. A Mel filterbank is a set of
+    filters that are spaced according to the Mel scale.
+
+    @param n_mels The number of Mel filters to generate.
+    @param f_min The minimum frequency of the filterbank.
+    @param f_max The maximum frequency of the filterbank.
+    @param n_fft The number of FFT components.
+    @param sample_rate The sample rate of the signal.
+    @return A Mel filterbank of shape (n_mels, n_fft). *)

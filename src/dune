@@ -7,17 +7,9 @@
  (wrapped false))
 
 (library
- (name types)
- (package soundml)
- (modules types)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped false))
-
-(library
  (name audio)
  (package soundml)
- (libraries owl types aformat)
+ (libraries nx aformat)
  (modules audio)
  (instrumentation
   (backend bisect_ppx))
@@ -26,7 +18,7 @@
 (library
  (name window)
  (package soundml)
- (libraries owl types audio)
+ (libraries nx)
  (modules window)
  (instrumentation
   (backend bisect_ppx))
@@ -35,26 +27,26 @@
 (library
  (name utils)
  (package soundml)
- (libraries audio types owl)
+ (libraries nx)
  (modules utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))
 
-(library
- (name transform)
- (package soundml)
- (modules transform)
- (libraries owl window types utils)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped false))
+;(library
+; (name transform)
+; (package soundml)
+;; (modules transform)
+; (libraries nx window utils)
+; (instrumentation
+;  (backend bisect_ppx))
+; (wrapped false))
 
 (library
  (name filterbank)
  (package soundml)
  (modules filterbank)
- (libraries owl utils)
+ (libraries nx utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))
@@ -63,6 +55,6 @@
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries owl audio io types feature filterbank transform effects window)
+ (libraries aformat window utils filterbank audio)
  (instrumentation
   (backend bisect_ppx)))

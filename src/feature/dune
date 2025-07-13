@@ -1,9 +1,7 @@
-(include_subdirs qualified)
-
-(library
- (name feature)
- (package soundml)
- (libraries audio utils window owl)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped true))
+;(library
+; (name feature)
+; (public_name soundml.feature)
+; (instrumentation
+;  (backend bisect_ppx))
+; (libraries audio utils window nx)
+; (modules spectral))

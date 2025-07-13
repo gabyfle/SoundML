@@ -8,7 +8,7 @@ authors: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 license: "Apache-2.0"
 tags: ["sound" "spectrogram" "fourier" "digital-filters"]
 homepage: "https://github.com/gabyfle/SoundML"
-doc: "https://soundml.gabyfle.dev"
+doc: "https://soundml.dev"
 bug-reports: "https://github.com/gabyfle/SoundML/issues"
 depends: [
   "ocaml" {>= "5.2.0"}
@@ -17,7 +17,7 @@ depends: [
   "conf-rubberband" {build}
   "conf-samplerate" {build}
   "dune-configurator" {build}
-  "owl" {>= "1.2"}
+  "raven"
   "odoc" {with-doc}
   "alcotest" {with-test}
   "yojson" {with-test}
