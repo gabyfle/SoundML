@@ -19,29 +19,20 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Soundml
 open Vutils
 
 module Timeseries = struct
-  type t = Float.t
+  type a = float
 
-  type p = Bigarray.float64_elt
+  type b = Nx.float64_elt
 
-  type pf = Bigarray.float64_elt
-
-  type pc = Bigarray.complex64_elt
-
-  type ('a, 'b) precision = ('a, 'b) Types.precision
-
-  let precision = Types.B64
-
-  let kd = Bigarray.Float64
+  let dtype = Nx.Float64
 
   let typ = "timeseries"
 
-  let generate (_ : (pf, pc) precision) (_ : string * string * Parameters.t)
-      (audio : (float, 'c) Owl_dense_ndarray.Generic.t) =
-    audio
+  let generate (_ : (a, b) Nx.dtype) (_ : string * string * Parameters.t)
+      (audio : (float, 'c) Nx.t) =
+    Nx.cast dtype audio
 end
 
 module Tests = Tests_cases (Timeseries)
@@ -49,5 +40,5 @@ module Tests = Tests_cases (Timeseries)
 let () =
   let name = "Vectors: Timeseries Comparison" in
   let data = Testdata.get Timeseries.typ Vutils.data in
-  let tests = Tests.create_tests data in
+  let tests = Tests.create_tests data 1e-5 1e-8 in
   Tests.run name tests

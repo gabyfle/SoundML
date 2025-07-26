@@ -23,9 +23,6 @@
     The {!Io} (in/out) module is the entry point for reading and writing audio
     data from and to the filesystem. It supports resampling via the {{:https://github.com/chirlu/soxr}SoXr} library. *)
 
-open Audio
-open Bigarray
-
 (** Thrown when a requested file cannot be found on the system. *)
 exception File_not_found of string
 
@@ -52,9 +49,9 @@ val read :
      ?res_typ:resampling_t
   -> ?sample_rate:int
   -> ?mono:bool
-  -> (float, 'a) kind
+  -> (float, 'a) Nx.dtype
   -> string
-  -> 'a audio
+  -> 'a Audio.t
 (**
     [read ?res_typ ?sample_rate ?fix kind filename] reads an audio file and returns an [audio].
 
@@ -64,7 +61,7 @@ val read :
     @param ?res_typ is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
     @param ?sample_rate is the target sample rate to use when reading the file. Default is 22050 Hz.
     @param ?mono is a boolean that indicates if we want to convert to a mono audio. Default is [true].
-    @param kind is the format of audio data to read. It can be either [Bigarray.Float32] or [Bigarray.Float64].
+    @param dtype is the format of audio data to read. It can be either [Float32] or [Float64].
     @param filename is the path to the file to read audio from.
 
     @raise File_not_found If the file does not exist.
@@ -86,7 +83,7 @@ val read :
     SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
     on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats} and in the {!Audio.Aformat} module. *)
 
-val write : 'a. ?format:Aformat.t -> string -> (float, 'a) G.t -> int -> unit
+val write : 'a. ?format:Aformat.t -> string -> (float, 'a) Nx.t -> int -> unit
 (**
     [write ?format filename data sample_reat] writes an audio file to the filesystem.
 

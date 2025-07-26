@@ -24,9 +24,9 @@
 
 open Soundml
 
-let f32_nx_testable = Tutils.tensor_testable ~rtol:10e-6 ~atol:10e-6
+let f32_nx_testable = Tutils.tensor_testable Nx.Float32 ~rtol:10e-6 ~atol:10e-6
 
-let f64_nx_testable = Tutils.tensor_testable ~rtol:10e-6 ~atol:10e-6
+let f64_nx_testable = Tutils.tensor_testable Nx.Float64 ~rtol:10e-6 ~atol:10e-6
 
 let test_m_negative_0 () =
   Alcotest.check_raises "m_negative: M < 0 should raise Invalid_argument"

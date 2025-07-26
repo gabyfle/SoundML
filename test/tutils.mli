@@ -45,5 +45,9 @@ val allclose :
     NumPy's allclose function. *)
 
 val tensor_testable :
-  'a 'b. rtol:float -> atol:float -> ('a, 'b) Nx.t Alcotest.testable
+  'a 'b.
+     ('a, 'b) Nx.dtype
+  -> rtol:float
+  -> atol:float
+  -> ('a, 'b) Nx.t Alcotest.testable
 (** An Alcotest.testable for Nx tensors. *)

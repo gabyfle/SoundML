@@ -55,34 +55,34 @@ external caml_read_audio_file_f32 :
      string
   -> resampling_t
   -> int
-  -> (float, Bigarray.float32_elt) Audio.G.t * metadata
+  -> (float, float32_elt, c_layout) Bigarray.Genarray.t * metadata
   = "caml_read_audio_file_f32"
 
 external caml_read_audio_file_f64 :
      string
   -> resampling_t
   -> int
-  -> (float, Bigarray.float64_elt) Audio.G.t * metadata
+  -> (float, float64_elt, c_layout) Bigarray.Genarray.t * metadata
   = "caml_read_audio_file_f64"
 
-let to_mono (x : (float, 'a) G.t) =
-  if G.num_dims x > 1 then G.mean ~axis:1 ~keep_dims:false x else x
+let to_mono (x : (float, 'a) Nx.t) =
+  if Nx.ndim x > 1 then Nx.mean ~axes:[|1|] ~keepdims:false x else x
 
 let read : type a.
        ?res_typ:resampling_t
     -> ?sample_rate:int
     -> ?mono:bool
-    -> (float, a) kind
+    -> (float, a) Nx.dtype
     -> string
-    -> a audio =
+    -> a Audio.t =
  fun ?(res_typ : resampling_t = SOXR_HQ) ?(sample_rate : int = 22050)
      ?(mono : bool = true) typ (filename : string) ->
   let read_func : type a.
-         (float, a) kind
+         (float, a) Nx.dtype
       -> string
       -> resampling_t
       -> int
-      -> (float, a) G.t * metadata =
+      -> (float, a, c_layout) Bigarray.Genarray.t * metadata =
    fun typ ->
     match typ with
     | Float32 ->
@@ -96,17 +96,9 @@ let read : type a.
               either Float32 or Float64." )
   in
   let data, meta = read_func typ filename res_typ sample_rate in
-  let dshape = Audio.G.shape data in
-  let nsamples = dshape.(0) in
+  let data = Nx.of_bigarray data in
   let data = if mono then to_mono data else data in
   let frames, channels, sample_rate, format = meta in
-  let data =
-    match (res_typ, frames, nsamples) with
-    | NONE, real, pred ->
-        if real = pred then data else Audio.G.sub_left data 0 real
-    | _ ->
-        data
-  in
   let channels = if mono then 1 else channels in
   let format =
     match Aformat.of_int format with
@@ -118,24 +110,24 @@ let read : type a.
   let meta =
     Metadata.create ~name:filename frames channels sample_rate format
   in
-  let data = Audio.G.transpose data in
+  let data = Nx.transpose data in
   Audio.create meta data
 
 external caml_write_audio_file_f32 :
      string
-  -> (float, Bigarray.float32_elt) Audio.G.t
+  -> (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Genarray.t
   -> int * int * int * int
   -> unit = "caml_write_audio_file_f32"
 
 external caml_write_audio_file_f64 :
      string
-  -> (float, Bigarray.float64_elt) Audio.G.t
+  -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t
   -> int * int * int * int
   -> unit = "caml_write_audio_file_f64"
 
 let write : type a.
-    ?format:Aformat.t -> string -> (float, a) Audio.G.t -> int -> unit =
- fun ?format (filename : string) (x : (float, a) Audio.G.t) sample_rate ->
+    ?format:Aformat.t -> string -> (float, a) Nx.t -> int -> unit =
+ fun ?format (filename : string) (x : (float, a) Nx.t) sample_rate ->
   let format =
     if format = None then
       match Aformat.of_ext (Filename.extension filename) with
@@ -146,17 +138,17 @@ let write : type a.
     else Option.get format
   in
   let format = Aformat.to_int format in
-  let data = Audio.G.transpose x in
-  let dshape = Audio.G.shape data in
+  let data = Nx.transpose x in
+  let dshape = Nx.shape data in
   let nframes = dshape.(0) in
   let channels = if Array.length dshape > 1 then dshape.(1) else 1 in
   (* we get back our interleaved format *)
-  match Audio.G.kind data with
+  match Nx.dtype data with
   | Float32 ->
-      caml_write_audio_file_f32 filename data
+      caml_write_audio_file_f32 filename (Nx.to_bigarray data)
         (nframes, sample_rate, channels, format)
   | Float64 ->
-      caml_write_audio_file_f64 filename data
+      caml_write_audio_file_f64 filename (Nx.to_bigarray data)
         (nframes, sample_rate, channels, format)
   | _ ->
       raise

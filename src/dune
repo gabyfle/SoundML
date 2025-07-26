@@ -36,7 +36,7 @@
 ;(library
 ; (name transform)
 ; (package soundml)
-;; (modules transform)
+; (modules transform)
 ; (libraries nx window utils)
 ; (instrumentation
 ;  (backend bisect_ppx))
@@ -55,6 +55,6 @@
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries aformat window utils filterbank audio)
+ (libraries aformat window io utils filterbank audio)
  (instrumentation
   (backend bisect_ppx)))
