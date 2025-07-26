@@ -168,8 +168,8 @@ module Tests_cases (T : Testable) = struct
 
   let read_audio (type c) (audio_dtype : (float, c) Nx.dtype) (path : string)
       (res_typ : Io.resampling_t) (sample_rate : int) (mono : bool) =
-    let audio = Io.read ~res_typ ~sample_rate ~mono audio_dtype path in
-    Audio.data audio
+    let audio, _ = Io.read ~res_typ ~sample_rate ~mono audio_dtype path in
+    audio
 
   let read_npy : type a b. (a, b) Nx.dtype -> string -> (a, b) Nx.t =
    fun dtype path ->

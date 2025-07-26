@@ -11,12 +11,12 @@
    :standard
    (:include c_flags.sexp)
    -O3
-   -std=c++23
-   -llto))
+   -llto
+   -std=c++23))
  (c_library_flags
   (:include c_library_flags.sexp))
  (modules io)
- (libraries audio utils)
+ (libraries aformat utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped true))

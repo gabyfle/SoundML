@@ -51,7 +51,7 @@ val read :
   -> ?mono:bool
   -> (float, 'a) Nx.dtype
   -> string
-  -> 'a Audio.t
+  -> (float, 'a) Nx.t * int
 (**
     [read ?res_typ ?sample_rate ?fix kind filename] reads an audio file and returns an [audio].
 

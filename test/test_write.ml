@@ -19,9 +19,7 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Bigarray
 open Soundml
-open Tutils
 
 let temp_dir_name = ref ""
 
@@ -54,7 +52,7 @@ let file_exists name =
   | _ ->
       true
 
-let create_test_audio channels samples sample_rate format =
+let create_test_audio channels samples sample_rate =
   let shape = if channels > 1 then [|channels; samples|] else [|samples|] in
   let data = Nx.zeros Nx.float32 shape in
   let freq = 23000. in
@@ -66,26 +64,12 @@ let create_test_audio channels samples sample_rate format =
         data
     done
   done ;
-  let meta = Audio.Metadata.create channels samples sample_rate format in
-  let audio_data = Audio.create meta data in
-  (audio_data, sample_rate)
+  (data, sample_rate)
 
-let create_empty_audio channels sample_rate format =
+let create_empty_audio channels sample_rate =
   let shape = if channels > 1 then [|channels; 0|] else [|0|] in
   let data = Nx.zeros Nx.float32 shape in
-  let meta = Audio.Metadata.create channels 0 sample_rate format in
-  let audio_data = Audio.create meta data in
-  (audio_data, sample_rate)
-
-let audio_testable =
-  let pp fmt (a : float32_elt Audio.t) =
-    Format.fprintf fmt "{ channels=%d; samples/channel=%d; }" (Audio.channels a)
-      (if Audio.channels a > 0 then Audio.samples a else 0)
-  in
-  let equal a b =
-    Check.rallclose ~rtol:1e-05 ~atol:1e-08 (Audio.data a) (Audio.data b)
-  in
-  Alcotest.testable pp equal
+  (data, sample_rate)
 
 let check_write_read name
     ?(format : Aformat.t = Aformat.{ftype= WAV; sub= PCM_16; endian= FILE})
@@ -96,11 +80,11 @@ let check_write_read name
   in
   Alcotest.test_case test_name `Quick (fun () ->
       let filename = temp_file ~ext test_name in
-      let audio, sr = create_test_audio channels samples target_sr format in
-      Io.write ~format filename (Audio.data audio) sr ;
+      let audio, sr = create_test_audio channels samples target_sr in
+      Io.write ~format filename audio sr ;
       Alcotest.check Alcotest.bool "Output file exists after write"
         (file_exists filename) true ;
-      let read_audio =
+      let read_audio, sample_rate =
         try
           Io.read ~mono:(channels = 1) ~sample_rate:target_sr Nx.Float32
             filename
@@ -108,17 +92,14 @@ let check_write_read name
           Alcotest.failf "Failed to read back file %s: %s" filename
             (Printexc.to_string ex)
       in
-      Alcotest.check Alcotest.int "Channels match after write" channels
-        (Audio.channels read_audio) ;
-      Alcotest.check Alcotest.int "Sample rate match after write" target_sr
-        (Audio.sr read_audio) ;
-      Alcotest.check Alcotest.int "Frames match after write" samples
-        (Audio.samples read_audio) ;
       Alcotest.check
-        (Alcotest.testable Aformat.pp Stdlib.( = ))
-        "Format match after write" format (Audio.format read_audio) ;
-      Alcotest.check audio_testable "Data unchanged after write" audio
-        read_audio )
+        (Alcotest.array Alcotest.int)
+        "Channels match after write" (Nx.shape audio) (Nx.shape read_audio) ;
+      Alcotest.check Alcotest.int "Sample rate match after write" target_sr
+        sample_rate ;
+      Alcotest.check
+        (Tutils.tensor_testable (Nx.dtype audio) ~rtol:10e-5 ~atol:10e-5)
+        "Data unchanged after write" audio read_audio )
 
 let check_write_empty name
     ?(format : Aformat.t = Aformat.{ftype= WAV; sub= PCM_16; endian= FILE})
@@ -128,12 +109,12 @@ let check_write_empty name
   in
   Alcotest.test_case test_name `Quick (fun () ->
       let filename = temp_file ~ext test_name in
-      let audio, sr = create_empty_audio channels target_sr format in
+      let audio, sr = create_empty_audio channels target_sr in
       Alcotest.check
         (Alcotest.neg Alcotest.reject)
         "Write empty audio don't raise"
         (fun () -> ())
-        (fun () -> Io.write ~format filename (Audio.data audio) sr) )
+        (fun () -> Io.write ~format filename audio sr) )
 
 let tests =
   let wav = Result.get_ok (Aformat.create Aformat.WAV) in
