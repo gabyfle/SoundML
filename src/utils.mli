@@ -50,8 +50,6 @@ val pad_center : ('a, 'b) Nx.t -> int -> 'a -> ('a, 'b) Nx.t
 (**
     Pads a ndarray such that *)
 
-val frame : ('a, 'b) Nx.t -> int -> int -> int -> ('a, 'b) Nx.t
-
 val fftfreq : int -> float -> (float, Bigarray.float32_elt) Nx.t
 (**
     Implementation of the Numpy's fftfreq function.

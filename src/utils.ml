@@ -72,39 +72,44 @@ module Convert = struct
       (s : (float, float32_elt) t) =
     assert (amin > 0.) ;
     let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
+    let log_spec = Nx.mul_s (Nx.div_s (Nx.log s) (Float.log 10.)) 10. in
     let log_spec =
-      Nx.mul_s (Nx.div_s (Nx.log (Nx.maximum_s s amin)) (Float.log 10.)) 10.
-    in
-    let log_spec =
-      Nx.sub log_spec
-        (Nx.mul_s
-           (Nx.div_s
-              (Nx.log
-                 (Nx.maximum
-                    (Nx.scalar (Nx.dtype s) amin)
-                    (Nx.scalar (Nx.dtype s) ref_value) ) )
-              (Float.log 10.) )
-           10. )
+      Nx.(
+        sub log_spec
+          (mul_s
+             (div_s
+                (log
+                   (maximum
+                      (scalar (dtype s) amin)
+                      (scalar (dtype s) ref_value) ) )
+                (Float.log 10.) )
+             10. ) )
     in
     match top_db with
     | None ->
         log_spec
     | Some top_db ->
         assert (top_db >= 0.0) ;
-        let max_val = Nx.max log_spec |> Nx.to_array in
+        let max_val =
+          Nx.max
+            (Nx.where (Nx.isfinite log_spec) log_spec
+               (Nx.scalar (Nx.dtype log_spec) (-1e8)) )
+          |> Nx.to_array
+        in
         Nx.maximum_s log_spec (max_val.(0) -. top_db)
 
   let db_to_power ?(amin = 1e-10) (ref : reference) (s : ('a, float32_elt) t) =
     assert (amin > 0.) ;
     let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
-    let amin = Nx.scalar (Nx.dtype s) amin in
-    let ref_value = Nx.scalar (Nx.dtype s) ref_value in
-    let spec = Nx.div_s (Nx.mul_s s 10.) 10. in
+    let amin_t = Nx.scalar (Nx.dtype s) amin in
+    let ref_value_t = Nx.scalar (Nx.dtype s) ref_value in
     let log_ref =
-      Nx.div_s (Nx.log (Nx.maximum amin ref_value)) (Float.log 10.)
+      Nx.mul_s
+        (Nx.div_s (Nx.log (Nx.maximum amin_t ref_value_t)) (Float.log 10.))
+        10.
     in
-    let log_ref = Nx.mul_s log_ref 10. in
-    let spec = Nx.add spec log_ref in
+    let spec = Nx.add s log_ref in
+    let spec = Nx.div_s spec 10. in
     Nx.pow (Nx.scalar (Nx.dtype s) 10.) spec
 end
 
@@ -116,53 +121,12 @@ let pad_center (data : ('a, 'b) t) (target_size : int) (value : 'a) : ('a, 'b) t
     raise
       (Invalid_argument
          "An error occured while trying to pad: current_size > target_size" )
-  else if size = 0 then
-    Nx.full (Nx.dtype data) [|target_size|] value
+  else if size = 0 then Nx.full (Nx.dtype data) [|target_size|] value
   else
     let pad_total = target_size - size in
     let pad_left = pad_total / 2 in
     let pad_right = pad_total - pad_left in
     Nx.pad [|(pad_left, pad_right)|] value data
-
-let frame (x : ('a, 'b) t) (frame_size : int) (hop_size : int) (axis : int) :
-    ('a, 'b) t =
-  if frame_size <= 0 then invalid_arg "frame_size must be positive"
-  else if hop_size <= 0 then invalid_arg "hop_size must be positive"
-  else
-    let shape_in = Nx.shape x in
-    let num_dims_in = Array.length shape_in in
-    let len_axis = shape_in.(axis) in
-    let num_frames =
-      if len_axis < frame_size then 0
-      else ((len_axis - frame_size) / hop_size) + 1
-    in
-    let shape_out_list =
-      let prefix_dims = Array.to_list (Array.sub shape_in 0 axis) in
-      let suffix_dims =
-        if axis + 1 < num_dims_in then
-          Array.to_list
-            (Array.sub shape_in (axis + 1) (num_dims_in - (axis + 1)))
-        else []
-      in
-      prefix_dims @ [num_frames; frame_size] @ suffix_dims
-    in
-    let shape_out = Array.of_list shape_out_list in
-    if num_frames <= 0 then Nx.empty (Nx.dtype x) shape_out
-    else
-      let get_value_for_output_indices (out_indices : int array) : 'a =
-        let in_indices = Array.make num_dims_in 0 in
-        for d = 0 to axis - 1 do
-          in_indices.(d) <- out_indices.(d)
-        done ;
-        let frame_idx = out_indices.(axis) in
-        let offset_in_frame = out_indices.(axis + 1) in
-        in_indices.(axis) <- (frame_idx * hop_size) + offset_in_frame ;
-        for d = axis + 1 to num_dims_in - 1 do
-          in_indices.(d) <- out_indices.(d + 1)
-        done ;
-        Nx.get_item (Array.to_list in_indices) x
-      in
-      Nx.init (Nx.dtype x) shape_out get_value_for_output_indices
 
 let fftfreq (n : int) (d : float) =
   let nslice = ((n - 1) / 2) + 1 in
@@ -238,9 +202,7 @@ let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Float.pi)
     Nx.concatenate ~axis [padding; d]
   in
   let discont = match discont with Some d -> d | None -> period /. 2. in
-  let d_mod =
-    Nx.sub_s (Nx.mod_s (Nx.add_s d (period /. 2.)) period) (period /. 2.)
-  in
+  let d_mod = Nx.sub d (Nx.mul_s (Nx.round (Nx.div_s d period)) period) in
   let php = period /. 2. in
   let cond1 = Nx.equal d_mod (Nx.scalar (Nx.dtype p) (-.php)) in
   let cond2 = Nx.greater d (Nx.scalar (Nx.dtype p) 0.) in

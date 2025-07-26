@@ -19,12 +19,14 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+(* module Audio = Audio module Io = Io module Types = Types module Transform =
+   Transform *)
+
 module Audio = Audio
 module Io = Io
-module Types = Types
-module Transform = Transform
 module Window = Window
-module Feature = Feature
-module Filterbank = Filterbank
-module Effects = Effects
+module Aformat = Aformat
+
+(* module Feature = Feature module Filterbank = Filterbank module Effects =
+   Effects *)
 module Utils = Utils

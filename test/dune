@@ -3,7 +3,7 @@
 (tests
  (names
   test_aformat
-  ;test_write
+  test_write
   test_utils
   ;test_time
   test_window
@@ -14,18 +14,18 @@
  (action
   (run %{test})))
 
-;(tests
-; (names test_stft test_timeseries)
-; (libraries alcotest yojson soundml)
-; (package soundml)
-; (deps
-;  generate_vectors.py
-;  generate_audio.sh
-;  (source_tree audio))
-; (action
-;  (progn
-;   (system "mkdir -p audio")
-;   (system "./generate_audio.sh")
-;   (system "mkdir -p vectors")
-;   (system "python3 %{dep:generate_vectors.py}")
-;   (run %{test}))))
+(tests
+ (names test_timeseries)
+ (libraries alcotest str yojson nx.io soundml)
+ (package soundml)
+ (deps
+  generate_vectors.py
+  generate_audio.sh
+  (source_tree audio))
+ (action
+  (progn
+   (system "mkdir -p audio")
+   (system "bash %{dep:generate_audio.sh}")
+   (system "mkdir -p vectors")
+   (system "python3 %{dep:generate_vectors.py}")
+   (run %{test}))))

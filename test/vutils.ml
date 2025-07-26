@@ -19,8 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Tutils
-
 let test_audio_dir = Sys.getcwd () ^ "/audio/"
 
 let test_vectors_dir = Sys.getcwd () ^ "/vectors/"
@@ -150,47 +148,42 @@ module Testdata = struct
 end
 
 module type Testable = sig
-  type t
+  type a
 
-  type p
+  type b
 
-  type pf
-
-  type pc
-
-  type ('a, 'b) precision = ('a, 'b) Types.precision
-
-  val precision : (pf, pc) precision
-
-  val kd : (t, p) Bigarray.kind
+  val dtype : (a, b) Nx.dtype
 
   val typ : string
 
   val generate :
-       (pf, pc) precision
+       (a, b) Nx.dtype
     -> string * string * Parameters.t
-    -> (float, pf) Owl_dense_ndarray.Generic.t
-    -> (t, p) Owl_dense_ndarray.Generic.t
+    -> (float, 'c) Nx.t
+    -> (a, b) Nx.t
 end
 
 module Tests_cases (T : Testable) = struct
   include T
 
-  let akind : type a b. (a, b) precision -> (float, a) Bigarray.kind =
-   fun prec ->
-    match prec with
-    | Types.B32 ->
-        Bigarray.Float32
-    | Types.B64 ->
-        Bigarray.Float64
-
-  let read_audio kd (path : string) (res_typ : Io.resampling_t)
-      (sample_rate : int) (mono : bool) =
-    let audio = Io.read ~res_typ ~sample_rate ~mono kd path in
+  let read_audio (type c) (audio_dtype : (float, c) Nx.dtype) (path : string)
+      (res_typ : Io.resampling_t) (sample_rate : int) (mono : bool) =
+    let audio = Io.read ~res_typ ~sample_rate ~mono audio_dtype path in
     Audio.data audio
 
-  let create_tests (data : (string * string * Parameters.t) list) :
-      unit Alcotest.test_case list =
+  let read_npy : type a b. (a, b) Nx.dtype -> string -> (a, b) Nx.t =
+   fun dtype path ->
+    let packed = Nx_io.load_npy path in
+    match dtype with
+    | Nx.Float32 ->
+        Nx_io.to_float32 packed
+    | Nx.Float64 ->
+        Nx_io.to_float64 packed
+    | _ ->
+        failwith "unsupported datatype"
+
+  let create_tests (data : (string * string * Parameters.t) list) (rtol : float)
+      (atol : float) : unit Alcotest.test_case list =
     List.concat_map
       (fun (case : string * string * Parameters.t) ->
         let vector_path, audio_path, params = case in
@@ -212,13 +205,12 @@ module Tests_cases (T : Testable) = struct
             ( Option.value ~default:"None"
             @@ Parameters.get_string "res_type" params )
         in
-        let audio_kind = akind precision in
-        let audio = read_audio audio_kind audio_path resampler sr mono in
-        let generated = generate precision case audio in
-        let vector = load_npy vector_path kd in
+        let audio = read_audio Nx.float64 audio_path resampler sr mono in
+        let generated = generate dtype case audio in
+        let vector = read_npy dtype vector_path in
         let test_dense () =
           Alcotest.check
-            (Tutils.get_dense_testable kd)
+            (Tutils.tensor_testable dtype ~rtol ~atol)
             (typ ^ "_dense_" ^ basename)
             generated vector
         in
@@ -230,6 +222,6 @@ module Tests_cases (T : Testable) = struct
     Alcotest.run name [(typ_to_readable typ, tests)]
 end
 
-let tests = ["timeseries"; "stft"]
+let tests = ["timeseries"]
 
 let data = Testdata.create test_vectors_dir test_audio_dir tests

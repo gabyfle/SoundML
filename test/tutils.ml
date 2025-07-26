@@ -26,7 +26,7 @@ module Check = struct
     if Array.length shape_x <> Array.length shape_y then false
     else Array.for_all2 (fun x y -> x = y) shape_x shape_y
 
-  let rallclose ?(rtol = 1e-05) ?(atol = 1e-10) (x : (float, 'b) Nx.t)
+  let rallclose ?(rtol = 1e-5) ?(atol = 1e-10) (x : (float, 'b) Nx.t)
       (y : (float, 'b) Nx.t) : bool =
     if not (shape x y) then false
     else if Nx.numel x = 0 && Nx.numel y = 0 then true
@@ -82,7 +82,8 @@ let allclose : type a b.
  fun ?rtol ?atol x y -> allclose_aux (Nx.dtype x) ?rtol ?atol x y
 
 let tensor_testable : type a b.
-    rtol:float -> atol:float -> (a, b) Nx.t Alcotest.testable =
- fun ~rtol ~atol ->
+    (a, b) Nx.dtype -> rtol:float -> atol:float -> (a, b) Nx.t Alcotest.testable
+    =
+ fun _ ~rtol ~atol ->
   let equal a b = allclose ~rtol ~atol a b in
   Alcotest.testable Nx.pp equal

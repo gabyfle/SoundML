@@ -1,3 +1,4 @@
+.DS_Store
 _build
 dune.lock
 dataset/
@@ -8,3 +9,4 @@ report/
 .vscode
 wav/
 mp3/
+bench/.DS_Store
