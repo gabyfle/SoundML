@@ -19,9 +19,6 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Audio
-open Bigarray
-
 exception File_not_found of string
 
 exception Invalid_format of string
@@ -48,21 +45,18 @@ let _ =
 
 type resampling_t = NONE | SOXR_QQ | SOXR_LQ | SOXR_MQ | SOXR_HQ | SOXR_VHQ
 
-(* nframes * channels * sample_rate * format *)
-type metadata = int * int * int * int
-
 external caml_read_audio_file_f32 :
      string
   -> resampling_t
   -> int
-  -> (float, float32_elt, c_layout) Bigarray.Genarray.t * metadata
+  -> (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Genarray.t * int
   = "caml_read_audio_file_f32"
 
 external caml_read_audio_file_f64 :
      string
   -> resampling_t
   -> int
-  -> (float, float64_elt, c_layout) Bigarray.Genarray.t * metadata
+  -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t * int
   = "caml_read_audio_file_f64"
 
 let to_mono (x : (float, 'a) Nx.t) =
@@ -74,7 +68,7 @@ let read : type a.
     -> ?mono:bool
     -> (float, a) Nx.dtype
     -> string
-    -> a Audio.t =
+    -> (float, a) Nx.t * int =
  fun ?(res_typ : resampling_t = SOXR_HQ) ?(sample_rate : int = 22050)
      ?(mono : bool = true) typ (filename : string) ->
   let read_func : type a.
@@ -82,7 +76,7 @@ let read : type a.
       -> string
       -> resampling_t
       -> int
-      -> (float, a, c_layout) Bigarray.Genarray.t * metadata =
+      -> (float, a, Bigarray.c_layout) Bigarray.Genarray.t * int =
    fun typ ->
     match typ with
     | Float32 ->
@@ -95,23 +89,11 @@ let read : type a.
              "Float16 elements kind aren't supported. The array kind must be \
               either Float32 or Float64." )
   in
-  let data, meta = read_func typ filename res_typ sample_rate in
+  let data, sample_rate = read_func typ filename res_typ sample_rate in
   let data = Nx.of_bigarray data in
   let data = if mono then to_mono data else data in
-  let frames, channels, sample_rate, format = meta in
-  let channels = if mono then 1 else channels in
-  let format =
-    match Aformat.of_int format with
-    | Ok fmt ->
-        fmt
-    | Error e ->
-        raise (Invalid_format e)
-  in
-  let meta =
-    Metadata.create ~name:filename frames channels sample_rate format
-  in
   let data = Nx.transpose data in
-  Audio.create meta data
+  (data, sample_rate)
 
 external caml_write_audio_file_f32 :
      string

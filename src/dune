@@ -7,15 +7,6 @@
  (wrapped false))
 
 (library
- (name audio)
- (package soundml)
- (libraries nx aformat)
- (modules audio)
- (instrumentation
-  (backend bisect_ppx))
- (wrapped false))
-
-(library
  (name window)
  (package soundml)
  (libraries nx)
@@ -55,6 +46,12 @@
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries aformat window io utils filterbank audio)
+ (libraries aformat window io utils filterbank)
  (instrumentation
   (backend bisect_ppx)))
+
+  (executable
+   (name testing)
+   (public_name testing)
+   (modules testing)
+   (libraries soundml))
