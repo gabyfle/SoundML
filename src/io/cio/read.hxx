@@ -52,11 +52,10 @@ namespace SoundML
             sf_count_t nframes;
             int channels;
             int sample_rate;
-            int format;
 
         public:
-            SndfileReader(sf_count_t nframes, int channels, int sample_rate, int format)
-                : nframes(nframes), channels(channels), sample_rate(sample_rate), format(format) {}
+            SndfileReader(sf_count_t nframes, int channels, int sample_rate)
+                : nframes(nframes), channels(channels), sample_rate(sample_rate) {}
 
             std::expected<sf_count_t, Error> process_whole(SndfileHandle &sndfile, T *data)
             {
@@ -297,7 +296,7 @@ template <typename T>
 inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
 {
     CAMLparam0();
-    CAMLlocal3(audio_array, audio_metadata, returns);
+    CAMLlocal3(audio_array, caml_sample_rate, returns);
 
     using namespace SoundML::IO;
     std::string filename_str(String_val(filename));
@@ -314,7 +313,6 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     sf_count_t nframes = sndfile.frames();
     sf_count_t padded_frames = nframes;
     int channels = sndfile.channels();
-    int format = sndfile.format();
     int sample_rate = sndfile.samplerate();
 
     AudioReader<T> *reader = nullptr;
@@ -328,7 +326,7 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     else
     {
         trgt_sr = sample_rate;
-        reader = new SndfileReader<T>(nframes, channels, sample_rate, format);
+        reader = new SndfileReader<T>(nframes, channels, sample_rate);
     }
 
     if (reader == nullptr)
@@ -338,7 +336,7 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     }
 
     AudioMetadata metadata{
-        nframes, channels, trgt_sr_val, padded_frames, format};
+        nframes, channels, trgt_sr_val, padded_frames};
 
     intnat ndims = metadata.channels > 1 ? 2 : 1;
     intnat dims[ndims];
@@ -369,19 +367,12 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
         raise_caml_exception(err, filename_str);
     }
 
-    sf_count_t read_frames = result.value();
-    metadata.frames = read_frames;
-
-    audio_metadata = caml_alloc_tuple(4);
-
-    Store_field(audio_metadata, 0, Val_long(metadata.frames));
-    Store_field(audio_metadata, 1, Val_int(metadata.channels));
-    Store_field(audio_metadata, 2, Val_int(metadata.sample_rate));
-    Store_field(audio_metadata, 3, Val_int(metadata.format));
+    caml_sample_rate = Val_long(trgt_sr_val);
 
     returns = caml_alloc_tuple(2);
     Store_field(returns, 0, audio_array);
-    Store_field(returns, 1, audio_metadata);
+    Store_field(returns, 1, caml_sample_rate);
+
     return returns;
 }
 

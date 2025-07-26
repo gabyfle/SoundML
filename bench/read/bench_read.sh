@@ -2,7 +2,14 @@
 
 OCAML_CMD="dune exec ./bench/read/perf.exe"
 PYTHON_CMD="python3 bench.py"
-CACHE_CLEAR_CMD="sync; echo 3 > /proc/sys/vm/drop_caches"
+
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    CACHE_CLEAR_CMD="sync; echo 3 > /proc/sys/vm/drop_caches"
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+    CACHE_CLEAR_CMD="purge"
+else
+    CACHE_CLEAR_CMD=""
+fi
 
 if [ "$#" -ne 6 ]; then
     echo "Usage: $0 <mode> <num_iterations> <root_directory> <sample_rate> <format> <max_files>"
@@ -43,16 +50,31 @@ valid_run_count=0
 echo "Starting reading test for: $MODE"
 echo "Command to run: $BENCH_CMD \"$ROOT_DIR\" \"$SAMPLE_RATE\" \"$FORMAT\" \"$MAX_FILES\""
 echo "Number of iterations: $NUM_ITERATIONS"
+echo "OS detected: $OSTYPE"
 echo "--------------------------------------------------"
 
 for (( i=1; i<=NUM_ITERATIONS; i++ )); do
     echo "Iteration $i / $NUM_ITERATIONS"
-    if sudo bash -c "$CACHE_CLEAR_CMD"; then # ensure that files aren't cached by the system
-        sleep 1.5
+    
+    # Clear cache based on OS
+    if [[ -n "$CACHE_CLEAR_CMD" ]]; then
+        if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            if sudo bash -c "$CACHE_CLEAR_CMD"; then
+                sleep 1.5
+            else
+                echo "Warning: Failed to clear cache on Linux. Continuing without cache clearing." >&2
+            fi
+        elif [[ "$OSTYPE" == "darwin"* ]]; then
+            if sudo $CACHE_CLEAR_CMD; then
+                sleep 1.5
+            else
+                echo "Warning: Failed to clear cache on macOS. Continuing without cache clearing." >&2
+            fi
+        fi
     else
-        echo "Error: Failed to clear cache. Probably error with sudo." >&2
-        exit 1
+        echo "Warning: Cache clearing not supported on this OS. Continuing without cache clearing." >&2
     fi
+    
     result=$( $BENCH_CMD "$ROOT_DIR" "$SAMPLE_RATE" "$FORMAT" "$MAX_FILES" )
     exit_status=$?
 

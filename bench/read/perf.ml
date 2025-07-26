@@ -73,7 +73,7 @@ let benchmark_read kind filename sample_rate =
         with ex -> Error (filename, Printexc.to_string ex) )
 
 let run_benchmark root sample_rate extension max_files =
-  let kind = Bigarray.Float32 in
+  let kind = Nx.Float32 in
   let all_files = find_ext_files root extension in
   let all_files =
     List.filteri (fun i _ -> if i >= max_files then false else true) all_files

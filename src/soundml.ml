@@ -21,8 +21,6 @@
 
 (* module Audio = Audio module Io = Io module Types = Types module Transform =
    Transform *)
-
-module Audio = Audio
 module Io = Io
 module Window = Window
 module Aformat = Aformat
