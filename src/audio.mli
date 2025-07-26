@@ -51,6 +51,8 @@ type 'a t = {meta: Metadata.t; data: (float, 'a) Nx.t}
 val create : Metadata.t -> (float, 'a) Nx.t -> 'a t
 (** Creates a new audio object from a given ndarray. *)
 
+val data : 'a t -> (float, 'a) Nx.t
+
 val get : int -> 'a t -> float
 
 val sr : 'a t -> int

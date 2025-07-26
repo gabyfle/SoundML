@@ -37,5 +37,18 @@ let () =
           | Some deps ->
               deps )
       in
+      (* Add C++ standard library to the linking flags *)
+      let cpp_libs =
+        match Sys.os_type with
+        | "Unix" ->
+            (* On macOS and Linux, we need the C++ standard library *)
+            if Sys.command "uname -s | grep -q Darwin" = 0 then ["-lc++"]
+              (* macOS uses libc++ *)
+            else ["-lstdc++"] (* Linux typically uses libstdc++ *)
+        | _ ->
+            ["-lstdc++"]
+        (* Default fallback *)
+      in
+      let all_libs = conf.libs @ cpp_libs in
       C.Flags.write_sexp "c_flags.sexp" conf.cflags ;
-      C.Flags.write_sexp "c_library_flags.sexp" conf.libs )
+      C.Flags.write_sexp "c_library_flags.sexp" all_libs )

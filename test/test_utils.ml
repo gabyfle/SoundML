@@ -19,17 +19,15 @@
 (*                                                                           *)
 (*****************************************************************************)
 
+open Soundml
+
 type data = (float, Bigarray.float32_elt) Nx.t
 
 let data_testable : data Alcotest.testable =
   ( module struct
     type t = data
 
-    let pp : t Fmt.t =
-     fun fmt ndarray ->
-      let shape_array = Nx.shape ndarray in
-      let pp_shape = Fmt.brackets (Fmt.array ~sep:Fmt.semi Fmt.int) in
-      Fmt.pf fmt "%a" pp_shape shape_array
+    let pp : t Fmt.t = Nx.pp
 
     let equal : t -> t -> bool = Tutils.Check.rallclose
   end )
@@ -136,5 +134,387 @@ module Test_pad_center = struct
         test_zero_target_non_empty_input ]
 end
 
+module Test_fftfreq = struct
+  let test_n8_d1 () =
+    let expected =
+      Nx.create Float32 [|8|]
+        [|0.; 0.125; 0.25; 0.375; -0.5; -0.375; -0.25; -0.125|]
+    in
+    let actual = Utils.fftfreq 8 1.0 in
+    Alcotest.check data_testable "fftfreq_n8_d1" expected actual
+
+  let test_n7_d_half () =
+    let expected =
+      Nx.create Float32 [|7|]
+        [| 0.
+         ; 0.2857143
+         ; 0.5714286
+         ; 0.85714287
+         ; -0.85714287
+         ; -0.5714286
+         ; -0.2857143 |]
+    in
+    let actual = Utils.fftfreq 7 0.5 in
+    Alcotest.check data_testable "fftfreq_n7_d_half" expected actual
+
+  let suite =
+    [ Alcotest.test_case "n8_d1" `Quick test_n8_d1
+    ; Alcotest.test_case "n7_d_half" `Quick test_n7_d_half ]
+end
+
+module Test_rfftfreq = struct
+  let test_n8_d1 () =
+    let expected = Nx.create Float32 [|5|] [|0.; 0.125; 0.25; 0.375; 0.5|] in
+    let actual = Utils.rfftfreq Float32 8 1.0 in
+    Alcotest.check data_testable "rfftfreq_n8_d1" expected actual
+
+  let test_n7_d_half () =
+    let expected =
+      Nx.create Float32 [|4|] [|0.; 0.2857143; 0.5714286; 0.85714287|]
+    in
+    let actual = Utils.rfftfreq Float32 7 0.5 in
+    Alcotest.check data_testable "rfftfreq_n7_d_half" expected actual
+
+  let suite =
+    [ Alcotest.test_case "n8_d1" `Quick test_n8_d1
+    ; Alcotest.test_case "n7_d_half" `Quick test_n7_d_half ]
+end
+
+module Test_melfreq = struct
+  let test_default () =
+    let expected =
+      Nx.create Float32 [|128|]
+        [| 0.
+         ; 26.199787
+         ; 52.399574
+         ; 78.59936
+         ; 104.79915
+         ; 130.99893
+         ; 157.19872
+         ; 183.39851
+         ; 209.5983
+         ; 235.79808
+         ; 261.99786
+         ; 288.19766
+         ; 314.39743
+         ; 340.59723
+         ; 366.79703
+         ; 392.9968
+         ; 419.1966
+         ; 445.3964
+         ; 471.59616
+         ; 497.79596
+         ; 523.9957
+         ; 550.19556
+         ; 576.3953
+         ; 602.5951
+         ; 628.79486
+         ; 654.9947
+         ; 681.19446
+         ; 707.3942
+         ; 733.59406
+         ; 759.7938
+         ; 785.9936
+         ; 812.1934
+         ; 838.3932
+         ; 864.59296
+         ; 890.7928
+         ; 916.99255
+         ; 943.1923
+         ; 969.39215
+         ; 995.5919
+         ; 1022.7277
+         ; 1050.7377
+         ; 1079.5149
+         ; 1109.0801
+         ; 1139.4551
+         ; 1170.662
+         ; 1202.7236
+         ; 1235.6632
+         ; 1269.505
+         ; 1304.2737
+         ; 1339.9945
+         ; 1376.6937
+         ; 1414.3981
+         ; 1453.1349
+         ; 1492.9327
+         ; 1533.8206
+         ; 1575.8281
+         ; 1618.9862
+         ; 1663.3263
+         ; 1708.8807
+         ; 1755.6829
+         ; 1803.7667
+         ; 1853.1675
+         ; 1903.9211
+         ; 1956.065
+         ; 2009.6367
+         ; 2064.6758
+         ; 2121.2222
+         ; 2179.3174
+         ; 2239.0034
+         ; 2300.3245
+         ; 2363.3247
+         ; 2428.0503
+         ; 2494.5486
+         ; 2562.8682
+         ; 2633.059
+         ; 2705.172
+         ; 2779.26
+         ; 2855.3772
+         ; 2933.579
+         ; 3013.9226
+         ; 3096.4666
+         ; 3181.2712
+         ; 3268.3984
+         ; 3357.9119
+         ; 3449.877
+         ; 3544.3606
+         ; 3641.4321
+         ; 3741.162
+         ; 3843.6233
+         ; 3948.8909
+         ; 4057.0413
+         ; 4168.154
+         ; 4282.309
+         ; 4399.5913
+         ; 4520.0854
+         ; 4643.8794
+         ; 4771.064
+         ; 4901.732
+         ; 5035.978
+         ; 5173.9014
+         ; 5315.602
+         ; 5461.183
+         ; 5610.7515
+         ; 5764.4165
+         ; 5922.2896
+         ; 6084.487
+         ; 6251.126
+         ; 6422.329
+         ; 6598.221
+         ; 6778.93
+         ; 6964.5884
+         ; 7155.3315
+         ; 7351.299
+         ; 7552.633
+         ; 7759.481
+         ; 7971.994
+         ; 8190.3276
+         ; 8414.641
+         ; 8645.098
+         ; 8881.865
+         ; 9125.118
+         ; 9375.032
+         ; 9631.792
+         ; 9895.583
+         ; 10166.599
+         ; 10445.037
+         ; 10731.102
+         ; 11025. |]
+    in
+    let actual = Utils.melfreq Float32 in
+    Alcotest.check data_testable "melfreq_default" expected actual
+
+  let test_custom () =
+    let expected =
+      Nx.create Float32 [|10|]
+        [| 1000.
+         ; 1203.3604
+         ; 1431.0475
+         ; 1685.9714
+         ; 1971.3903
+         ; 2290.952
+         ; 2648.741
+         ; 3049.3298
+         ; 3497.8389
+         ; 4000. |]
+    in
+    let actual =
+      Utils.melfreq ~nmels:10 ~fmin:1000. ~fmax:4000. ~htk:true Float32
+    in
+    Alcotest.check data_testable "melfreq_custom" expected actual
+
+  let suite =
+    [ Alcotest.test_case "default" `Quick test_default
+    ; Alcotest.test_case "custom" `Quick test_custom ]
+end
+
+module Test_unwrap = struct
+  let test_1d () =
+    let p =
+      Nx.create Float32 [|8|] [|0.; 0.1; 0.2; 5.0; 5.1; 5.2; -0.1; -0.2|]
+    in
+    let expected =
+      Nx.create Float32 [|8|]
+        [| 0.
+         ; 0.1
+         ; 0.2
+         ; -1.283185
+         ; -1.1831851
+         ; -1.0831852
+         ; -0.09999905
+         ; -0.19999905 |]
+    in
+    let actual = Utils.unwrap p in
+    Alcotest.check data_testable "unwrap_1d" expected actual
+
+  let test_2d_axis0 () =
+    let p = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
+    let expected = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
+    let actual = Utils.unwrap ~axis:0 p in
+    Alcotest.check data_testable "unwrap_2d_axis0" expected actual
+
+  let test_2d_axis1 () =
+    let p = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
+    let expected =
+      Nx.create Float32 [|2; 3|] [|0.; 0.1; -0.08318615; 0.; 0.1; -0.08318615|]
+    in
+    let actual = Utils.unwrap ~axis:1 p in
+    Alcotest.check data_testable "unwrap_2d_axis1" expected actual
+
+  let suite =
+    [ Alcotest.test_case "1d" `Quick test_1d
+    ; Alcotest.test_case "2d_axis0" `Quick test_2d_axis0
+    ; Alcotest.test_case "2d_axis1" `Quick test_2d_axis1 ]
+end
+
+module Test_outer = struct
+  let test_add () =
+    let x = Nx.create Float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Nx.create Float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let expected =
+      Nx.create Float32 [|3; 4|]
+        [|5.; 6.; 7.; 8.; 6.; 7.; 8.; 9.; 7.; 8.; 9.; 10.|]
+    in
+    let actual = Utils.outer Nx.add x y in
+    Alcotest.check data_testable "outer_add" expected actual
+
+  let test_mul () =
+    let x = Nx.create Float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Nx.create Float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let expected =
+      Nx.create Float32 [|3; 4|]
+        [|4.; 5.; 6.; 7.; 8.; 10.; 12.; 14.; 12.; 15.; 18.; 21.|]
+    in
+    let actual = Utils.outer Nx.mul x y in
+    Alcotest.check data_testable "outer_mul" expected actual
+
+  let suite =
+    [ Alcotest.test_case "add" `Quick test_add
+    ; Alcotest.test_case "mul" `Quick test_mul ]
+end
+
+module Test_convert = struct
+  let test_hz_to_mel_htk () =
+    let freqs =
+      Nx.create Float32 [|10|]
+        [|0.; 1225.; 2450.; 3675.; 4900.; 6125.; 7350.; 8575.; 9800.; 11025.|]
+    in
+    let expected =
+      Nx.create Float32 [|10|]
+        [| 0.
+         ; 1140.0684
+         ; 1695.0864
+         ; 2065.3086
+         ; 2343.5186
+         ; 2566.467
+         ; 2752.5107
+         ; 2912.1501
+         ; 3051.957
+         ; 3176.3184 |]
+    in
+    let actual = Utils.Convert.hz_to_mel ~htk:true freqs in
+    Alcotest.check data_testable "hz_to_mel_htk" expected actual
+
+  let test_mel_to_hz_htk () =
+    let mels =
+      Nx.create Float32 [|10|]
+        [| 0.
+         ; 444.44446
+         ; 888.8889
+         ; 1333.3334
+         ; 1777.7778
+         ; 2222.2222
+         ; 2666.6667
+         ; 3111.111
+         ; 3555.5557
+         ; 4000. |]
+    in
+    let expected =
+      Nx.create Float32 [|10|]
+        [| 0.
+         ; 338.40695
+         ; 840.4128
+         ; 1585.1075
+         ; 2689.8167
+         ; 4328.584
+         ; 6759.595
+         ; 10365.85
+         ; 15715.508
+         ; 23651.396 |]
+    in
+    let actual = Utils.Convert.mel_to_hz ~htk:true mels in
+    Alcotest.check data_testable "mel_to_hz_htk" expected actual
+
+  let test_power_to_db () =
+    let s =
+      Nx.create Float32 [|2; 4|]
+        [|1.; 0.1; 0.01; 0.001; 1e-11; 1e-12; 1e-13; 1e-14|]
+    in
+    let expected_ref1_topdb80 =
+      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+    in
+    let actual_ref1_topdb80 =
+      Utils.Convert.power_to_db ~top_db:(Some 80.0) (Utils.Convert.RefFloat 1.0)
+        s
+    in
+    Alcotest.check data_testable "power_to_db ref=1.0 top_db=80.0"
+      expected_ref1_topdb80 actual_ref1_topdb80 ;
+    let expected_refmax_topdb80 =
+      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+    in
+    let actual_refmax_topdb80 =
+      Utils.Convert.power_to_db ~top_db:(Some 80.0)
+        (Utils.Convert.RefFunction (fun x -> Nx.max x |> Nx.get_item []))
+        s
+    in
+    Alcotest.check data_testable "power_to_db ref=max top_db=80.0"
+      expected_refmax_topdb80 actual_refmax_topdb80 ;
+    let expected_ref1_topdbNone =
+      Nx.create Float32 [|2; 4|]
+        [|0.; -10.; -20.; -30.; -110.; -120.; -130.; -140.|]
+    in
+    let actual_ref1_topdbNone =
+      Utils.Convert.power_to_db ~amin:1e-10 ~top_db:None
+        (Utils.Convert.RefFloat 1.0) s
+    in
+    Alcotest.check data_testable "power_to_db ref=1.0 top_db=None"
+      expected_ref1_topdbNone actual_ref1_topdbNone
+
+  let test_db_to_power () =
+    let db_s =
+      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+    in
+    let expected =
+      Nx.create Float32 [|2; 4|] [|1.; 0.1; 0.01; 0.001; 1e-8; 1e-8; 1e-8; 1e-8|]
+    in
+    let actual = Utils.Convert.db_to_power (Utils.Convert.RefFloat 1.0) db_s in
+    Alcotest.check data_testable "db_to_power" expected actual
+
+  let suite =
+    [ Alcotest.test_case "hz_to_mel htk" `Quick test_hz_to_mel_htk
+    ; Alcotest.test_case "mel_to_hz htk" `Quick test_mel_to_hz_htk
+    ; Alcotest.test_case "power_to_db" `Quick test_power_to_db
+    ; Alcotest.test_case "db_to_power" `Quick test_db_to_power ]
+end
+
 let () =
-  Alcotest.run "SoundML Utils Tests" [("Pad Center", Test_pad_center.suite)]
+  Alcotest.run "SoundML Utils Tests"
+    [ ("Pad Center", Test_pad_center.suite)
+    ; ("FFT Frequencies", Test_fftfreq.suite)
+    ; ("RFFT Frequencies", Test_rfftfreq.suite)
+    ; ("Mel Frequencies", Test_melfreq.suite)
+    ; ("Unwrap", Test_unwrap.suite)
+    ; ("Outer", Test_outer.suite)
+    ; ("Conversions", Test_convert.suite) ]

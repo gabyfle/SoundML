@@ -19,22 +19,26 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Types
-
-module Config : sig
-  type t =
-    { n_fft: int
-    ; hop_size: int
-    ; win_length: int
-    ; window: Window.window
-    ; center: bool }
-
-  val default : t
-end
+(** This module provides functions to transform audio signals.
+*)
 
 val stft :
-  'a 'b.
-     ?config:Config.t
-  -> ('a, 'b) precision
-  -> (float, 'a) Audio.G.t
-  -> (Complex.t, 'b) Audio.G.t
+     ?n_fft:int
+  -> ?hop_length:int
+  -> ?win_length:int
+  -> ?window:(float, 'a) Nx.t
+  -> ?center:bool
+  -> (float, 'a) Nx.t
+  -> (Complex.t, 'b) Nx.t
+(** Computes the Short-Time Fourier Transform (STFT) of a
+    signal.
+
+    @param n_fft The number of FFT components.
+    @param hop_length
+      The number of samples between consecutive frames.
+    @param win_length The length of the window.
+    @param window The window function to use.
+    @param center Whether to pad the signal on both sides.
+    @param pad_mode The padding mode to use.
+    @param signal The input signal.
+    @return The STFT of the signal. *)

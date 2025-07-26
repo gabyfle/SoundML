@@ -20,7 +20,6 @@
 (*****************************************************************************)
 
 open Bigarray
-open Types
 
 module Config = struct
   type t =
@@ -42,10 +41,9 @@ module G = Owl.Dense.Ndarray.Generic
 
 let to_complex (x : float) : Complex.t = Complex.{re= x; im= 0.}
 
-let stft : type a b.
-    ?config:Config.t -> (a, b) precision -> (float, a) G.t -> (Complex.t, b) G.t
+let stft : type a b. ?config:Config.t -> (float, a) Nx.t -> (Complex.t, b) Nx.t
     =
- fun ?(config : Config.t = Config.default) p (x : (float, a) G.t) ->
+ fun ?(config : Config.t = Config.default) (x : (float, a) G.t) ->
   let kd : (Complex.t, b) kind =
     match p with B32 -> Complex32 | B64 -> Complex64
   in

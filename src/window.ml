@@ -29,8 +29,7 @@ let cosine_sum ?(fftbins = false) (dtype : ('a, 'b) Nx.dtype) (a : float array)
   else
     let sym = not fftbins in
     let fac =
-      if sym then
-        Nx.linspace dtype (-.Float.pi) Float.pi m
+      if sym then Nx.linspace dtype (-.Float.pi) Float.pi m
       else
         let full_range = Nx.linspace dtype (-.Float.pi) Float.pi (m + 1) in
         Nx.slice [R [0; m]] full_range

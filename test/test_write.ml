@@ -56,13 +56,14 @@ let file_exists name =
 
 let create_test_audio channels samples sample_rate format =
   let shape = if channels > 1 then [|channels; samples|] else [|samples|] in
-  let data = Audio.G.create Bigarray.Float32 shape 0. in
+  let data = Nx.zeros Nx.float32 shape in
   let freq = 23000. in
   for channel = 0 to channels - 1 do
     for i = 0 to samples - 1 do
-      let idx = if channels > 1 then [|channel; i|] else [|i|] in
-      Audio.G.set data idx
+      let idx = if channels > 1 then [channel; i] else [i] in
+      Nx.set_item idx
         (sin (2. *. Float.pi *. (freq *. Float.of_int channel)))
+        data
     done
   done ;
   let meta = Audio.Metadata.create channels samples sample_rate format in
@@ -71,13 +72,13 @@ let create_test_audio channels samples sample_rate format =
 
 let create_empty_audio channels sample_rate format =
   let shape = if channels > 1 then [|channels; 0|] else [|0|] in
-  let data = Audio.G.create Bigarray.Float32 shape 0. in
+  let data = Nx.zeros Nx.float32 shape in
   let meta = Audio.Metadata.create channels 0 sample_rate format in
   let audio_data = Audio.create meta data in
   (audio_data, sample_rate)
 
 let audio_testable =
-  let pp fmt (a : float32_elt Audio.audio) =
+  let pp fmt (a : float32_elt Audio.t) =
     Format.fprintf fmt "{ channels=%d; samples/channel=%d; }" (Audio.channels a)
       (if Audio.channels a > 0 then Audio.samples a else 0)
   in
@@ -101,7 +102,7 @@ let check_write_read name
         (file_exists filename) true ;
       let read_audio =
         try
-          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Bigarray.Float32
+          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Nx.Float32
             filename
         with ex ->
           Alcotest.failf "Failed to read back file %s: %s" filename
