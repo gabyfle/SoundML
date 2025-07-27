@@ -11,7 +11,6 @@
    :standard
    (:include c_flags.sexp)
    -O3
-   -llto
    -std=c++23))
  (c_library_flags
   (:include c_library_flags.sexp))

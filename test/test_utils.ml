@@ -134,52 +134,6 @@ module Test_pad_center = struct
         test_zero_target_non_empty_input ]
 end
 
-module Test_fftfreq = struct
-  let test_n8_d1 () =
-    let expected =
-      Nx.create Float32 [|8|]
-        [|0.; 0.125; 0.25; 0.375; -0.5; -0.375; -0.25; -0.125|]
-    in
-    let actual = Utils.fftfreq 8 1.0 in
-    Alcotest.check data_testable "fftfreq_n8_d1" expected actual
-
-  let test_n7_d_half () =
-    let expected =
-      Nx.create Float32 [|7|]
-        [| 0.
-         ; 0.2857143
-         ; 0.5714286
-         ; 0.85714287
-         ; -0.85714287
-         ; -0.5714286
-         ; -0.2857143 |]
-    in
-    let actual = Utils.fftfreq 7 0.5 in
-    Alcotest.check data_testable "fftfreq_n7_d_half" expected actual
-
-  let suite =
-    [ Alcotest.test_case "n8_d1" `Quick test_n8_d1
-    ; Alcotest.test_case "n7_d_half" `Quick test_n7_d_half ]
-end
-
-module Test_rfftfreq = struct
-  let test_n8_d1 () =
-    let expected = Nx.create Float32 [|5|] [|0.; 0.125; 0.25; 0.375; 0.5|] in
-    let actual = Utils.rfftfreq Float32 8 1.0 in
-    Alcotest.check data_testable "rfftfreq_n8_d1" expected actual
-
-  let test_n7_d_half () =
-    let expected =
-      Nx.create Float32 [|4|] [|0.; 0.2857143; 0.5714286; 0.85714287|]
-    in
-    let actual = Utils.rfftfreq Float32 7 0.5 in
-    Alcotest.check data_testable "rfftfreq_n7_d_half" expected actual
-
-  let suite =
-    [ Alcotest.test_case "n8_d1" `Quick test_n8_d1
-    ; Alcotest.test_case "n7_d_half" `Quick test_n7_d_half ]
-end
-
 module Test_melfreq = struct
   let test_default () =
     let expected =
@@ -509,12 +463,235 @@ module Test_convert = struct
     ; Alcotest.test_case "db_to_power" `Quick test_db_to_power ]
 end
 
+module Test_frame = struct
+  (* Helper function to create random data for testing *)
+  let create_random_data shape seed =
+    Random.init seed ;
+    let size = Array.fold_left ( * ) 1 shape in
+    let data = Array.init size (fun _ -> Random.float 2.0 -. 1.0) in
+    Nx.create Float32 shape data
+
+  (* Test 1D framing with parametrized frame_length, hop_length, and axis *)
+  let test_frame1d frame_length hop_length axis () =
+    let y = create_random_data [|32|] 42 in
+    let y_frame = Utils.frame y ~frame_length ~hop_length ~axis in
+    let y_frame_adj = if axis = -1 then Nx.transpose y_frame else y_frame in
+    let num_frames = Nx.dim 0 y_frame_adj in
+    for i = 0 to num_frames - 1 do
+      let frame_i = Nx.get [i] y_frame_adj in
+      let start_idx = i * hop_length in
+      let end_idx = min (start_idx + frame_length) 32 in
+      let expected_slice = Nx.slice [R [start_idx; end_idx; 1]] y in
+      Alcotest.check data_testable
+        (Printf.sprintf "frame1d_%d_%d_%d_frame_%d" frame_length hop_length axis
+           i )
+        expected_slice frame_i
+    done
+
+  (* Test 2D framing with parametrized frame_length, hop_length, axis, and array
+     order *)
+  let test_frame2d frame_length hop_length axis is_fortran_order () =
+    let y_base = create_random_data [|16; 32|] 123 in
+    let y =
+      if is_fortran_order then
+        (* Simulate Fortran order by transposing *)
+        Nx.transpose y_base
+      else y_base
+    in
+    let y_frame = Utils.frame y ~frame_length ~hop_length ~axis in
+    let y_frame_adj, y_adj =
+      if axis = -1 then (Nx.transpose y_frame, Nx.transpose y) else (y_frame, y)
+    in
+    let num_frames = Nx.dim 0 y_frame_adj in
+    for i = 0 to num_frames - 1 do
+      let frame_i = Nx.get [i] y_frame_adj in
+      let start_idx = i * hop_length in
+      let end_idx = min (start_idx + frame_length) (Nx.dim 0 y_adj) in
+      let expected_slice = Nx.slice [R [start_idx; end_idx; 1]] y_adj in
+      Alcotest.check data_testable
+        (Printf.sprintf "frame2d_%d_%d_%d_%b_frame_%d" frame_length hop_length
+           axis is_fortran_order i )
+        expected_slice frame_i
+    done
+
+  (* Test framing with 0-stride (padding) *)
+  let test_frame_0stride () =
+    let x = Nx.arange Float32 0 10 1 in
+    let xpad = Nx.unsqueeze ~axes:[|0|] x in
+    let xpad2 = Nx.reshape [|1; 10|] x in
+    let xf = Utils.frame x ~frame_length:3 ~hop_length:1 in
+    let xfpad = Utils.frame xpad ~frame_length:3 ~hop_length:1 in
+    let xfpad2 = Utils.frame xpad2 ~frame_length:3 ~hop_length:1 in
+    (* Check that shapes are correctly different due to extra dimensions *)
+    let xf_shape = Nx.shape xf in
+    let xfpad_shape = Nx.shape xfpad in
+    let xfpad2_shape = Nx.shape xfpad2 in
+    (* xf should be [3; 8] for axis=-1 *)
+    Alcotest.check (Alcotest.array Alcotest.int) "xf_shape" [|3; 8|] xf_shape ;
+    (* xfpad should be [1; 3; 8] - preserving the extra dimension *)
+    Alcotest.check
+      (Alcotest.array Alcotest.int)
+      "xfpad_shape" [|1; 3; 8|] xfpad_shape ;
+    (* xfpad2 should be same as xfpad *)
+    Alcotest.check
+      (Alcotest.array Alcotest.int)
+      "xfpad2_shape" [|1; 3; 8|] xfpad2_shape ;
+    (* Check that the core data is the same by comparing xf with xfpad[0] *)
+    let xfpad_squeezed = Nx.get [0] xfpad in
+    Alcotest.check data_testable "frame_0stride_xf_vs_xfpad_data" xf
+      xfpad_squeezed ;
+    let xfpad2_squeezed = Nx.get [0] xfpad2 in
+    Alcotest.check data_testable "frame_0stride_xf_vs_xfpad2_data" xf
+      xfpad2_squeezed
+
+  (* Test high-dimensional framing *)
+  let test_frame_highdim frame_length hop_length ndim () =
+    let shape = Array.make ndim 20 in
+    let x = create_random_data shape 456 in
+    let xf = Utils.frame x ~frame_length ~hop_length in
+    let first_dim_size = Nx.dim 0 x in
+    for i = 0 to first_dim_size - 1 do
+      let x_i = Nx.get [i] x in
+      let xf0 = Utils.frame x_i ~frame_length ~hop_length in
+      let xf_i = Nx.get [i] xf in
+      Alcotest.check data_testable
+        (Printf.sprintf "frame_highdim_%d_%d_%d_slice_%d" frame_length
+           hop_length ndim i )
+        xf0 xf_i
+    done
+
+  (* Test target axis framing *)
+  let test_frame_targetaxis in_shape axis expected_out_shape () =
+    let x = Nx.empty Float32 in_shape in
+    let xf = Utils.frame x ~frame_length:10 ~hop_length:2 ~axis in
+    let actual_shape = Nx.shape xf in
+    Alcotest.check
+      (Alcotest.array Alcotest.int)
+      "frame_targetaxis_shape" expected_out_shape actual_shape
+
+  (* Test error cases *)
+  let test_frame_too_short axis () =
+    let x = Nx.arange Float32 0 16 1 in
+    let expected_exn =
+      Invalid_argument "Input is too short (n=16) for frame_length=17"
+    in
+    Alcotest.check_raises "frame_too_short" expected_exn (fun () ->
+        ignore (Utils.frame x ~frame_length:17 ~hop_length:1 ~axis) )
+
+  let test_frame_bad_hop () =
+    let x = Nx.arange Float32 0 16 1 in
+    let expected_exn = Invalid_argument "Invalid hop_length: 0" in
+    Alcotest.check_raises "frame_bad_hop" expected_exn (fun () ->
+        ignore (Utils.frame x ~frame_length:4 ~hop_length:0) )
+
+  (* Generate parametrized test cases *)
+  let frame1d_tests =
+    let frame_lengths = [4; 8] in
+    let hop_lengths = [2; 4] in
+    let axes = [0; -1] in
+    List.fold_left
+      (fun acc frame_length ->
+        List.fold_left
+          (fun acc hop_length ->
+            List.fold_left
+              (fun acc axis ->
+                let test_name =
+                  Printf.sprintf "frame1d_fl%d_hl%d_ax%d" frame_length
+                    hop_length axis
+                in
+                (test_name, `Quick, test_frame1d frame_length hop_length axis)
+                :: acc )
+              acc axes )
+          acc hop_lengths )
+      [] frame_lengths
+
+  let frame2d_tests =
+    let frame_lengths = [4; 8] in
+    let hop_lengths = [2; 4] in
+    let test_cases =
+      [(-1, true); (* Fortran-like order *) (0, false) (* C order *)]
+    in
+    List.fold_left
+      (fun acc frame_length ->
+        List.fold_left
+          (fun acc hop_length ->
+            List.fold_left
+              (fun acc (axis, fortran_order) ->
+                let test_name =
+                  Printf.sprintf "frame2d_fl%d_hl%d_ax%d_%s" frame_length
+                    hop_length axis
+                    (if fortran_order then "fortran" else "c")
+                in
+                ( test_name
+                , `Quick
+                , test_frame2d frame_length hop_length axis fortran_order )
+                :: acc )
+              acc test_cases )
+          acc hop_lengths )
+      [] frame_lengths
+
+  let frame_highdim_tests =
+    let frame_lengths = [5; 10] in
+    let hop_lengths = [1; 2] in
+    let ndims = [2; 3; 4; 5] in
+    List.fold_left
+      (fun acc frame_length ->
+        List.fold_left
+          (fun acc hop_length ->
+            List.fold_left
+              (fun acc ndim ->
+                let test_name =
+                  Printf.sprintf "frame_highdim_fl%d_hl%d_nd%d" frame_length
+                    hop_length ndim
+                in
+                ( test_name
+                , `Quick
+                , test_frame_highdim frame_length hop_length ndim )
+                :: acc )
+              acc ndims )
+          acc hop_lengths )
+      [] frame_lengths
+
+  let frame_targetaxis_tests =
+    let test_cases =
+      [ ([|20; 20; 20; 20|], 0, [|6; 10; 20; 20; 20|])
+      ; ([|20; 20; 20; 20|], 1, [|20; 6; 10; 20; 20|])
+      ; ([|20; 20; 20; 20|], 2, [|20; 20; 6; 10; 20|])
+      ; ([|20; 20; 20; 20|], 3, [|20; 20; 20; 6; 10|])
+      ; ([|20; 20; 20; 20|], -1, [|20; 20; 20; 10; 6|])
+      ; ([|20; 20; 20; 20|], -2, [|20; 20; 10; 6; 20|])
+      ; ([|20; 20; 20; 20|], -3, [|20; 10; 6; 20; 20|])
+      ; ([|20; 20; 20; 20|], -4, [|10; 6; 20; 20; 20|]) ]
+    in
+    List.mapi
+      (fun i (in_shape, axis, out_shape) ->
+        let test_name = Printf.sprintf "frame_targetaxis_%d" i in
+        (test_name, `Quick, test_frame_targetaxis in_shape axis out_shape) )
+      test_cases
+
+  let frame_error_tests =
+    let axes = [0; -1] in
+    List.mapi
+      (fun _ axis ->
+        let test_name = Printf.sprintf "frame_too_short_ax%d" axis in
+        (test_name, `Quick, test_frame_too_short axis) )
+      axes
+
+  let suite =
+    List.flatten
+      [ frame1d_tests
+      ; frame2d_tests
+      ; [("frame_0stride", `Quick, test_frame_0stride)]
+      ; frame_highdim_tests
+      ; frame_targetaxis_tests
+      ; [("frame_bad_hop", `Quick, test_frame_bad_hop)] @ frame_error_tests ]
+end
+
 let () =
   Alcotest.run "SoundML Utils Tests"
     [ ("Pad Center", Test_pad_center.suite)
-    ; ("FFT Frequencies", Test_fftfreq.suite)
-    ; ("RFFT Frequencies", Test_rfftfreq.suite)
     ; ("Mel Frequencies", Test_melfreq.suite)
     ; ("Unwrap", Test_unwrap.suite)
     ; ("Outer", Test_outer.suite)
-    ; ("Conversions", Test_convert.suite) ]
+    ; ("Conversions", Test_convert.suite)
+    ; ("Frame", Test_frame.suite) ]

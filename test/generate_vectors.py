@@ -129,11 +129,11 @@ class STFTVectorGenerator(VectorGenerator):
 
     BASE_IDENTIFIER: str = "stft"
 
-    nffts = [512]#, #1024, 2048, 4096]
-    window_lengths = [512]#64, 128, 256, 512]
-    hop_sizes = [128]#, 256, 512]
+    nffts = [512, 1024, 2048, 4096]
+    window_lengths = [64, 128, 256, 512]
+    hop_sizes = [128, 256, 512]
     centers = [False, False, False]
-    window_types = ["hann"]#, "hamming", "blackman", "boxcar"]
+    window_types = ["hann", "hamming", "blackman", "boxcar"]
 
     def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
         """
@@ -163,7 +163,7 @@ class STFTVectorGenerator(VectorGenerator):
             dtype=np.complex64,
             center=center,
         )
-        stft = np.ascontiguousarray(stft, dtype=np.complex64)
+        stft = np.ascontiguousarray(stft, dtype=np.cdouble)
         params = Parameters(params)
 
         return (stft, params)
