@@ -9,7 +9,7 @@
 (library
  (name window)
  (package soundml)
- (libraries nx nx.c)
+ (libraries nx)
  (modules window)
  (instrumentation
   (backend bisect_ppx))
@@ -18,7 +18,7 @@
 (library
  (name utils)
  (package soundml)
- (libraries nx nx.c nx.metal)
+ (libraries nx)
  (modules utils)
  (instrumentation
   (backend bisect_ppx))
@@ -28,7 +28,7 @@
  (name transform)
  (package soundml)
  (modules transform)
- (libraries nx nx.metal nx.c window utils)
+ (libraries nx window utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))
