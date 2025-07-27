@@ -92,7 +92,7 @@ let read : type a.
   let data, sample_rate = read_func typ filename res_typ sample_rate in
   let data = Nx.of_bigarray data in
   let data = if mono then to_mono data else data in
-  let data = Nx.transpose data in
+  let data = if Nx.ndim data > 1 then Nx.transpose data else data in
   (data, sample_rate)
 
 external caml_write_audio_file_f32 :

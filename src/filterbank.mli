@@ -29,12 +29,12 @@ val mel :
      ?fmax:float option
   -> ?htk:bool
   -> ?norm:norm option
-  -> (float, 'b) Nx.dtype
+  -> (float, Bigarray.float64_elt) Nx.dtype
   -> int
   -> int
   -> int
   -> float
-  -> (float, 'b) Nx.t
+  -> (float, Bigarray.float64_elt) Nx.t
 (** Creates a Mel filterbank. A Mel filterbank is a set of
     filters that are spaced according to the Mel scale.
 

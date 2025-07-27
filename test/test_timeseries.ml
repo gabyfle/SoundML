@@ -31,7 +31,7 @@ module Timeseries = struct
   let typ = "timeseries"
 
   let generate (_ : (a, b) Nx.dtype) (_ : string * string * Parameters.t)
-      (audio : (float, 'c) Nx.t) =
+      (audio : (float, Bigarray.float64_elt) Nx.t) =
     Nx.cast dtype audio
 end
 

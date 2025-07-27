@@ -128,20 +128,6 @@ let pad_center (data : ('a, 'b) t) (target_size : int) (value : 'a) : ('a, 'b) t
     let pad_right = pad_total - pad_left in
     Nx.pad [|(pad_left, pad_right)|] value data
 
-let fftfreq (n : int) (d : float) =
-  let nslice = ((n - 1) / 2) + 1 in
-  let fhalf = Nx.arange Float32 0 nslice 1 in
-  let shalf = Nx.arange Float32 (-n / 2) 0 1 in
-  let v = Nx.concatenate ~axis:0 [fhalf; shalf] in
-  Nx.mul (Nx.scalar Float32 (1. /. (d *. float_of_int n))) v
-
-let rfftfreq (kd : ('a, 'b) Nx.dtype) (n : int) (d : float) =
-  let nslice = n / 2 in
-  let res = Nx.arange kd 0 (nslice + 1) 1 in
-  let factor = 1. /. (d *. float_of_int n) in
-  let factor_nx = Nx.scalar kd factor in
-  Nx.mul factor_nx res
-
 let melfreq ?(nmels = 128) ?(fmin = 0.) ?(fmax = 11025.) ?(htk = false)
     (kd : ('a, 'b) Nx.dtype) =
   let bounds = Nx.create kd [|2|] [|fmin; fmax|] |> Convert.hz_to_mel ~htk in
@@ -222,3 +208,86 @@ let outer (op : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t) (x : ('a, 'b) t)
   let x = Nx.reshape [|nx; 1|] x in
   let y = Nx.reshape [|1; ny|] y in
   op x y
+
+let frame ?(axis = -1) (x : ('a, 'b) Nx.t) ~frame_length ~hop_length :
+    ('a, 'b) Nx.t =
+  if frame_length <= 0 then
+    raise (Invalid_argument "frame_length must be positive") ;
+  if hop_length < 1 then
+    raise (Invalid_argument (Printf.sprintf "Invalid hop_length: %d" hop_length)) ;
+  let ndim = Nx.ndim x in
+  let shape = Nx.shape x in
+  let axis_resolved = if axis < 0 then ndim + axis else axis in
+  if axis_resolved < 0 || axis_resolved >= ndim then
+    raise (Invalid_argument "axis out of bounds") ;
+  if shape.(axis_resolved) < frame_length then
+    raise
+      (Invalid_argument
+         (Printf.sprintf "Input is too short (n=%d) for frame_length=%d"
+            shape.(axis_resolved) frame_length ) ) ;
+  (* Calculate the number of frames *)
+  let n_frames = ((shape.(axis_resolved) - frame_length) / hop_length) + 1 in
+  let out_shape =
+    if axis < 0 then
+      (* All negative axes: append frame_length, then n_frames *)
+      let base_shape = Array.sub shape 0 axis_resolved in
+      let remaining_shape =
+        Array.sub shape (axis_resolved + 1) (ndim - axis_resolved - 1)
+      in
+      Array.concat [base_shape; [|frame_length; n_frames|]; remaining_shape]
+    else if axis = 0 then
+      (* axis=0 case: prepend n_frames, frame_length *)
+      let base_shape = Array.sub shape 1 (ndim - 1) in
+      Array.concat [[|n_frames; frame_length|]; base_shape]
+    else
+      (* General positive case: insert at axis position *)
+      let out_shape = Array.make (ndim + 1) 0 in
+      for i = 0 to axis_resolved - 1 do
+        out_shape.(i) <- shape.(i)
+      done ;
+      out_shape.(axis_resolved) <- n_frames ;
+      out_shape.(axis_resolved + 1) <- frame_length ;
+      for i = axis_resolved + 1 to ndim - 1 do
+        out_shape.(i + 1) <- shape.(i)
+      done ;
+      out_shape
+  in
+  let x_strides = Nx.strides x in
+  let itemsize = Nx.itemsize x in
+  let out_strides = Array.make (Array.length out_shape) 0 in
+  if axis < 0 then (
+    for i = 0 to axis_resolved - 1 do
+      out_strides.(i) <- x_strides.(i) / itemsize
+    done ;
+    out_strides.(axis_resolved) <- x_strides.(axis_resolved) / itemsize ;
+    (* Hop dimension stride: hop_length elements *)
+    out_strides.(axis_resolved + 1) <-
+      x_strides.(axis_resolved) / itemsize * hop_length ;
+    (* Copy remaining strides *)
+    for i = axis_resolved + 1 to ndim - 1 do
+      out_strides.(i + 1) <- x_strides.(i) / itemsize
+    done )
+  else if axis = 0 then (
+    (* axis=0 case: [n_frames, frame_length, ...] *)
+    (* Hop dimension stride: hop_length elements *)
+    out_strides.(0) <- x_strides.(axis_resolved) / itemsize * hop_length ;
+    (* Frame dimension stride: 1 element *)
+    out_strides.(1) <- x_strides.(axis_resolved) / itemsize ;
+    (* Copy remaining strides *)
+    for i = 1 to ndim - 1 do
+      out_strides.(i + 1) <- x_strides.(i) / itemsize
+    done )
+  else (
+    for i = 0 to axis_resolved - 1 do
+      out_strides.(i) <- x_strides.(i) / itemsize
+    done ;
+    out_strides.(axis_resolved) <-
+      x_strides.(axis_resolved) / itemsize * hop_length ;
+    out_strides.(axis_resolved + 1) <- x_strides.(axis_resolved) / itemsize ;
+    for i = axis_resolved + 1 to ndim - 1 do
+      out_strides.(i + 1) <- x_strides.(i) / itemsize
+    done ) ;
+  let new_view =
+    Nx_core.View.create ~offset:(Nx.offset x) ~strides:out_strides out_shape
+  in
+  Nx.with_view x new_view

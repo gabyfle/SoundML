@@ -76,7 +76,7 @@ module type Testable = sig
   val generate :
        (a, b) Nx.dtype
     -> string * string * Parameters.t
-    -> (float, 'c) Nx.t (* Audio is always float *)
+    -> (float, Bigarray.float64_elt) Nx.t (* Audio is always float *)
     -> (a, b) Nx.t
   (** Generate a testing vector given some parameters and an audio array *)
 end

@@ -19,7 +19,7 @@
  (name soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
  (description
-  "SoundML is a library built on top of Owl to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
+  "SoundML is a library built on top of RavenML to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
    (>= 5.2.0))

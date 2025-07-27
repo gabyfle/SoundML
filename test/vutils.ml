@@ -159,7 +159,7 @@ module type Testable = sig
   val generate :
        (a, b) Nx.dtype
     -> string * string * Parameters.t
-    -> (float, 'c) Nx.t
+    -> (float, Bigarray.float64_elt) Nx.t
     -> (a, b) Nx.t
 end
 
@@ -179,8 +179,12 @@ module Tests_cases (T : Testable) = struct
         Nx_io.to_float32 packed
     | Nx.Float64 ->
         Nx_io.to_float64 packed
+    | Nx.Complex32 ->
+        Nx_io.to_complex32 packed
+    | Nx.Complex64 ->
+        Nx_io.to_complex64 packed
     | _ ->
-        failwith "unsupported datatype"
+        failwith "Unsupported datatype"
 
   let create_tests (data : (string * string * Parameters.t) list) (rtol : float)
       (atol : float) : unit Alcotest.test_case list =
@@ -222,6 +226,6 @@ module Tests_cases (T : Testable) = struct
     Alcotest.run name [(typ_to_readable typ, tests)]
 end
 
-let tests = ["timeseries"]
+let tests = ["timeseries"; "stft"]
 
 let data = Testdata.create test_vectors_dir test_audio_dir tests

@@ -19,55 +19,42 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Bigarray
-
-module Config = struct
-  type t =
-    { n_fft: int
-    ; hop_size: int
-    ; win_length: int
-    ; window: Window.window
-    ; center: bool }
-
-  let default =
-    { n_fft= 2048
-    ; hop_size= 512
-    ; win_length= 2048
-    ; window= `Hanning
-    ; center= true }
-end
-
-module G = Owl.Dense.Ndarray.Generic
-
-let to_complex (x : float) : Complex.t = Complex.{re= x; im= 0.}
-
-let stft : type a b. ?config:Config.t -> (float, a) Nx.t -> (Complex.t, b) Nx.t
-    =
- fun ?(config : Config.t = Config.default) (x : (float, a) G.t) ->
-  let kd : (Complex.t, b) kind =
-    match p with B32 -> Complex32 | B64 -> Complex64
+let stft ?(n_fft = 2048) ?(hop_size = 512) ?(win_length = 2048)
+    ?(window = `Hanning) ?(center = true) (x : (float, 'a) Nx.t) :
+    (Complex.t, Nx.complex64_elt) Nx.t =
+  if n_fft <= 0 then invalid_arg "n_fft must be positive" ;
+  if hop_size <= 0 then invalid_arg "hop_size must be positive" ;
+  if win_length <= 0 then invalid_arg "win_length must be positive" ;
+  if win_length > n_fft then
+    invalid_arg "win_length cannot be larger than n_fft" ;
+  let fft_window = Window.get window Nx.float64 ~fftbins:true win_length in
+  let fft_window =
+    if win_length < n_fft then Utils.pad_center fft_window n_fft 0.0
+    else fft_window
   in
-  let window = (Window.get config.window p ~fftbins:true) config.win_length in
-  let out_shape =
-    [| (config.n_fft / 2) + 1
-     ; ((G.numel x - config.win_length) / config.hop_size) + 1 |]
+  let x_padded =
+    if center then (
+      let x_shape = Nx.shape x in
+      let pad_width = n_fft / 2 in
+      let padding = Array.make (Array.length x_shape) (0, 0) in
+      padding.(Array.length x_shape - 1) <- (pad_width, pad_width) ;
+      Nx.pad padding 0.0 x )
+    else x
   in
-  let spectrum = Audio.G.create kd out_shape Complex.zero in
-  let ym = Audio.G.zeros kd [|config.n_fft; 1|] in
-  for m = 0 to out_shape.(1) - 1 do
-    Audio.G.fill ym Complex.zero ;
-    for p = 0 to config.win_length - 1 do
-      Audio.G.(
-        ym.%{p; 0} <-
-          to_complex
-          @@ Float.mul
-               (get x [|Int.(add p (mul m config.hop_size))|])
-               window.%{p} )
-    done ;
-    let ym_fft = Owl.Fft.Generic.fft ~axis:0 ym in
-    let spectrum_slice =
-      Audio.G.get_slice [[0; out_shape.(0) - 1]; [0]] ym_fft
-    in
-    Audio.G.set_slice_ ~out:spectrum [[]; [m]] spectrum spectrum_slice
-  done ;
-  spectrum
+  let padded_shape = Nx.shape x_padded in
+  let signal_length = padded_shape.(Array.length padded_shape - 1) in
+  if n_fft > signal_length then
+    invalid_arg
+      (Printf.sprintf "n_fft=%d is too large for input signal of length=%d"
+         n_fft signal_length ) ;
+  let y_frames =
+    Utils.frame ~axis:(-1) ~frame_length:n_fft ~hop_length:hop_size x_padded
+  in
+  let frames_shape = Nx.shape y_frames in
+  let frames_ndim = Array.length frames_shape in
+  let window_shape = Array.make frames_ndim 1 in
+  window_shape.(frames_ndim - 2) <- n_fft ;
+  let fft_window_reshaped = Nx.reshape window_shape fft_window in
+  let windowed_frames = Nx.mul y_frames fft_window_reshaped in
+  let stft_result = Nx.rfft ~axis:(-2) windowed_frames in
+  stft_result
