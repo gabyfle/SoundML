@@ -15,7 +15,7 @@
   (run %{test})))
 
 (tests
- (names test_timeseries)
+ (names test_stft)
  (libraries alcotest str yojson nx.io soundml)
  (package soundml)
  (deps

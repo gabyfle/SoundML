@@ -24,6 +24,7 @@
 
 #include <vector>
 #include <memory>
+#include <algorithm>
 
 #include <cmath>
 #include <cstring>
@@ -59,59 +60,28 @@ namespace SoundML
 
             std::expected<sf_count_t, Error> process_whole(SndfileHandle &sndfile, T *data)
             {
-                size_t nsamples = static_cast<size_t>(nframes * channels);
-                size_t size_in_bytes = nsamples * sizeof(T);
-
-                intnat ndims = (channels > 1) ? 2 : 1;
-                intnat dims[ndims];
-
-                if (ndims == 1)
-                    dims[0] = static_cast<intnat>(nframes);
-                else
-                {
-                    dims[0] = static_cast<intnat>(nframes);
-                    dims[1] = static_cast<intnat>(channels);
-                }
-
-                int type_flag = 0;
-                if constexpr (std::is_same_v<T, float>)
-                    type_flag = CAML_BA_FLOAT32;
-                else if constexpr (std::is_same_v<T, double>)
-                    type_flag = CAML_BA_FLOAT64;
-                else
-                    static_assert(!std::is_same_v<T, T>, "Unsupported type T for OCaml Bigarray conversion");
-
-                T *start = data;
-                T *read_buffer = new T[SOUNDML_BUFFER_SIZE * channels];
-                if (read_buffer == nullptr)
-                    return std::unexpected(Error(-1, SOUNDML_ERR));
-
-                sf_count_t read_frames = 0;
+                T *current_dest = data;
                 sf_count_t total_read = 0;
 
                 caml_release_runtime_system();
 
-                while ((read_frames = sndfile.readf(read_buffer, SOUNDML_BUFFER_SIZE)) > 0)
+                while (total_read < nframes)
                 {
-                    size_t bytes_read = read_frames * channels * sizeof(T);
-                    size_t sample_offset = total_read * channels;
+                    sf_count_t to_read = std::min(static_cast<sf_count_t>(SOUNDML_BUFFER_SIZE), nframes - total_read);
+                    sf_count_t read_frames = sndfile.readf(current_dest, to_read);
 
-                    const T *src_chunk_ptr = read_buffer;
-                    T *dest_ptr = start + sample_offset;
-                    std::memcpy(dest_ptr, src_chunk_ptr, bytes_read);
+                    if (read_frames <= 0)
+                        break;
 
+                    current_dest += read_frames * channels;
                     total_read += read_frames;
                 }
 
                 caml_acquire_runtime_system();
 
                 if (int err = sndfile.error(); err)
-                {
-                    delete[] read_buffer;
                     return std::unexpected(Error(err, SNDFILE_ERR));
-                }
 
-                delete[] read_buffer;
                 return total_read;
             }
         };
@@ -138,7 +108,7 @@ namespace SoundML
             SoXrReader(double out_sr,
                        double in_sr,
                        resampling_t quality,
-                       unsigned threads = 1) : target_sr(out_sr),
+                       unsigned threads = 0) : target_sr(out_sr),
                                                input_sr(in_sr)
             {
                 in_t = (std::is_same_v<T, float>) ? SOXR_FLOAT32_I : SOXR_FLOAT64_I;
@@ -162,12 +132,8 @@ namespace SoundML
                 sf_count_t frames = std::ceil((sndfile.frames() * target_sr) / input_sr);
                 int channels = sndfile.channels();
 
-                size_t nsamples = static_cast<size_t>(frames * channels);
-                size_t size_in_bytes = static_cast<size_t>(nsamples * sizeof(T));
-
                 T *output = data;
 
-                sf_count_t total_read = 0;      /* total number of frames read from the source file */
                 sf_count_t total_generated = 0; /* total number of frames resampled by the resampler */
 
                 soxr_t raw_resampler = (soxr_create(
@@ -187,23 +153,29 @@ namespace SoundML
 
                 auto soxr_deleter = [](soxr_t ptr)
                 { if(ptr) soxr_delete(ptr); };
+                
                 std::unique_ptr<struct soxr, decltype(soxr_deleter)> resampler(raw_resampler, soxr_deleter);
-                T *read_buffer = new T[SOUNDML_BUFFER_SIZE * channels];
+                std::vector<T> read_buffer(SOUNDML_BUFFER_SIZE * channels);
+
+                size_t frames_read = 0;
+                soxr_in_t current_in = nullptr;
+                size_t current_ilen = 0;
+                size_t idone = 0;
+                size_t odone = 0;
 
                 bool input_finished = false;
-                while (true)
-                {
-                    size_t frames_read = 0;
-                    soxr_in_t current_in = nullptr;
-                    size_t current_ilen = 0;
 
+                caml_release_runtime_system();
+
+                while (!input_finished || odone > 0)
+                {
                     if (!input_finished)
                     {
-                        frames_read = sndfile.readf(read_buffer, SOUNDML_BUFFER_SIZE);
+                        frames_read = sndfile.readf(read_buffer.data(), SOUNDML_BUFFER_SIZE);
 
                         if (sndfile.error())
                         {
-                            delete[] read_buffer;
+                            caml_acquire_runtime_system();
                             return std::unexpected(Error(sndfile.error(), SNDFILE_ERR));
                         }
 
@@ -211,21 +183,16 @@ namespace SoundML
                             input_finished = true; /* current_in == nullptr & current_ilen = 0 */
                         else
                         {
-                            current_in = read_buffer;
+                            current_in = read_buffer.data();
                             current_ilen = frames_read;
                         }
-
-                        total_read += frames_read;
                     }
-
-                    size_t idone = 0;
-                    size_t odone = 0;
 
                     size_t remaining_output_frames = frames - total_generated;
 
                     if (remaining_output_frames == 0 && !input_finished)
                     {
-                        delete[] read_buffer;
+                        caml_acquire_runtime_system();
                         return std::unexpected(Error("Output buffer insufficient based on estimate", SOUNDML_ERR));
                     }
 
@@ -240,7 +207,7 @@ namespace SoundML
 
                     if (err)
                     {
-                        delete[] read_buffer;
+                        caml_acquire_runtime_system();
                         return std::unexpected(Error(std::string(err), SOXR_ERR));
                     }
 
@@ -252,16 +219,15 @@ namespace SoundML
 
                     if (total_generated > frames)
                     {
-                        delete[] read_buffer;
+                        caml_acquire_runtime_system();
                         return std::unexpected(Error("Output buffer overflow detected after soxr_process", SOUNDML_ERR));
                     }
-
-                    if (input_finished && odone == 0)
-                        break;
                 }
 
+                caml_acquire_runtime_system();
+
                 /* this is the "real" number of frames we should have */
-                size_t accurate_frames = std::ceil((total_read * target_sr) / input_sr);
+                size_t accurate_frames = std::ceil((static_cast<double>(sndfile.frames()) * target_sr) / input_sr);
 
                 /* if we lost some samples due to the resampling, we're padding the BA with zeros on each dim */
                 if (total_generated < accurate_frames)
@@ -275,7 +241,6 @@ namespace SoundML
                     }
                 }
 
-                delete[] read_buffer;
                 return total_generated;
             }
         };
@@ -338,15 +303,19 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     AudioMetadata metadata{
         nframes, channels, trgt_sr_val, padded_frames};
 
-    intnat ndims = metadata.channels > 1 ? 2 : 1;
-    intnat dims[ndims];
+    intnat ndims;
+    intnat dims[2]; /* maximum possible dimensions */
 
-    if (ndims == 1)
-        dims[0] = static_cast<intnat>(metadata.padded_frames);
-    else
+    if (metadata.channels > 1)
     {
         dims[0] = static_cast<intnat>(metadata.padded_frames);
         dims[1] = static_cast<intnat>(metadata.channels);
+        ndims = 2;
+    }
+    else
+    {
+        dims[0] = static_cast<intnat>(metadata.padded_frames);
+        ndims = 1;
     }
 
     int type_flag = 0;

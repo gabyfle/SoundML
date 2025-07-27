@@ -33,7 +33,7 @@ let mel ?(fmax : float option = None) ?(htk : bool = false)
       | None ->
           float_of_int sample_rate /. 2.
     in
-    let fftfreqs = Utils.rfftfreq dtype nfft (1. /. float_of_int sample_rate) in
+    let fftfreqs = Nx.rfftfreq ~d:(1. /. float_of_int sample_rate) nfft in
     let mel_freqs = Utils.melfreq dtype ~nmels:(nmels + 2) ~fmin ~fmax ~htk in
     let fdiff =
       let n = Nx.size mel_freqs in

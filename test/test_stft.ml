@@ -35,25 +35,16 @@ let string_to_window = function
       failwith "Unknown window type"
 
 module StftTestable = struct
-  type t = Complex.t
+  type a = Complex.t
 
-  type p = Bigarray.complex32_elt
+  type b = Nx.complex64_elt
 
-  type pf = Bigarray.float32_elt
-
-  type pc = Bigarray.complex32_elt
-
-  type ('a, 'b) precision = ('a, 'b) Types.precision
-
-  let precision = Types.B32
-
-  let kd = Bigarray.Complex32
+  let dtype = Nx.Complex64
 
   let typ = "stft"
 
-  let generate (precision : (pf, pc) precision)
-      (case : string * string * Parameters.t)
-      (audio : (float, 'c) Owl_dense_ndarray.Generic.t) =
+  let generate (_ : (a, b) Nx.dtype) (case : string * string * Parameters.t)
+      (audio : (float, Bigarray.float64_elt) Nx.t) =
     let _, _, params = case in
     let n_fft =
       Option.value ~default:2048 @@ Parameters.get_int "n_fft" params
@@ -71,11 +62,9 @@ module StftTestable = struct
     let center =
       Option.value ~default:false @@ Parameters.get_bool "center" params
     in
-    let config =
-      Transform.Config.{n_fft; hop_size; win_length; window; center}
+    let stft =
+      Transform.stft ~n_fft ~hop_size ~win_length ~window ~center audio
     in
-    let stft = Transform.stft ~config precision audio in
-    let _kd = kd in
     stft
 end
 
@@ -84,5 +73,5 @@ module Tests = Tests_cases (StftTestable)
 let () =
   let name = "Vectors: STFT Comparison" in
   let data = Testdata.get StftTestable.typ Vutils.data in
-  let tests = Tests.create_tests data in
+  let tests = Tests.create_tests data 1e-5 1e-8 in
   Tests.run name tests

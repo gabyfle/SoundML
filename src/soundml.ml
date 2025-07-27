@@ -24,6 +24,7 @@
 module Io = Io
 module Window = Window
 module Aformat = Aformat
+module Transform = Transform
 
 (* module Feature = Feature module Filterbank = Filterbank module Effects =
    Effects *)

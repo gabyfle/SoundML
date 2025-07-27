@@ -19,7 +19,7 @@
 /*                                                                           */
 /*****************************************************************************/
 
-#define SOUNDML_BUFFER_SIZE 4096
+#define SOUNDML_BUFFER_SIZE 32768
 #include <expected>
 #include <variant>
 #include <sndfile.hh>
