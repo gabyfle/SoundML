@@ -83,7 +83,7 @@ let read : type a.
         caml_read_audio_file_f32
     | Float64 ->
         caml_read_audio_file_f64
-    | Float16 ->
+    | _ ->
         raise
           (Invalid_argument
              "Float16 elements kind aren't supported. The array kind must be \
