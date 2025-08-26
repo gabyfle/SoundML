@@ -225,69 +225,60 @@ let frame ?(axis = -1) (x : ('a, 'b) Nx.t) ~frame_length ~hop_length :
       (Invalid_argument
          (Printf.sprintf "Input is too short (n=%d) for frame_length=%d"
             shape.(axis_resolved) frame_length ) ) ;
+  (* Ensure we have a contiguous array for as_strided to work correctly *)
+  let x_contiguous = 
+    if Nx.is_c_contiguous x then x else Nx.copy x
+  in
   (* Calculate the number of frames *)
   let n_frames = ((shape.(axis_resolved) - frame_length) / hop_length) + 1 in
-  let out_shape =
-    if axis < 0 then
-      (* All negative axes: append frame_length, then n_frames *)
-      let base_shape = Array.sub shape 0 axis_resolved in
-      let remaining_shape =
-        Array.sub shape (axis_resolved + 1) (ndim - axis_resolved - 1)
-      in
-      Array.concat [base_shape; [|frame_length; n_frames|]; remaining_shape]
-    else if axis = 0 then
-      (* axis=0 case: prepend n_frames, frame_length *)
-      let base_shape = Array.sub shape 1 (ndim - 1) in
-      Array.concat [[|n_frames; frame_length|]; base_shape]
-    else
-      (* General positive case: insert at axis position *)
-      let out_shape = Array.make (ndim + 1) 0 in
-      for i = 0 to axis_resolved - 1 do
-        out_shape.(i) <- shape.(i)
-      done ;
-      out_shape.(axis_resolved) <- n_frames ;
-      out_shape.(axis_resolved + 1) <- frame_length ;
-      for i = axis_resolved + 1 to ndim - 1 do
-        out_shape.(i + 1) <- shape.(i)
-      done ;
-      out_shape
+  let out_shape = 
+    let shape_arr = Array.make (ndim + 1) 0 in
+    for i = 0 to axis_resolved - 1 do
+      shape_arr.(i) <- shape.(i)
+    done ;
+    if axis < 0 then (
+      (* Negative axes: frame_length, then n_frames *)
+      shape_arr.(axis_resolved) <- frame_length ;
+      shape_arr.(axis_resolved + 1) <- n_frames
+    ) else (
+      (* Positive axes: n_frames, then frame_length *)
+      shape_arr.(axis_resolved) <- n_frames ;
+      shape_arr.(axis_resolved + 1) <- frame_length
+    ) ;
+    for i = axis_resolved + 1 to ndim - 1 do
+      shape_arr.(i + 1) <- shape.(i)
+    done ;
+    shape_arr
   in
-  let x_strides = Nx.strides x in
-  let itemsize = Nx.itemsize x in
+  let x_strides = Nx.strides x_contiguous in
+  let itemsize = Nx.itemsize x_contiguous in
   let out_strides = Array.make (Array.length out_shape) 0 in
   if axis < 0 then (
+    (* Copy strides for dimensions before the framed axis *)
     for i = 0 to axis_resolved - 1 do
       out_strides.(i) <- x_strides.(i) / itemsize
     done ;
+    (* Frame dimension stride: 1 element along the framed axis *)
     out_strides.(axis_resolved) <- x_strides.(axis_resolved) / itemsize ;
-    (* Hop dimension stride: hop_length elements *)
+    (* Hop dimension stride: hop_length elements along the framed axis *)
     out_strides.(axis_resolved + 1) <-
       x_strides.(axis_resolved) / itemsize * hop_length ;
-    (* Copy remaining strides *)
+    (* Copy remaining strides (if any) *)
     for i = axis_resolved + 1 to ndim - 1 do
-      out_strides.(i + 1) <- x_strides.(i) / itemsize
-    done )
-  else if axis = 0 then (
-    (* axis=0 case: [n_frames, frame_length, ...] *)
-    (* Hop dimension stride: hop_length elements *)
-    out_strides.(0) <- x_strides.(axis_resolved) / itemsize * hop_length ;
-    (* Frame dimension stride: 1 element *)
-    out_strides.(1) <- x_strides.(axis_resolved) / itemsize ;
-    (* Copy remaining strides *)
-    for i = 1 to ndim - 1 do
       out_strides.(i + 1) <- x_strides.(i) / itemsize
     done )
   else (
+    (* Positive axes: [n_frames, frame_length] order *)
     for i = 0 to axis_resolved - 1 do
       out_strides.(i) <- x_strides.(i) / itemsize
     done ;
+    (* Hop dimension stride: hop_length elements along the framed axis *)
     out_strides.(axis_resolved) <-
       x_strides.(axis_resolved) / itemsize * hop_length ;
+    (* Frame dimension stride: 1 element along the framed axis *)
     out_strides.(axis_resolved + 1) <- x_strides.(axis_resolved) / itemsize ;
+    (* Copy remaining strides *)
     for i = axis_resolved + 1 to ndim - 1 do
       out_strides.(i + 1) <- x_strides.(i) / itemsize
     done ) ;
-  let new_view =
-    Nx_core.View.create ~offset:(Nx.offset x) ~strides:out_strides out_shape
-  in
-  Nx.with_view x new_view
+  Nx.as_strided out_shape out_strides ~offset:0 x_contiguous
