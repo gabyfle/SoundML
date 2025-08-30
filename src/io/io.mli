@@ -19,96 +19,171 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(**
-    The {!Io} (in/out) module is the entry point for reading and writing audio
-    data from and to the filesystem. It supports resampling via the {{:https://github.com/chirlu/soxr}SoXr} library. *)
+(** Audio file input/output operations.
+    
+    This module provides functions for reading and writing audio files with
+    support for various formats, resampling, and channel conversion. It serves
+    as the primary interface for loading audio data into SoundML and saving
+    processed results back to disk. *)
 
-(** Thrown when a requested file cannot be found on the system. *)
+(** {2 Exceptions} *)
+
+(** Raised when a requested audio file cannot be found on the filesystem.
+    The string contains the path that was not found. *)
 exception File_not_found of string
 
-(** Thrown when the file we're trying to read is encoded in an invalid format, or when the format we're trying to write isn't supported. *)
+(** Raised when attempting to read a file with an unsupported or corrupted format,
+    or when trying to write in an unsupported format. The string contains
+    details about the format issue. *)
 exception Invalid_format of string
 
-(** Thrown when an error occurred while resampling. *)
+(** Raised when audio resampling fails. This can occur due to invalid sample
+    rates, memory issues, or internal resampling library errors. *)
 exception Resampling_error of string
 
-(** Thrown when an internal error occurred. This is should not happen, so please report it. *)
-exception Internal_error of string
+(** {2 Types} *)
 
-(** The resampling method to use. The default is [SOXR_HQ]. *)
+(** Internal resampling type for C++ backend *)
 type resampling_t =
-  | NONE  (** Indicates that no resampling is requested *)
-  | SOXR_QQ  (** 'Quick' cubic interpolation. *)
-  | SOXR_LQ  (** 'Low' 16-bit with larger rolloff. *)
-  | SOXR_MQ  (** 'Medium' 16-bit with medium rolloff. *)
-  | SOXR_HQ  (** 'High quality'. *)
-  | SOXR_VHQ  (** 'Very high quality'. *)
+  | NONE  (** Skip resampling entirely - use original sample rate. *)
+  | SOXR_QQ  (** Fast cubic interpolation - good for real-time applications. *)
+  | SOXR_LQ  (** 16-bit quality with larger rolloff - faster processing. *)
+  | SOXR_MQ  (** 16-bit quality with medium rolloff - balanced speed/quality. *)
+  | SOXR_HQ  (** High quality resampling - recommended for most applications. *)
+  | SOXR_VHQ  (** Maximum quality resampling - slower but best results. *)
+
+(** {2 Audio File Reading} *)
 
 val read :
-  'a.
      ?res_typ:resampling_t
   -> ?sample_rate:int
   -> ?mono:bool
-  -> (float, 'a) Nx.dtype
+  -> 'dev Rune.device
+  -> (float, 'a) Rune.dtype
   -> string
-  -> (float, 'a) Nx.t * int
-(**
-    [read ?res_typ ?sample_rate ?fix kind filename] reads an audio file and returns an [audio].
+  -> (float, 'a, 'dev) Rune.t * int
+(** [read device dtype filename] reads an audio file and returns audio data with sample rate.
 
-    @return an [audio] type that contains the audio data read from the file. The type of the audio's data is determined by the [kind] parameter.
+   Loads audio data from various file formats with optional resampling and
+   channel conversion. The function automatically handles format detection
+   and provides high-quality resampling when needed.
 
-    {2 Parameters}
-    @param ?res_typ is the resampling method to use. The default is [SOXR_HQ]. If [NONE] is used, [?sample_rate] is ignored and no resampling will be done.
-    @param ?sample_rate is the target sample rate to use when reading the file. Default is 22050 Hz.
-    @param ?mono is a boolean that indicates if we want to convert to a mono audio. Default is [true].
-    @param dtype is the format of audio data to read. It can be either [Float32] or [Float64].
-    @param filename is the path to the file to read audio from.
+   @param resampling Resampling quality (default: High_quality)
+   @param target_sample_rate Target sample rate in Hz (default: 22050)
+   @param force_mono Convert to mono by averaging channels (default: true)
+   @param device Device on which the resulting tensor should be loaded.
+   @param dtype Data type for audio samples (Rune.float32 or Rune.float64)
+   @param filename Path to the audio file to read
+   @return Tuple of (audio_tensor, actual_sample_rate)
 
-    @raise File_not_found If the file does not exist.
-    @raise Invalid_format If the file is not a valid audio file.
-    @raise Resampling_error If the resampling fails.
-    @raise Internal_error If an internal error occurs.
-    
-    {2 Usage}
-    Reading audio is straightfoward. Simply specify the path to the file you want to read.
-    
-    {[
-      open Soundml
-      (* This will read the file.wav audio into a Float32 bigarray, resampled using SOXR_HQ at 22050Hz. *)
-      let audio = Io.read Bigarray.Float32 "path/to/file.wav"
-    ]}
+   @raise File_not_found if the file doesn't exist
+   @raise Invalid_audio_format if the file format is unsupported or corrupted
+   @raise Resampling_error if resampling fails
 
-    {2 Supported formats}
+   {3 Examples}
 
-    SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
-    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats} and in the {!Audio.Aformat} module. *)
+   Basic audio loading:
+   {[
+     let audio_data, sample_rate = IO.read ~device:Rune.ocaml 
+       Rune.float32 
+       ~filename:"audio.wav" in
+     (* audio_data is mono float32 tensor at 22050 Hz *)
+   ]}
 
-val write : 'a. ?format:Aformat.t -> string -> (float, 'a) Nx.t -> int -> unit
-(**
-    [write ?format filename data sample_reat] writes an audio file to the filesystem.
+   Load stereo audio without resampling:
+   {[
+     let audio_data, sample_rate = IO.read_audio_file 
+       ~resampling:No_resampling
+       ~force_mono:false
+       Rune.float64 
+       ~filename:"stereo.flac" in
+     (* Preserves original sample rate and stereo channels *)
+   ]}
 
-    {2 Parameters}
-    @param ?format is the format to use when writing the file. If not specified, the format is determined by the file extension by {!Aformat.of_ext}.
-    @param filename is the path to the file to write audio to.
-    @param data is the audio data to write. It can be either a [Bigarray.Float32] or [Bigarray.Float64].
-    @param sample_rate is the sample rate of the audio data.
+   Load with specific device and sample rate:
+   {[
+     let audio_data, sample_rate = IO.read
+       ~target_sample_rate:44100
+       ~resampling:Very_high_quality
+       Rune.float32 
+       ~filename:"music.mp3" in
+     (* High-quality resampling to 44.1 kHz on Metal device *)
+   ]}
 
+   {3 Supported Formats}
 
-    @raise Invalid_format If the file is not a valid audio file.
-    @raise Internal_error If an internal error occurs.
+   SoundML uses libsndfile for audio I/O, supporting:
+   - WAV (uncompressed PCM)
+   - FLAC (lossless compression)
+   - OGG Vorbis (lossy compression)
+   - AIFF (uncompressed PCM)
+   - MP3 (via external libraries)
+   - Many other formats - see {{:https://libsndfile.github.io/libsndfile/formats.html}libsndfile documentation}
 
+   {3 Performance Notes}
 
-    {2 Usage}
-    Writing audio is as straightfoward as reading it. Simply specify the path to the file you want to write.
-    
-    {[
-      open Soundml
-      open Audio
-      let audio = Io.read Bigarray.Float32 "path/to/file.mp3" in
-      Io.write "path/to/file.wav" (data audio) 22050 (* we'll automatically detect that you want to write to the WAV format *)
-    ]}
+   - Use float32 for better performance unless you need float64 precision
+   - No_resampling is fastest when you can work with the original sample rate *)
 
-    {2 Supported formats}
+(** {2 Audio File Writing} *)
 
-    SoundML relies on {{:https://libsndfile.github.io/libsndfile/}libsndfile} to read audio files. Full detail on the supported formats are available
-    on the official sndfile's website: {{:https://libsndfile.github.io/libsndfile/formats.html}Supported formats} and in the {!Audio.Aformat} module. *)
+val write :
+  ?format:Aformat.t -> string -> (float, 'a, 'dev) Rune.t -> int -> unit
+(** [write filename audio_data sample_rate] writes audio data to a file.
+
+   Saves audio tensor data to various file formats with automatic format
+   detection based on file extension or explicit format specification.
+
+   @param format Output format (default: Auto_detect from filename extension)
+   @param filename Output file path
+   @param audio_data Audio tensor to write (1D for mono, 2D for multi-channel)
+   @param sample_rate Sample rate of the audio data in Hz
+
+   @raise Invalid_argument if sample_rate <= 0
+   @raise Invalid_argument if audio_data has invalid shape (> 2D)
+   @raise Invalid_audio_format if the output format is unsupported
+
+   {3 Examples}
+
+   Basic audio writing (format auto-detected):
+   {[
+     IO.write 
+       "output.wav"
+       processed_audio
+       22050
+     (* Writes as WAV format based on .wav extension *)
+   ]}
+
+   Write with explicit format:
+   {[
+     IO.write 
+       ~format:FLAC
+       "output.audio"
+       audio_tensor
+       44100
+     (* Writes as FLAC despite .audio extension *)
+   ]}
+
+  Write stereo audio:
+   {[
+     let stereo_audio = (* 2D tensor: [2; n_samples] *) in
+     IO.write 
+       "stereo.wav"
+       stereo_audio
+       48000
+     (* Writes 2-channel audio *)
+   ]}
+
+   {3 Format Support}
+
+   - WAV: Uncompressed, high quality, widely supported
+   - FLAC: Lossless compression, smaller files than WAV
+   - OGG: Lossy compression, good quality/size ratio
+   - MP3: Lossy compression, universal compatibility (if available)
+   - AIFF: Uncompressed, common on macOS
+
+   {3 Performance Notes}
+
+   - WAV writing is fastest (no compression)
+   - FLAC provides good compression with minimal CPU overhead
+   - Use appropriate bit depth for your application (float32 vs float64) *)

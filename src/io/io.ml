@@ -59,29 +59,48 @@ external caml_read_audio_file_f64 :
   -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t * int
   = "caml_read_audio_file_f64"
 
-let to_mono (x : (float, 'a) Nx.t) =
-  if Nx.ndim x > 1 then Nx.mean ~axes:[|1|] ~keepdims:false x else x
+let to_mono (audio_tensor : (float, 'a, 'dev) Rune.t) =
+  try
+    if Rune.ndim audio_tensor > 1 then
+      let shape = Rune.shape audio_tensor in
+      if Array.length shape < 2 then
+        raise (Invalid_argument "Invalid tensor shape for mono conversion")
+      else Rune.mean ~axes:[|1|] ~keepdims:false audio_tensor
+    else audio_tensor
+  with
+  | Invalid_argument _ as e ->
+      raise e
+  | exn ->
+      raise
+        (Internal_error
+           ("Unexpected error in mono conversion: " ^ Printexc.to_string exn) )
 
 let read : type a.
        ?res_typ:resampling_t
     -> ?sample_rate:int
     -> ?mono:bool
-    -> (float, a) Nx.dtype
+    -> 'dev Rune.device
+    -> (float, a) Rune.dtype
     -> string
-    -> (float, a) Nx.t * int =
+    -> (float, a, 'dev) Rune.t * int =
  fun ?(res_typ : resampling_t = SOXR_HQ) ?(sample_rate : int = 22050)
-     ?(mono : bool = true) typ (filename : string) ->
+     ?(mono : bool = true) (device : 'dev Rune.device) typ
+     (filename : string) ->
+  if sample_rate <= 0 then
+    raise (Invalid_argument "Sample rate must be positive") ;
+  if String.length filename = 0 then
+    raise (Invalid_argument "Filename cannot be empty") ;
   let read_func : type a.
-         (float, a) Nx.dtype
+         (float, a) Rune.dtype
       -> string
       -> resampling_t
       -> int
       -> (float, a, Bigarray.c_layout) Bigarray.Genarray.t * int =
    fun typ ->
     match typ with
-    | Float32 ->
+    | Rune.Float32 ->
         caml_read_audio_file_f32
-    | Float64 ->
+    | Rune.Float64 ->
         caml_read_audio_file_f64
     | _ ->
         raise
@@ -89,11 +108,36 @@ let read : type a.
              "Float16 elements kind aren't supported. The array kind must be \
               either Float32 or Float64." )
   in
-  let data, sample_rate = read_func typ filename res_typ sample_rate in
-  let data = Nx.of_bigarray data in
-  let data = if mono then to_mono data else data in
-  let data = if Nx.ndim data > 1 then Nx.transpose data else data in
-  (data, sample_rate)
+  try
+    let data, actual_sample_rate = read_func typ filename res_typ sample_rate in
+    let data_shape = Bigarray.Genarray.dims data in
+    if Array.length data_shape = 0 || Array.fold_left ( * ) 1 data_shape = 0
+    then raise (Invalid_format "Audio file contains no data") ;
+    let data = Rune.of_bigarray device data in
+    (* Apply mono conversion if requested *)
+    let data = if mono then to_mono data else data in
+    (* Transpose if multi-dimensional (channels first to channels last) *)
+    let data =
+      if Rune.ndim data > 1 then
+        try Rune.transpose data
+        with exn ->
+          raise (Internal_error ("Transpose failed: " ^ Printexc.to_string exn))
+      else data
+    in
+    (data, actual_sample_rate)
+  with
+  | ( File_not_found _
+    | Invalid_format _
+    | Resampling_error _
+    | Internal_error _
+    | Invalid_argument _ ) as e ->
+      raise e
+  | Failure msg ->
+      raise (Internal_error ("Internal error during read: " ^ msg))
+  | exn ->
+      raise
+        (Internal_error
+           ("Unexpected error during audio read: " ^ Printexc.to_string exn) )
 
 external caml_write_audio_file_f32 :
      string
@@ -108,8 +152,30 @@ external caml_write_audio_file_f64 :
   -> unit = "caml_write_audio_file_f64"
 
 let write : type a.
-    ?format:Aformat.t -> string -> (float, a) Nx.t -> int -> unit =
- fun ?format (filename : string) (x : (float, a) Nx.t) sample_rate ->
+    ?format:Aformat.t -> string -> (float, a, 'dev) Rune.t -> int -> unit =
+ fun ?format (filename : string) (x : (float, a, 'dev) Rune.t) sample_rate ->
+  if sample_rate <= 0 then
+    raise (Invalid_argument "Sample rate must be positive") ;
+  if String.length filename = 0 then
+    raise (Invalid_argument "Filename cannot be empty") ;
+  let write_func : type a.
+         (float, a) Rune.dtype
+      -> string
+      -> (float, a, Bigarray.c_layout) Bigarray.Genarray.t
+      -> int * int * int * int
+      -> unit =
+   fun typ ->
+    match typ with
+    | Rune.Float32 ->
+        caml_write_audio_file_f32
+    | Rune.Float64 ->
+        caml_write_audio_file_f64
+    | _ ->
+        raise
+          (Invalid_argument
+             "Float16 elements kind aren't supported. The array kind must be \
+              either Float32 or Float64." )
+  in
   let format =
     if format = None then
       match Aformat.of_ext (Filename.extension filename) with
@@ -120,20 +186,25 @@ let write : type a.
     else Option.get format
   in
   let format = Aformat.to_int format in
-  let data = Nx.transpose x in
-  let dshape = Nx.shape data in
+  let data = Rune.transpose x in
+  let dshape = Rune.shape data in
   let nframes = dshape.(0) in
   let channels = if Array.length dshape > 1 then dshape.(1) else 1 in
-  (* we get back our interleaved format *)
-  match Nx.dtype data with
-  | Float32 ->
-      caml_write_audio_file_f32 filename (Nx.to_bigarray data)
-        (nframes, sample_rate, channels, format)
-  | Float64 ->
-      caml_write_audio_file_f64 filename (Nx.to_bigarray data)
-        (nframes, sample_rate, channels, format)
-  | _ ->
+  try
+    let dtype = Rune.dtype data in
+    write_func dtype filename
+      (Rune.unsafe_to_bigarray data)
+      (nframes, sample_rate, channels, format)
+  with
+  | ( File_not_found _
+    | Invalid_format _
+    | Resampling_error _
+    | Internal_error _
+    | Invalid_argument _ ) as e ->
+      raise e
+  | Failure msg ->
+      raise (Internal_error ("Internal error during write: " ^ msg))
+  | exn ->
       raise
-        (Invalid_argument
-           "Float16 elements kind aren't supported. The array kind must be \
-            either Float32 or Float64." )
+        (Internal_error
+           ("Unexpected error during audio write: " ^ Printexc.to_string exn) )
