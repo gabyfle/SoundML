@@ -19,266 +19,292 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-open Nx
-
 module Convert = struct
   let mel_to_hz ?(htk = false) mels =
-    let dtype = Nx.dtype mels in
+    let dtype = Rune.dtype mels in
     if htk then
-      let term = Nx.div_s mels 2595. in
-      let term = Nx.pow (Nx.scalar dtype 10.) term in
-      let term = Nx.sub_s term 1. in
-      Nx.mul_s term 700.
+      let term = Rune.div_s mels 2595. in
+      let term = Rune.pow (Rune.scalar (Rune.device mels) dtype 10.) term in
+      let term = Rune.sub_s term 1. in
+      Rune.mul_s term 700.
     else
       let f_min = 0.0 in
       let f_sp = 200.0 /. 3. in
       let min_log_hz = 1000. in
       let min_log_mel = (min_log_hz -. f_min) /. f_sp in
       let logstep = Float.log 6.4 /. 27.0 in
-      let linear_mask = Nx.less_equal mels (Nx.scalar dtype min_log_mel) in
-      let linear_result = Nx.(add_s (mul_s mels f_sp) f_min) in
-      let log_result =
-        Nx.(mul_s (exp (mul_s (sub_s mels min_log_mel) logstep)) min_log_hz)
+      let linear_mask =
+        Rune.less_equal mels (Rune.scalar (Rune.device mels) dtype min_log_mel)
       in
-      Nx.where linear_mask linear_result log_result
+      let linear_result = Rune.(add_s (mul_s mels f_sp) f_min) in
+      let log_result =
+        Rune.(mul_s (exp (mul_s (sub_s mels min_log_mel) logstep)) min_log_hz)
+      in
+      Rune.where linear_mask linear_result log_result
 
   let hz_to_mel ?(htk = false) freqs =
-    let dtype = Nx.dtype freqs in
+    let dtype = Rune.dtype freqs in
     if htk then
-      let term = Nx.div_s freqs 700. in
-      let term = Nx.add_s term 1. in
-      let term = Nx.log term in
-      let term = Nx.div_s term (Float.log 10.) in
-      Nx.mul_s term 2595.
+      let term = Rune.div_s freqs 700. in
+      let term = Rune.add_s term 1. in
+      let term = Rune.log term in
+      let term = Rune.div_s term (Float.log 10.) in
+      Rune.mul_s term 2595.
     else
       let f_min = 0.0 in
       let f_sp = 200.0 /. 3. in
       let min_log_hz = 1000. in
       let min_log_mel = (min_log_hz -. f_min) /. f_sp in
       let logstep = Float.log 6.4 /. 27.0 in
-      let linear_mask = Nx.less_equal freqs (Nx.scalar dtype min_log_hz) in
-      let linear_result = Nx.(div_s (sub_s freqs f_min) f_sp) in
-      let log_result =
-        Nx.(add_s (div_s (log (div_s freqs min_log_hz)) logstep) min_log_mel)
+      let linear_mask =
+        Rune.less_equal freqs (Rune.scalar (Rune.device freqs) dtype min_log_hz)
       in
-      let res = Nx.where linear_mask linear_result log_result in
-      Nx.map_item (fun x -> if Float.is_nan x then 0.0 else x) res
+      let linear_result = Rune.(div_s (sub_s freqs f_min) f_sp) in
+      let log_result =
+        Rune.(add_s (div_s (log (div_s freqs min_log_hz)) logstep) min_log_mel)
+      in
+      let res = Rune.where linear_mask linear_result log_result in
+      (* Handle NaN values by replacing them with 0.0 *)
+      let nan_mask = Rune.isnan res in
+      let zero_tensor = Rune.scalar (Rune.device res) (Rune.dtype res) 0.0 in
+      Rune.where nan_mask zero_tensor res
 
-  type reference =
+  type ('a, 'dev) reference =
     | RefFloat of float
-    | RefFunction of ((float, float32_elt) t -> float)
+    | RefFunction of ((float, 'a, 'dev) Rune.t -> float)
 
-  let power_to_db ?(amin = 1e-10) ?(top_db : float option = Some 80.) ref
-      (s : (float, float32_elt) t) =
+  let power_to_db ?(amin = 1e-10) ?(top_db = 80.) ref
+      (s : (float, 'a, 'dev) Rune.t) =
     assert (amin > 0.) ;
     let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
-    let log_spec = Nx.mul_s (Nx.div_s (Nx.log s) (Float.log 10.)) 10. in
+    let log_spec = Rune.mul_s (Rune.div_s (Rune.log s) (Float.log 10.)) 10. in
     let log_spec =
-      Nx.(
+      Rune.(
         sub log_spec
           (mul_s
              (div_s
                 (log
                    (maximum
-                      (scalar (dtype s) amin)
-                      (scalar (dtype s) ref_value) ) )
+                      (scalar (device s) (dtype s) amin)
+                      (scalar (device s) (dtype s) ref_value) ) )
                 (Float.log 10.) )
              10. ) )
     in
-    match top_db with
-    | None ->
-        log_spec
-    | Some top_db ->
-        assert (top_db >= 0.0) ;
-        let max_val =
-          Nx.max
-            (Nx.where (Nx.isfinite log_spec) log_spec
-               (Nx.scalar (Nx.dtype log_spec) (-1e8)) )
-          |> Nx.to_array
-        in
-        Nx.maximum_s log_spec (max_val.(0) -. top_db)
+    assert (top_db >= 0.0) ;
+    let finite_values =
+      Rune.where (Rune.isfinite log_spec) log_spec
+        (Rune.scalar (Rune.device log_spec) (Rune.dtype log_spec) (-1e8))
+    in
+    let max_val = Rune.max finite_values in
+    let max_scalar = Rune.unsafe_get [] max_val in
+    let threshold =
+      Rune.scalar (Rune.device log_spec) (Rune.dtype log_spec)
+        (max_scalar -. top_db)
+    in
+    Rune.maximum log_spec threshold
 
-  let db_to_power ?(amin = 1e-10) (ref : reference) (s : ('a, float32_elt) t) =
+  let db_to_power ?(amin = 1e-10) (ref : ('a, 'dev) reference)
+      (s : (float, 'a, 'dev) Rune.t) =
     assert (amin > 0.) ;
     let ref_value = match ref with RefFloat x -> x | RefFunction f -> f s in
-    let amin_t = Nx.scalar (Nx.dtype s) amin in
-    let ref_value_t = Nx.scalar (Nx.dtype s) ref_value in
+    let amin_t = Rune.scalar (Rune.device s) (Rune.dtype s) amin in
+    let ref_value_t = Rune.scalar (Rune.device s) (Rune.dtype s) ref_value in
     let log_ref =
-      Nx.mul_s
-        (Nx.div_s (Nx.log (Nx.maximum amin_t ref_value_t)) (Float.log 10.))
+      Rune.mul_s
+        (Rune.div_s
+           (Rune.log (Rune.maximum amin_t ref_value_t))
+           (Float.log 10.) )
         10.
     in
-    let spec = Nx.add s log_ref in
-    let spec = Nx.div_s spec 10. in
-    Nx.pow (Nx.scalar (Nx.dtype s) 10.) spec
+    let spec = Rune.add s log_ref in
+    let spec = Rune.div_s spec 10. in
+    Rune.pow (Rune.scalar (Rune.device s) (Rune.dtype s) 10.) spec
 end
 
-let pad_center (data : ('a, 'b) t) (target_size : int) (value : 'a) : ('a, 'b) t
-    =
-  let size = (Nx.shape data).(0) in
-  if size = target_size then data
-  else if size > target_size then
-    raise
-      (Invalid_argument
-         "An error occured while trying to pad: current_size > target_size" )
-  else if size = 0 then Nx.full (Nx.dtype data) [|target_size|] value
-  else
-    let pad_total = target_size - size in
-    let pad_left = pad_total / 2 in
-    let pad_right = pad_total - pad_left in
-    Nx.pad [|(pad_left, pad_right)|] value data
-
-let melfreq ?(nmels = 128) ?(fmin = 0.) ?(fmax = 11025.) ?(htk = false)
-    (kd : ('a, 'b) Nx.dtype) =
-  let bounds = Nx.create kd [|2|] [|fmin; fmax|] |> Convert.hz_to_mel ~htk in
+let melfreqs ?(n_mels = 128) ?(f_min = 0.) ?(f_max = 11025.) ?(htk = false)
+    (device : 'dev Rune.device) (kd : (float, 'b) Rune.dtype) =
+  (* Input validation *)
+  if n_mels <= 0 then invalid_arg "n_mels must be positive" ;
+  if f_min < 0.0 then invalid_arg "f_min must be non-negative" ;
+  if f_min >= f_max then invalid_arg "f_min must be less than f_max" ;
+  let bounds =
+    Rune.create device kd [|2|] [|f_min; f_max|] |> Convert.hz_to_mel ~htk
+  in
+  let bounds_array = Rune.unsafe_to_array bounds in
   let mel_f =
-    Nx.linspace kd (Nx.get_item [0] bounds) (Nx.get_item [1] bounds) nmels
+    Rune.linspace device kd ~endpoint:true bounds_array.(0) bounds_array.(1)
+      n_mels
   in
   Convert.mel_to_hz mel_f ~htk
 
-let unwrap ?(discont = None) ?(axis = -1) ?(period = 2. *. Float.pi)
-    (p : (float, 'a) t) =
-  let ndim = Nx.ndim p in
-  let axis = if axis < 0 then ndim + axis else axis in
-  let diff (p : (float, 'a) t) =
-    let p_swapped = Nx.swapaxes axis (-1) p in
-    let ndim = Nx.ndim p_swapped in
-    let shape = Nx.shape p_swapped in
-    let n = shape.(ndim - 1) in
-    if n <= 1 then (
-      let new_shape = Array.copy (Nx.shape p) in
-      new_shape.(axis) <- 0 ;
-      Nx.empty (Nx.dtype p) new_shape )
-    else
-      let starts1 = Array.make ndim 0 in
-      starts1.(ndim - 1) <- 1 ;
-      let stops1 = shape in
-      let p1 =
-        Nx.slice_ranges (Array.to_list starts1) (Array.to_list stops1) p_swapped
-      in
-      let starts2 = Array.make ndim 0 in
-      let stops2 = Array.copy shape in
-      stops2.(ndim - 1) <- n - 1 ;
-      let p2 =
-        Nx.slice_ranges (Array.to_list starts2) (Array.to_list stops2) p_swapped
-      in
-      let d = Nx.sub p1 p2 in
-      Nx.swapaxes axis (-1) d
-  in
-  let cumsum (x : (float, 'a) t) =
-    let x_moved = Nx.moveaxis axis 0 x in
-    let shape = Nx.shape x_moved in
-    let n = shape.(0) in
-    if n = 0 then x
-    else
-      let result = Nx.copy x_moved in
-      for i = 1 to n - 1 do
-        let current_slice = Nx.slice [I i] result in
-        let prev_slice = Nx.slice [I (i - 1)] result in
-        let new_slice = Nx.add current_slice prev_slice in
-        Nx.set_slice [I i] result new_slice
-      done ;
-      Nx.moveaxis 0 axis result
-  in
-  let d = diff p in
-  let d =
-    let pad_shape = Array.copy (Nx.shape p) in
-    pad_shape.(axis) <- 1 ;
-    let padding = Nx.zeros (Nx.dtype p) pad_shape in
-    Nx.concatenate ~axis [padding; d]
-  in
-  let discont = match discont with Some d -> d | None -> period /. 2. in
-  let d_mod = Nx.sub d (Nx.mul_s (Nx.round (Nx.div_s d period)) period) in
-  let php = period /. 2. in
-  let cond1 = Nx.equal d_mod (Nx.scalar (Nx.dtype p) (-.php)) in
-  let cond2 = Nx.greater d (Nx.scalar (Nx.dtype p) 0.) in
-  let cond = Nx.logical_and cond1 cond2 in
-  let php_scalar = Nx.full_like d_mod php in
-  let d_mod = Nx.where cond php_scalar d_mod in
-  let ph_correct = Nx.sub d_mod d in
-  let cond_abs = Nx.less (Nx.abs d) (Nx.scalar (Nx.dtype p) discont) in
-  let p_correct = Nx.where cond_abs (Nx.zeros_like ph_correct) ph_correct in
-  let up = cumsum p_correct in
-  Nx.add p up
+let outer op x y =
+  (* Generalized outer product using reshape and broadcasting *)
+  let x_shape = Rune.shape x in
+  let y_shape = Rune.shape y in
+  let x_ndim = Array.length x_shape in
+  let y_ndim = Array.length y_shape in
+  (* Reshape x to add singleton dimensions for y's dimensions *)
+  (* x: [x_shape] -> [x_shape, 1, 1, ..., 1] (y_ndim ones) *)
+  let x_new_shape = Array.concat [x_shape; Array.make y_ndim 1] in
+  let x_reshaped = Rune.reshape x_new_shape x in
+  (* Reshape y to add singleton dimensions for x's dimensions *)
+  (* y: [y_shape] -> [1, 1, ..., 1, y_shape] (x_ndim ones) *)
+  let y_new_shape = Array.concat [Array.make x_ndim 1; y_shape] in
+  let y_reshaped = Rune.reshape y_new_shape y in
+  (* Apply the operation - broadcasting will handle the rest *)
+  op x_reshaped y_reshaped
 
-let outer (op : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t) (x : ('a, 'b) t)
-    (y : ('a, 'b) t) =
-  let nx = (Nx.shape x).(0) in
-  let ny = (Nx.shape y).(0) in
-  let x = Nx.reshape [|nx; 1|] x in
-  let y = Nx.reshape [|1; ny|] y in
-  op x y
+let frame ?(axis = -1) signal ~frame_length ~hop_length =
+  (* Input validation *)
+  if frame_length <= 0 then invalid_arg "frame_length must be positive" ;
+  if hop_length < 1 then invalid_arg "hop_length must be positive" ;
+  let shape = Rune.shape signal in
+  let ndim = Rune.ndim signal in
+  let axis_resolved = if axis < 0 then ndim + axis else axis in
+  (* Validate axis bounds *)
+  if axis_resolved < 0 || axis_resolved >= ndim then
+    invalid_arg
+      (Printf.sprintf "axis %d out of bounds for %dD tensor" axis ndim) ;
+  let signal_length = shape.(axis_resolved) in
+  if signal_length < frame_length then
+    invalid_arg
+      (Printf.sprintf "Input too short (n=%d) for frame_length=%d" signal_length
+         frame_length ) ;
+  (* Calculate number of frames *)
+  let n_frames = ((signal_length - frame_length) / hop_length) + 1 in
+  if n_frames <= 0 then
+    invalid_arg
+      (Printf.sprintf
+         "No frames can be extracted with frame_length=%d, hop_length=%d from \
+          signal of length %d"
+         frame_length hop_length signal_length ) ;
+  (* Extract all frames using efficient slicing operations *)
+  let frame_list = ref [] in
+  for i = 0 to n_frames - 1 do
+    let start_idx = i * hop_length in
+    let slice_starts = Array.make ndim 0 in
+    let slice_stops = Array.copy shape in
+    slice_starts.(axis_resolved) <- start_idx ;
+    slice_stops.(axis_resolved) <- start_idx + frame_length ;
+    let frame =
+      Rune.slice_ranges
+        (Array.to_list slice_starts)
+        (Array.to_list slice_stops)
+        signal
+    in
+    frame_list := frame :: !frame_list
+  done ;
+  (* Stack all frames together *)
+  let frames = Rune.stack ~axis:0 (List.rev !frame_list) in
+  (* Adjust output shape to match expected frame layout *)
+  (* The stack operation puts frames in the first dimension [n_frames, ...] 
+     We need to move the frame dimension to the correct position based on axis *)
+  if axis < 0 then
+    (* For negative axis, the frame dimension should come before the framing axis *)
+    (* Move axis 0 (frames) to position axis_resolved *)
+    Rune.moveaxis 0 axis_resolved frames
+  else
+    (* For positive axis, the frame dimension should come after the framing axis *)
+    (* Move axis 0 (frames) to position axis_resolved + 1 *)
+    Rune.moveaxis 0 (axis_resolved + 1) frames
 
-let frame ?(axis = -1) (x : ('a, 'b) Nx.t) ~frame_length ~hop_length :
-    ('a, 'b) Nx.t =
-  if frame_length <= 0 then
-    raise (Invalid_argument "frame_length must be positive") ;
-  if hop_length < 1 then
-    raise (Invalid_argument (Printf.sprintf "Invalid hop_length: %d" hop_length)) ;
-  let ndim = Nx.ndim x in
-  let shape = Nx.shape x in
+let pad_center signal ~size ~pad_value =
+  let signal_shape = Rune.shape signal in
+  let signal_length = signal_shape.(0) in
+  if size < signal_length then invalid_arg "size must be >= signal length" ;
+  if size = signal_length then signal
+  else
+    let pad_total = size - signal_length in
+    let pad_left = pad_total / 2 in
+    let pad_right = pad_total - pad_left in
+    let padding = [|(pad_left, pad_right)|] in
+    Rune.pad padding pad_value signal
+
+let unwrap ?(discontinuity = Float.pi) ?(axis = -1) ?(period = 2. *. Float.pi)
+    phase_values =
+  (* Input validation *)
+  let shape = Rune.shape phase_values in
+  let ndim = Rune.ndim phase_values in
   let axis_resolved = if axis < 0 then ndim + axis else axis in
   if axis_resolved < 0 || axis_resolved >= ndim then
-    raise (Invalid_argument "axis out of bounds") ;
-  if shape.(axis_resolved) < frame_length then
-    raise
-      (Invalid_argument
-         (Printf.sprintf "Input is too short (n=%d) for frame_length=%d"
-            shape.(axis_resolved) frame_length ) ) ;
-  (* Ensure we have a contiguous array for as_strided to work correctly *)
-  let x_contiguous = 
-    if Nx.is_c_contiguous x then x else Nx.copy x
-  in
-  (* Calculate the number of frames *)
-  let n_frames = ((shape.(axis_resolved) - frame_length) / hop_length) + 1 in
-  let out_shape = 
-    let shape_arr = Array.make (ndim + 1) 0 in
-    for i = 0 to axis_resolved - 1 do
-      shape_arr.(i) <- shape.(i)
+    invalid_arg
+      (Printf.sprintf "axis %d out of bounds for %dD tensor" axis ndim) ;
+  let axis_size = shape.(axis_resolved) in
+  if axis_size <= 1 then phase_values
+    (* No unwrapping needed for single element *)
+  else
+    let device = Rune.device phase_values in
+    let dtype = Rune.dtype phase_values in
+    (* Default discontinuity threshold is π *)
+    let discont_threshold = discontinuity in
+    (* Compute differences along the specified axis *)
+    let slice_starts_prev = Array.make ndim 0 in
+    let slice_stops_prev = Array.copy shape in
+    slice_stops_prev.(axis_resolved) <- axis_size - 1 ;
+    let slice_starts_curr = Array.make ndim 0 in
+    let slice_stops_curr = Array.copy shape in
+    slice_starts_curr.(axis_resolved) <- 1 ;
+    let p_prev =
+      Rune.slice_ranges
+        (Array.to_list slice_starts_prev)
+        (Array.to_list slice_stops_prev)
+        phase_values
+    in
+    let p_curr =
+      Rune.slice_ranges
+        (Array.to_list slice_starts_curr)
+        (Array.to_list slice_stops_curr)
+        phase_values
+    in
+    (* Calculate differences *)
+    let diff = Rune.sub p_curr p_prev in
+    (* Find discontinuities: |diff| > discont_threshold *)
+    let abs_diff = Rune.abs diff in
+    let discont_mask =
+      Rune.greater abs_diff (Rune.scalar device dtype discont_threshold)
+    in
+    (* Calculate correction: round(diff / period) * period *)
+    let diff_normalized = Rune.div_s diff period in
+    let correction_multiplier = Rune.round diff_normalized in
+    let correction = Rune.mul_s correction_multiplier period in
+    (* Apply correction only where discontinuities exist *)
+    let correction_masked =
+      Rune.where discont_mask correction (Rune.scalar device dtype 0.0)
+    in
+    (* Build cumulative sum manually by collecting slices *)
+    let correction_shape = Rune.shape correction_masked in
+    let axis_len = correction_shape.(axis_resolved) in
+    let cumsum_slices = ref [] in
+    let running_sum =
+      ref
+        (Rune.zeros device dtype
+           (Array.mapi
+              (fun i s -> if i = axis_resolved then 1 else s)
+              correction_shape ) )
+    in
+    for i = 0 to axis_len - 1 do
+      let slice_starts = Array.make ndim 0 in
+      let slice_stops = Array.copy correction_shape in
+      slice_starts.(axis_resolved) <- i ;
+      slice_stops.(axis_resolved) <- i + 1 ;
+      let current_slice =
+        Rune.slice_ranges
+          (Array.to_list slice_starts)
+          (Array.to_list slice_stops)
+          correction_masked
+      in
+      running_sum := Rune.add !running_sum current_slice ;
+      cumsum_slices := !running_sum :: !cumsum_slices
     done ;
-    if axis < 0 then (
-      (* Negative axes: frame_length, then n_frames *)
-      shape_arr.(axis_resolved) <- frame_length ;
-      shape_arr.(axis_resolved + 1) <- n_frames
-    ) else (
-      (* Positive axes: n_frames, then frame_length *)
-      shape_arr.(axis_resolved) <- n_frames ;
-      shape_arr.(axis_resolved + 1) <- frame_length
-    ) ;
-    for i = axis_resolved + 1 to ndim - 1 do
-      shape_arr.(i + 1) <- shape.(i)
-    done ;
-    shape_arr
-  in
-  let x_strides = Nx.strides x_contiguous in
-  let itemsize = Nx.itemsize x_contiguous in
-  let out_strides = Array.make (Array.length out_shape) 0 in
-  if axis < 0 then (
-    (* Copy strides for dimensions before the framed axis *)
-    for i = 0 to axis_resolved - 1 do
-      out_strides.(i) <- x_strides.(i) / itemsize
-    done ;
-    (* Frame dimension stride: 1 element along the framed axis *)
-    out_strides.(axis_resolved) <- x_strides.(axis_resolved) / itemsize ;
-    (* Hop dimension stride: hop_length elements along the framed axis *)
-    out_strides.(axis_resolved + 1) <-
-      x_strides.(axis_resolved) / itemsize * hop_length ;
-    (* Copy remaining strides (if any) *)
-    for i = axis_resolved + 1 to ndim - 1 do
-      out_strides.(i + 1) <- x_strides.(i) / itemsize
-    done )
-  else (
-    (* Positive axes: [n_frames, frame_length] order *)
-    for i = 0 to axis_resolved - 1 do
-      out_strides.(i) <- x_strides.(i) / itemsize
-    done ;
-    (* Hop dimension stride: hop_length elements along the framed axis *)
-    out_strides.(axis_resolved) <-
-      x_strides.(axis_resolved) / itemsize * hop_length ;
-    (* Frame dimension stride: 1 element along the framed axis *)
-    out_strides.(axis_resolved + 1) <- x_strides.(axis_resolved) / itemsize ;
-    (* Copy remaining strides *)
-    for i = axis_resolved + 1 to ndim - 1 do
-      out_strides.(i + 1) <- x_strides.(i) / itemsize
-    done ) ;
-  Nx.as_strided out_shape out_strides ~offset:0 x_contiguous
+    let cumsum_correction =
+      Rune.concatenate ~axis:axis_resolved (List.rev !cumsum_slices)
+    in
+    (* Pad cumsum_correction to match original shape by prepending zeros *)
+    let zero_slice_shape = Array.copy shape in
+    zero_slice_shape.(axis_resolved) <- 1 ;
+    let zero_slice = Rune.zeros device dtype zero_slice_shape in
+    let cumsum_padded =
+      Rune.concatenate ~axis:axis_resolved [zero_slice; cumsum_correction]
+    in
+    (* Apply corrections to original array *)
+    Rune.sub phase_values cumsum_padded
