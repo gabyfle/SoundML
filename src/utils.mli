@@ -45,10 +45,10 @@ val frame :
    @param hop_length Number of samples to advance between frames (must be >= 1)
    @return Framed view of the input signal with one additional dimension
 
-   @raise Invalid_argument if frame_length <= 0
-   @raise Invalid_argument if hop_length < 1
-   @raise Invalid_argument if signal is too short for even one frame
-   @raise Invalid_argument if axis is out of bounds
+   @raise Stdlib.Invalid_argument if frame_length <= 0
+   @raise Stdlib.Invalid_argument if hop_length < 1
+   @raise Stdlib.Invalid_argument if signal is too short for even one frame
+   @raise Stdlib.Invalid_argument if axis is out of bounds
 
    {3 Examples}
 
@@ -94,8 +94,8 @@ val pad_center :
    @param pad_value Value to use for padding
    @return Padded signal of the specified size
 
-   @raise Invalid_argument if size < signal length
-   @raise Invalid_argument if signal is not 1D
+   @raise Stdlib.Invalid_argument if size < signal length
+   @raise Stdlib.Invalid_argument if signal is not 1D
 
    {3 Example}
 
@@ -156,7 +156,7 @@ module Convert : sig
       @param power_spectrum Power spectrum values
       @return dB values: 10 * log10(power / reference)
       
-      @raise Invalid_argument if amin <= 0.0
+      @raise Stdlib.Invalid_argument if amin <= 0.0
       
       {3 Example}
       

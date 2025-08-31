@@ -152,37 +152,45 @@ module type Testable = sig
 
   type b
 
-  val dtype : (a, b) Nx.dtype
+  val dtype : (a, b) Rune.dtype
 
   val typ : string
 
   val generate :
-       (a, b) Nx.dtype
+       (a, b) Rune.dtype
     -> string * string * Parameters.t
-    -> (float, Bigarray.float64_elt) Nx.t
-    -> (a, b) Nx.t
+    -> (float, Bigarray.float64_elt, [`c]) Rune.t
+    -> (a, b, [`c]) Rune.t
 end
 
 module Tests_cases (T : Testable) = struct
   include T
 
-  let read_audio (type c) (audio_dtype : (float, c) Nx.dtype) (path : string)
+  let read_audio (type c) (audio_dtype : (float, c) Rune.dtype) (path : string)
       (res_typ : Io.resampling_t) (sample_rate : int) (mono : bool) =
-    let audio, _ = Io.read ~res_typ ~sample_rate ~mono audio_dtype path in
+    let audio, _ =
+      Io.read ~res_typ ~sample_rate ~mono Rune.c audio_dtype path
+    in
     audio
 
-  let read_npy : type a b. (a, b) Nx.dtype -> string -> (a, b) Nx.t =
+  let read_npy : type a b.
+      (a, b) Rune.dtype -> string -> (a, b, [`c]) Rune.t =
    fun dtype path ->
     let packed = Nx_io.load_npy path in
+    let device = Rune.c in
     match dtype with
-    | Nx.Float32 ->
-        Nx_io.to_float32 packed
-    | Nx.Float64 ->
-        Nx_io.to_float64 packed
-    | Nx.Complex32 ->
-        Nx_io.to_complex32 packed
-    | Nx.Complex64 ->
-        Nx_io.to_complex64 packed
+    | Rune.Float32 ->
+        let nx_tensor = Nx_io.to_float32 packed in
+        Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
+    | Rune.Float64 ->
+        let nx_tensor = Nx_io.to_float64 packed in
+        Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
+    | Rune.Complex32 ->
+        let nx_tensor = Nx_io.to_complex32 packed in
+        Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
+    | Rune.Complex64 ->
+        let nx_tensor = Nx_io.to_complex64 packed in
+        Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
     | _ ->
         failwith "Unsupported datatype"
 
@@ -209,7 +217,7 @@ module Tests_cases (T : Testable) = struct
             ( Option.value ~default:"None"
             @@ Parameters.get_string "res_type" params )
         in
-        let audio = read_audio Nx.float64 audio_path resampler sr mono in
+        let audio = read_audio Rune.float64 audio_path resampler sr mono in
         let generated = generate dtype case audio in
         let vector = read_npy dtype vector_path in
         let test_dense () =

@@ -2,7 +2,7 @@
 opam-version: "2.0"
 synopsis: "An OCaml library to embed sound processing in your applications"
 description:
-  "SoundML is a library built on top of RavenML to analyse sounds files. It can read, write audio, extract various features from audio files and much more."
+  "SoundML is a library built on top of Rune to analyse sounds files. It can read, write audio, extract various features from audio files and much more."
 maintainer: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 authors: ["Gabriel Santamaria <gaby.santamaria@outlook.fr>"]
 license: "Apache-2.0"
@@ -17,7 +17,7 @@ depends: [
   "conf-rubberband" {build}
   "conf-samplerate" {build}
   "dune-configurator" {build}
-  "raven"
+  "rune"
   "odoc" {with-doc}
   "alcotest" {with-test}
   "yojson" {with-test}

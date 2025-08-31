@@ -54,21 +54,21 @@ let file_exists name =
 
 let create_test_audio channels samples sample_rate =
   let shape = if channels > 1 then [|channels; samples|] else [|samples|] in
-  let data = Nx.zeros Nx.float32 shape in
+  let data = Rune.zeros Rune.c Rune.float32 shape in
   let freq = 23000. in
   for channel = 0 to channels - 1 do
     for i = 0 to samples - 1 do
       let idx = if channels > 1 then [channel; i] else [i] in
-      Nx.set_item idx
-        (sin (2. *. Float.pi *. (freq *. Float.of_int channel)))
-        data
+      let value = sin (2. *. Float.pi *. (freq *. Float.of_int channel)) in
+      let scalar_value = Rune.scalar Rune.c Rune.float32 value in
+      Rune.set idx scalar_value data
     done
   done ;
   (data, sample_rate)
 
 let create_empty_audio channels sample_rate =
   let shape = if channels > 1 then [|channels; 0|] else [|0|] in
-  let data = Nx.zeros Nx.float32 shape in
+  let data = Rune.zeros Rune.c Rune.float32 shape in
   (data, sample_rate)
 
 let check_write_read name
@@ -86,19 +86,19 @@ let check_write_read name
         (file_exists filename) true ;
       let read_audio, sample_rate =
         try
-          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Nx.Float32
-            filename
+          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Rune.c
+            Rune.float32 filename
         with ex ->
           Alcotest.failf "Failed to read back file %s: %s" filename
             (Printexc.to_string ex)
       in
       Alcotest.check
         (Alcotest.array Alcotest.int)
-        "Channels match after write" (Nx.shape audio) (Nx.shape read_audio) ;
+        "Channels match after write" (Rune.shape audio) (Rune.shape read_audio) ;
       Alcotest.check Alcotest.int "Sample rate match after write" target_sr
         sample_rate ;
       Alcotest.check
-        (Tutils.tensor_testable (Nx.dtype audio) ~rtol:10e-5 ~atol:10e-5)
+        (Tutils.tensor_testable (Rune.dtype audio) ~rtol:10e-5 ~atol:10e-5)
         "Data unchanged after write" audio read_audio )
 
 let check_write_empty name
