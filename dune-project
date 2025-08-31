@@ -19,7 +19,7 @@
  (name soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
  (description
-  "SoundML is a library built on top of RavenML to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
+  "SoundML is a library built on top of Rune to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
    (>= 5.2.0))
@@ -29,7 +29,7 @@
   ; Samplerate is already a requirement of rubberband
   (conf-samplerate :build)
   (dune-configurator :build)
-  raven
+  rune
   (odoc :with-doc)
   (alcotest :with-test)
   (yojson :with-test)

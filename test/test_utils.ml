@@ -21,28 +21,30 @@
 
 open Soundml
 
-type data = (float, Bigarray.float32_elt) Nx.t
+type data = (float, Rune.float32_elt, [`c]) Rune.t
 
 let data_testable : data Alcotest.testable =
   ( module struct
     type t = data
 
-    let pp : t Fmt.t = Nx.pp
+    let pp : t Fmt.t = Rune.pp
 
     let equal : t -> t -> bool = Tutils.Check.rallclose
   end )
 
 module Test_pad_center = struct
   let create_data (arr : float array) : data =
-    Nx.create Float32 [|Array.length arr|] arr
-  (* Create 1D Ndarray *)
+    Rune.create Rune.c Rune.float32 [|Array.length arr|] arr
+  (* Create 1D Rune tensor *)
 
   let test_no_padding () =
     let input_data = create_data [|1.; 2.; 3.|] in
     let target_size = 3 in
     let pad_value = 0. in
     let expected_output = create_data [|1.; 2.; 3.|] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "no_padding: Correct padding" expected_output
       actual_output
 
@@ -51,7 +53,9 @@ module Test_pad_center = struct
     let target_size = 6 in
     let pad_value = 0. in
     let expected_output = create_data [|0.; 0.; 1.; 2.; 0.; 0.|] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "even_padding: Correct padding" expected_output
       actual_output
 
@@ -60,7 +64,9 @@ module Test_pad_center = struct
     let target_size = 6 in
     let pad_value = 0. in
     let expected_output = create_data [|0.; 1.; 2.; 3.; 0.; 0.|] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "odd_padding: Correct padding" expected_output
       actual_output
 
@@ -69,7 +75,9 @@ module Test_pad_center = struct
     let target_size = 4 in
     let pad_value = 0. in
     let expected_output = create_data [|0.; 0.; 0.; 0.|] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "empty_input: Correct padding" expected_output
       actual_output
 
@@ -85,14 +93,16 @@ module Test_pad_center = struct
       "error_target_too_small: raises Invalid_argument when target_size < \
        input_size"
       expected_exn (fun () ->
-        ignore (Utils.pad_center input_data target_size pad_value) )
+        ignore (Utils.pad_center input_data ~size:target_size ~pad_value) )
 
   let test_non_zero_padding () =
     let input_data = create_data [|5.; 6.|] in
     let target_size = 5 in
     let pad_value = -1.5 in
     let expected_output = create_data [|-1.5; 5.; 6.; -1.5; -1.5|] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "non_zero_padding: Correct padding"
       expected_output actual_output
 
@@ -102,7 +112,9 @@ module Test_pad_center = struct
     let target_size = 0 in
     let pad_value = 0. in
     let expected_output = create_data [||] in
-    let actual_output = Utils.pad_center input_data target_size pad_value in
+    let actual_output =
+      Utils.pad_center input_data ~size:target_size ~pad_value
+    in
     Alcotest.check data_testable "zero_target_empty_input: Correct padding"
       expected_output actual_output
 
@@ -118,7 +130,7 @@ module Test_pad_center = struct
       "zero_target_non_empty_input: raises Invalid_argument when target_size < \
        input_size"
       expected_exn (fun () ->
-        ignore (Utils.pad_center input_data target_size pad_value) )
+        ignore (Utils.pad_center input_data ~size:target_size ~pad_value) )
 
   let suite =
     [ Alcotest.test_case "no_padding" `Quick test_no_padding
@@ -137,7 +149,7 @@ end
 module Test_melfreq = struct
   let test_default () =
     let expected =
-      Nx.create Float32 [|128|]
+      Rune.create Rune.c Rune.float32 [|128|]
         [| 0.
          ; 26.199787
          ; 52.399574
@@ -267,12 +279,12 @@ module Test_melfreq = struct
          ; 10731.102
          ; 11025. |]
     in
-    let actual = Utils.melfreq Float32 in
+    let actual = Utils.melfreqs Tutils.device Rune.float32 in
     Alcotest.check data_testable "melfreq_default" expected actual
 
   let test_custom () =
     let expected =
-      Nx.create Float32 [|10|]
+      Rune.create Rune.c Rune.float32 [|10|]
         [| 1000.
          ; 1203.3604
          ; 1431.0475
@@ -285,7 +297,8 @@ module Test_melfreq = struct
          ; 4000. |]
     in
     let actual =
-      Utils.melfreq ~nmels:10 ~fmin:1000. ~fmax:4000. ~htk:true Float32
+      Utils.melfreqs ~n_mels:10 ~f_min:1000. ~f_max:4000. ~htk:true
+        Tutils.device Rune.float32
     in
     Alcotest.check data_testable "melfreq_custom" expected actual
 
@@ -297,10 +310,11 @@ end
 module Test_unwrap = struct
   let test_1d () =
     let p =
-      Nx.create Float32 [|8|] [|0.; 0.1; 0.2; 5.0; 5.1; 5.2; -0.1; -0.2|]
+      Rune.create Rune.c Rune.float32 [|8|]
+        [|0.; 0.1; 0.2; 5.0; 5.1; 5.2; -0.1; -0.2|]
     in
     let expected =
-      Nx.create Float32 [|8|]
+      Rune.create Rune.c Rune.float32 [|8|]
         [| 0.
          ; 0.1
          ; 0.2
@@ -314,15 +328,22 @@ module Test_unwrap = struct
     Alcotest.check data_testable "unwrap_1d" expected actual
 
   let test_2d_axis0 () =
-    let p = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
-    let expected = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
+    let p =
+      Rune.create Rune.c Rune.float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|]
+    in
+    let expected =
+      Rune.create Rune.c Rune.float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|]
+    in
     let actual = Utils.unwrap ~axis:0 p in
     Alcotest.check data_testable "unwrap_2d_axis0" expected actual
 
   let test_2d_axis1 () =
-    let p = Nx.create Float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|] in
+    let p =
+      Rune.create Rune.c Rune.float32 [|2; 3|] [|0.; 0.1; 6.2; 0.; 0.1; 6.2|]
+    in
     let expected =
-      Nx.create Float32 [|2; 3|] [|0.; 0.1; -0.08318615; 0.; 0.1; -0.08318615|]
+      Rune.create Rune.c Rune.float32 [|2; 3|]
+        [|0.; 0.1; -0.08318615; 0.; 0.1; -0.08318615|]
     in
     let actual = Utils.unwrap ~axis:1 p in
     Alcotest.check data_testable "unwrap_2d_axis1" expected actual
@@ -335,23 +356,23 @@ end
 
 module Test_outer = struct
   let test_add () =
-    let x = Nx.create Float32 [|3|] [|1.; 2.; 3.|] in
-    let y = Nx.create Float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let x = Rune.create Rune.c Rune.float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Rune.create Rune.c Rune.float32 [|4|] [|4.; 5.; 6.; 7.|] in
     let expected =
-      Nx.create Float32 [|3; 4|]
+      Rune.create Rune.c Rune.float32 [|3; 4|]
         [|5.; 6.; 7.; 8.; 6.; 7.; 8.; 9.; 7.; 8.; 9.; 10.|]
     in
-    let actual = Utils.outer Nx.add x y in
+    let actual = Utils.outer Rune.add x y in
     Alcotest.check data_testable "outer_add" expected actual
 
   let test_mul () =
-    let x = Nx.create Float32 [|3|] [|1.; 2.; 3.|] in
-    let y = Nx.create Float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let x = Rune.create Rune.c Rune.float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Rune.create Rune.c Rune.float32 [|4|] [|4.; 5.; 6.; 7.|] in
     let expected =
-      Nx.create Float32 [|3; 4|]
+      Rune.create Rune.c Rune.float32 [|3; 4|]
         [|4.; 5.; 6.; 7.; 8.; 10.; 12.; 14.; 12.; 15.; 18.; 21.|]
     in
-    let actual = Utils.outer Nx.mul x y in
+    let actual = Utils.outer Rune.mul x y in
     Alcotest.check data_testable "outer_mul" expected actual
 
   let suite =
@@ -362,11 +383,11 @@ end
 module Test_convert = struct
   let test_hz_to_mel_htk () =
     let freqs =
-      Nx.create Float32 [|10|]
+      Rune.create Rune.c Rune.float32 [|10|]
         [|0.; 1225.; 2450.; 3675.; 4900.; 6125.; 7350.; 8575.; 9800.; 11025.|]
     in
     let expected =
-      Nx.create Float32 [|10|]
+      Rune.create Rune.c Rune.float32 [|10|]
         [| 0.
          ; 1140.0684
          ; 1695.0864
@@ -383,7 +404,7 @@ module Test_convert = struct
 
   let test_mel_to_hz_htk () =
     let mels =
-      Nx.create Float32 [|10|]
+      Rune.create Rune.c Rune.float32 [|10|]
         [| 0.
          ; 444.44446
          ; 888.8889
@@ -396,7 +417,7 @@ module Test_convert = struct
          ; 4000. |]
     in
     let expected =
-      Nx.create Float32 [|10|]
+      Rune.create Rune.c Rune.float32 [|10|]
         [| 0.
          ; 338.40695
          ; 840.4128
@@ -413,34 +434,35 @@ module Test_convert = struct
 
   let test_power_to_db () =
     let s =
-      Nx.create Float32 [|2; 4|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
         [|1.; 0.1; 0.01; 0.001; 1e-11; 1e-12; 1e-13; 1e-14|]
     in
     let expected_ref1_topdb80 =
-      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
+        [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let actual_ref1_topdb80 =
-      Utils.Convert.power_to_db ~top_db:(Some 80.0) (Utils.Convert.RefFloat 1.0)
-        s
+      Utils.Convert.power_to_db ~top_db:80.0 (Utils.Convert.RefFloat 1.0) s
     in
     Alcotest.check data_testable "power_to_db ref=1.0 top_db=80.0"
       expected_ref1_topdb80 actual_ref1_topdb80 ;
     let expected_refmax_topdb80 =
-      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
+        [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let actual_refmax_topdb80 =
-      Utils.Convert.power_to_db ~top_db:(Some 80.0)
-        (Utils.Convert.RefFunction (fun x -> Nx.max x |> Nx.get_item []))
+      Utils.Convert.power_to_db ~top_db:80.0
+        (Utils.Convert.RefFunction (fun x -> Rune.unsafe_get [] (Rune.max x)))
         s
     in
     Alcotest.check data_testable "power_to_db ref=max top_db=80.0"
       expected_refmax_topdb80 actual_refmax_topdb80 ;
     let expected_ref1_topdbNone =
-      Nx.create Float32 [|2; 4|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
         [|0.; -10.; -20.; -30.; -110.; -120.; -130.; -140.|]
     in
     let actual_ref1_topdbNone =
-      Utils.Convert.power_to_db ~amin:1e-10 ~top_db:None
+      Utils.Convert.power_to_db ~amin:1e-10 ?top_db:None
         (Utils.Convert.RefFloat 1.0) s
     in
     Alcotest.check data_testable "power_to_db ref=1.0 top_db=None"
@@ -448,10 +470,12 @@ module Test_convert = struct
 
   let test_db_to_power () =
     let db_s =
-      Nx.create Float32 [|2; 4|] [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
+        [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let expected =
-      Nx.create Float32 [|2; 4|] [|1.; 0.1; 0.01; 0.001; 1e-8; 1e-8; 1e-8; 1e-8|]
+      Rune.create Rune.c Rune.float32 [|2; 4|]
+        [|1.; 0.1; 0.01; 0.001; 1e-8; 1e-8; 1e-8; 1e-8|]
     in
     let actual = Utils.Convert.db_to_power (Utils.Convert.RefFloat 1.0) db_s in
     Alcotest.check data_testable "db_to_power" expected actual
@@ -469,19 +493,19 @@ module Test_frame = struct
     Random.init seed ;
     let size = Array.fold_left ( * ) 1 shape in
     let data = Array.init size (fun _ -> Random.float 2.0 -. 1.0) in
-    Nx.create Float32 shape data
+    Rune.create Rune.c Rune.float32 shape data
 
   (* Test 1D framing with parametrized frame_length, hop_length, and axis *)
   let test_frame1d frame_length hop_length axis () =
     let y = create_random_data [|32|] 42 in
     let y_frame = Utils.frame y ~frame_length ~hop_length ~axis in
-    let y_frame_adj = if axis = -1 then Nx.transpose y_frame else y_frame in
-    let num_frames = Nx.dim 0 y_frame_adj in
+    let y_frame_adj = if axis = -1 then Rune.transpose y_frame else y_frame in
+    let num_frames = (Rune.shape y_frame_adj).(0) in
     for i = 0 to num_frames - 1 do
-      let frame_i = Nx.get [i] y_frame_adj in
+      let frame_i = Rune.get [i] y_frame_adj in
       let start_idx = i * hop_length in
       let end_idx = min (start_idx + frame_length) 32 in
-      let expected_slice = Nx.slice [R [start_idx; end_idx; 1]] y in
+      let expected_slice = Rune.slice_ranges [start_idx] [end_idx] y in
       Alcotest.check data_testable
         (Printf.sprintf "frame1d_%d_%d_%d_frame_%d" frame_length hop_length axis
            i )
@@ -495,19 +519,20 @@ module Test_frame = struct
     let y =
       if is_fortran_order then
         (* Simulate Fortran order by transposing *)
-        Nx.transpose y_base
+        Rune.transpose y_base
       else y_base
     in
     let y_frame = Utils.frame y ~frame_length ~hop_length ~axis in
     let y_frame_adj, y_adj =
-      if axis = -1 then (Nx.transpose y_frame, Nx.transpose y) else (y_frame, y)
+      if axis = -1 then (Rune.transpose y_frame, Rune.transpose y)
+      else (y_frame, y)
     in
-    let num_frames = Nx.dim 0 y_frame_adj in
+    let num_frames = (Rune.shape y_frame_adj).(0) in
     for i = 0 to num_frames - 1 do
-      let frame_i = Nx.get [i] y_frame_adj in
+      let frame_i = Rune.get [i] y_frame_adj in
       let start_idx = i * hop_length in
-      let end_idx = min (start_idx + frame_length) (Nx.dim 0 y_adj) in
-      let expected_slice = Nx.slice [R [start_idx; end_idx; 1]] y_adj in
+      let end_idx = min (start_idx + frame_length) (Rune.shape y_adj).(0) in
+      let expected_slice = Rune.slice_ranges [start_idx] [end_idx] y_adj in
       Alcotest.check data_testable
         (Printf.sprintf "frame2d_%d_%d_%d_%b_frame_%d" frame_length hop_length
            axis is_fortran_order i )
@@ -516,16 +541,16 @@ module Test_frame = struct
 
   (* Test framing with 0-stride (padding) *)
   let test_frame_0stride () =
-    let x = Nx.arange Float32 0 10 1 in
-    let xpad = Nx.unsqueeze ~axes:[|0|] x in
-    let xpad2 = Nx.reshape [|1; 10|] x in
+    let x = Rune.arange Rune.c Rune.float32 0 10 1 in
+    let xpad = Rune.expand [|1; 10|] x in
+    let xpad2 = Rune.reshape [|1; 10|] x in
     let xf = Utils.frame x ~frame_length:3 ~hop_length:1 in
     let xfpad = Utils.frame xpad ~frame_length:3 ~hop_length:1 in
     let xfpad2 = Utils.frame xpad2 ~frame_length:3 ~hop_length:1 in
     (* Check that shapes are correctly different due to extra dimensions *)
-    let xf_shape = Nx.shape xf in
-    let xfpad_shape = Nx.shape xfpad in
-    let xfpad2_shape = Nx.shape xfpad2 in
+    let xf_shape = Rune.shape xf in
+    let xfpad_shape = Rune.shape xfpad in
+    let xfpad2_shape = Rune.shape xfpad2 in
     (* xf should be [3; 8] for axis=-1 *)
     Alcotest.check (Alcotest.array Alcotest.int) "xf_shape" [|3; 8|] xf_shape ;
     (* xfpad should be [1; 3; 8] - preserving the extra dimension *)
@@ -537,10 +562,10 @@ module Test_frame = struct
       (Alcotest.array Alcotest.int)
       "xfpad2_shape" [|1; 3; 8|] xfpad2_shape ;
     (* Check that the core data is the same by comparing xf with xfpad[0] *)
-    let xfpad_squeezed = Nx.get [0] xfpad in
+    let xfpad_squeezed = Rune.get [0] xfpad in
     Alcotest.check data_testable "frame_0stride_xf_vs_xfpad_data" xf
       xfpad_squeezed ;
-    let xfpad2_squeezed = Nx.get [0] xfpad2 in
+    let xfpad2_squeezed = Rune.get [0] xfpad2 in
     Alcotest.check data_testable "frame_0stride_xf_vs_xfpad2_data" xf
       xfpad2_squeezed
 
@@ -549,11 +574,11 @@ module Test_frame = struct
     let shape = Array.make ndim 20 in
     let x = create_random_data shape 456 in
     let xf = Utils.frame x ~frame_length ~hop_length in
-    let first_dim_size = Nx.dim 0 x in
+    let first_dim_size = (Rune.shape x).(0) in
     for i = 0 to first_dim_size - 1 do
-      let x_i = Nx.get [i] x in
+      let x_i = Rune.get [i] x in
       let xf0 = Utils.frame x_i ~frame_length ~hop_length in
-      let xf_i = Nx.get [i] xf in
+      let xf_i = Rune.get [i] xf in
       Alcotest.check data_testable
         (Printf.sprintf "frame_highdim_%d_%d_%d_slice_%d" frame_length
            hop_length ndim i )
@@ -562,16 +587,16 @@ module Test_frame = struct
 
   (* Test target axis framing *)
   let test_frame_targetaxis in_shape axis expected_out_shape () =
-    let x = Nx.empty Float32 in_shape in
+    let x = Rune.zeros Rune.c Rune.float32 in_shape in
     let xf = Utils.frame x ~frame_length:10 ~hop_length:2 ~axis in
-    let actual_shape = Nx.shape xf in
+    let actual_shape = Rune.shape xf in
     Alcotest.check
       (Alcotest.array Alcotest.int)
       "frame_targetaxis_shape" expected_out_shape actual_shape
 
   (* Test error cases *)
   let test_frame_too_short axis () =
-    let x = Nx.arange Float32 0 16 1 in
+    let x = Rune.arange Rune.c Rune.float32 0 16 1 in
     let expected_exn =
       Invalid_argument "Input is too short (n=16) for frame_length=17"
     in
@@ -579,7 +604,7 @@ module Test_frame = struct
         ignore (Utils.frame x ~frame_length:17 ~hop_length:1 ~axis) )
 
   let test_frame_bad_hop () =
-    let x = Nx.arange Float32 0 16 1 in
+    let x = Rune.arange Rune.c Rune.float32 0 16 1 in
     let expected_exn = Invalid_argument "Invalid hop_length: 0" in
     Alcotest.check_raises "frame_bad_hop" expected_exn (fun () ->
         ignore (Utils.frame x ~frame_length:4 ~hop_length:0) )

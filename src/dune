@@ -9,7 +9,7 @@
 (library
  (name window)
  (package soundml)
- (libraries nx)
+ (libraries rune utils)
  (modules window)
  (instrumentation
   (backend bisect_ppx))
@@ -18,7 +18,7 @@
 (library
  (name utils)
  (package soundml)
- (libraries nx)
+ (libraries rune)
  (modules utils)
  (instrumentation
   (backend bisect_ppx))
@@ -28,7 +28,7 @@
  (name transform)
  (package soundml)
  (modules transform)
- (libraries nx window utils)
+ (libraries rune window utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))
@@ -37,7 +37,7 @@
  (name filterbank)
  (package soundml)
  (modules filterbank)
- (libraries nx utils)
+ (libraries rune utils)
  (instrumentation
   (backend bisect_ppx))
  (wrapped false))

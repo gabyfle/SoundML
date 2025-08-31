@@ -24,35 +24,47 @@
 
 open Soundml
 
-let f32_nx_testable = Tutils.tensor_testable Nx.Float32 ~rtol:10e-6 ~atol:10e-6
+let f32_nx_testable =
+  Tutils.tensor_testable Rune.float32 ~rtol:10e-6 ~atol:10e-6
 
-let f64_nx_testable = Tutils.tensor_testable Nx.Float64 ~rtol:10e-6 ~atol:10e-6
+let f64_nx_testable =
+  Tutils.tensor_testable Rune.float64 ~rtol:10e-6 ~atol:10e-6
 
 let test_m_negative_0 () =
   Alcotest.check_raises "m_negative: M < 0 should raise Invalid_argument"
     (Invalid_argument "Window length M must be a non-negative integer")
-    (fun () -> ignore (Window.cosine_sum ~fftbins:false Float32 [|1.0|] (-1)) )
+    (fun () ->
+      ignore
+        (Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|1.0|] (-1)) )
 
 let test_m_zero_f32_1 () =
-  let expected = Nx.empty Float32 [|0|] in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|1.0|] 0 in
+  let expected = Rune.zeros Rune.c Rune.float32 [|0|] in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|1.0|] 0
+  in
   Alcotest.check f32_nx_testable "m_zero_f32: M = 0, empty array" expected
     actual
 
 let test_m_zero_f64_2 () =
-  let expected = Nx.empty Float64 [|0|] in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [||] 0 in
+  let expected = Rune.zeros Rune.c Rune.float64 [|0|] in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64 [||] 0
+  in
   Alcotest.check f64_nx_testable "m_zero_f64: M = 0, empty array" expected
     actual
 
 let test_m_one_f32_3 () =
-  let expected = Nx.ones Float32 [|1|] in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|1.0|] 1 in
+  let expected = Rune.ones Rune.c Rune.float32 [|1|] in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|1.0|] 1
+  in
   Alcotest.check f32_nx_testable "m_one_f32: M = 1, ones array" expected actual
 
 let test_m_one_f64_varied_coeffs_4 () =
-  let expected = Nx.ones Float64 [|1|] in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [|0.5; 0.5|] 1 in
+  let expected = Rune.ones Rune.c Rune.float64 [|1|] in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64 [|0.5; 0.5|] 1
+  in
   Alcotest.check f64_nx_testable "m_one_f64_varied_coeffs: M = 1, ones array"
     expected actual
 
@@ -64,8 +76,10 @@ let test_sym_m5_a1_f32_5 () =
      ; 1.00000000e+00
      ; 1.00000000e+00 |]
   in
-  let expected = Nx.create Float32 [|5|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|1.0|] 5 in
+  let expected = Rune.create Rune.c Rune.float32 [|5|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|1.0|] 5
+  in
   Alcotest.check f32_nx_testable
     "sym_m5_a1_f32: M = 5, coeffs_a = [np.float64(1.0)], fftbins = False"
     expected actual
@@ -83,8 +97,10 @@ let test_sym_m10_a_half_half_f64_6 () =
      ; 1.16977778e-01
      ; 0.00000000e+00 |]
   in
-  let expected = Nx.create Float64 [|10|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float64 [|0.5; 0.5|] 10 in
+  let expected = Rune.create Rune.c Rune.float64 [|10|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float64 [|0.5; 0.5|] 10
+  in
   Alcotest.check f64_nx_testable
     "sym_m10_a_half_half_f64: M = 10, coeffs_a = [np.float64(0.5), \
      np.float64(0.5)], fftbins = False"
@@ -101,8 +117,10 @@ let test_sym_m8_a_hamm_like_f32_7 () =
      ; 2.53194690e-01
      ; 7.99999982e-02 |]
   in
-  let expected = Nx.create Float32 [|8|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|0.54; 0.46|] 8 in
+  let expected = Rune.create Rune.c Rune.float32 [|8|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|0.54; 0.46|] 8
+  in
   Alcotest.check f32_nx_testable
     "sym_m8_a_hamm_like_f32: M = 8, coeffs_a = [np.float64(0.54), \
      np.float64(0.46)], fftbins = False"
@@ -118,8 +136,11 @@ let test_sym_m7_a_multi_f64_8 () =
      ; 8.75000000e-01
      ; 8.50000000e-01 |]
   in
-  let expected = Nx.create Float64 [|7|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float64 [|1.0; 0.2; 0.05|] 7 in
+  let expected = Rune.create Rune.c Rune.float64 [|7|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float64
+      [|1.0; 0.2; 0.05|] 7
+  in
   Alcotest.check f64_nx_testable
     "sym_m7_a_multi_f64: M = 7, coeffs_a = [np.float64(1.0), np.float64(0.2), \
      np.float64(0.05)], fftbins = False"
@@ -134,8 +155,10 @@ let test_sym_m6_a_empty_f32_9 () =
      ; 0.00000000e+00
      ; 0.00000000e+00 |]
   in
-  let expected = Nx.create Float32 [|6|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [||] 6 in
+  let expected = Rune.create Rune.c Rune.float32 [|6|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [||] 6
+  in
   Alcotest.check f32_nx_testable
     "sym_m6_a_empty_f32: M = 6, coeffs_a = [], fftbins = False" expected actual
 
@@ -147,8 +170,10 @@ let test_per_m5_a1_f32_10 () =
      ; 1.00000000e+00
      ; 1.00000000e+00 |]
   in
-  let expected = Nx.create Float32 [|5|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float32 [|1.0|] 5 in
+  let expected = Rune.create Rune.c Rune.float32 [|5|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float32 [|1.0|] 5
+  in
   Alcotest.check f32_nx_testable
     "per_m5_a1_f32: M = 5, coeffs_a = [np.float64(1.0)], fftbins = True"
     expected actual
@@ -166,8 +191,10 @@ let test_per_m10_a_half_half_f64_11 () =
      ; 3.45491503e-01
      ; 9.54915028e-02 |]
   in
-  let expected = Nx.create Float64 [|10|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [|0.5; 0.5|] 10 in
+  let expected = Rune.create Rune.c Rune.float64 [|10|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64 [|0.5; 0.5|] 10
+  in
   Alcotest.check f64_nx_testable
     "per_m10_a_half_half_f64: M = 10, coeffs_a = [np.float64(0.5), \
      np.float64(0.5)], fftbins = True"
@@ -184,8 +211,10 @@ let test_per_m8_a_hamm_like_f32_12 () =
      ; 5.40000021e-01
      ; 2.14730874e-01 |]
   in
-  let expected = Nx.create Float32 [|8|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float32 [|0.54; 0.46|] 8 in
+  let expected = Rune.create Rune.c Rune.float32 [|8|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float32 [|0.54; 0.46|] 8
+  in
   Alcotest.check f32_nx_testable
     "per_m8_a_hamm_like_f32: M = 8, coeffs_a = [np.float64(0.54), \
      np.float64(0.46)], fftbins = True"
@@ -201,8 +230,11 @@ let test_per_m7_a_multi_f64_13 () =
      ; 9.99455743e-01
      ; 8.64175993e-01 |]
   in
-  let expected = Nx.create Float64 [|7|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [|1.0; 0.2; 0.05|] 7 in
+  let expected = Rune.create Rune.c Rune.float64 [|7|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64
+      [|1.0; 0.2; 0.05|] 7
+  in
   Alcotest.check f64_nx_testable
     "per_m7_a_multi_f64: M = 7, coeffs_a = [np.float64(1.0), np.float64(0.2), \
      np.float64(0.05)], fftbins = True"
@@ -217,8 +249,10 @@ let test_per_m6_a_empty_f64_14 () =
      ; 0.00000000e+00
      ; 0.00000000e+00 |]
   in
-  let expected = Nx.create Float64 [|6|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [||] 6 in
+  let expected = Rune.create Rune.c Rune.float64 [|6|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64 [||] 6
+  in
   Alcotest.check f64_nx_testable
     "per_m6_a_empty_f64: M = 6, coeffs_a = [], fftbins = True" expected actual
 
@@ -289,8 +323,10 @@ let test_sym_m64_a_rect_plus_cosine_f32_15 () =
      ; 7.01490760e-01
      ; 6.99999988e-01 |]
   in
-  let expected = Nx.create Float32 [|64|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|1.0; 0.3|] 64 in
+  let expected = Rune.create Rune.c Rune.float32 [|64|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32 [|1.0; 0.3|] 64
+  in
   Alcotest.check f32_nx_testable
     "sym_m64_a_rect_plus_cosine_f32: M = 64, coeffs_a = [np.float64(1.0), \
      np.float64(0.3)], fftbins = False"
@@ -363,8 +399,10 @@ let test_per_m64_a_rect_plus_cosine_f64_16 () =
      ; 7.05764416e-01
      ; 7.01444582e-01 |]
   in
-  let expected = Nx.create Float64 [|64|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:true Float64 [|1.0; 0.3|] 64 in
+  let expected = Rune.create Rune.c Rune.float64 [|64|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:true Tutils.device Rune.float64 [|1.0; 0.3|] 64
+  in
   Alcotest.check f64_nx_testable
     "per_m64_a_rect_plus_cosine_f64: M = 64, coeffs_a = [np.float64(1.0), \
      np.float64(0.3)], fftbins = True"
@@ -378,8 +416,11 @@ let test_sym_m5_a_one_zero_f32_17 () =
      ; 5.00000000e-01
      ; 1.50000000e+00 |]
   in
-  let expected = Nx.create Float32 [|5|] expected_values in
-  let actual = Window.cosine_sum ~fftbins:false Float32 [|1.0; 0.0; 0.5|] 5 in
+  let expected = Rune.create Rune.c Rune.float32 [|5|] expected_values in
+  let actual =
+    Window.cosine_sum ~fftbins:false Tutils.device Rune.float32
+      [|1.0; 0.0; 0.5|] 5
+  in
   Alcotest.check f32_nx_testable
     "sym_m5_a_one_zero_f32: M = 5, coeffs_a = [np.float64(1.0), \
      np.float64(0.0), np.float64(0.5)], fftbins = False"
