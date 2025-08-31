@@ -24,15 +24,15 @@ open Vutils
 module Timeseries = struct
   type a = float
 
-  type b = Nx.float64_elt
+  type b = Rune.float64_elt
 
-  let dtype = Nx.Float64
+  let dtype = Rune.Float64
 
   let typ = "timeseries"
 
-  let generate (_ : (a, b) Nx.dtype) (_ : string * string * Parameters.t)
-      (audio : (float, Bigarray.float64_elt) Nx.t) =
-    Nx.cast dtype audio
+  let generate (_ : (a, b) Rune.dtype) (_ : string * string * Parameters.t)
+      (audio : (float, Bigarray.float64_elt, [`ocaml]) Rune.t) =
+    Rune.cast dtype audio
 end
 
 module Tests = Tests_cases (Timeseries)

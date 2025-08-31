@@ -52,7 +52,7 @@ let get_file_size filename =
   | Sys_error msg ->
       Error (sprintf "System error  statting '%s': %s" filename msg)
 
-let benchmark_read kind filename sample_rate =
+let benchmark_read device kind filename sample_rate =
   match get_file_size filename with
   | Error msg ->
       Error (filename, msg)
@@ -65,15 +65,15 @@ let benchmark_read kind filename sample_rate =
           in
           let start_time = Unix.gettimeofday () in
           let _audio =
-            Soundml.Io.read ~res_typ ~sample_rate ~mono:false kind filename
+            Soundml.Io.read ~res_typ ~sample_rate device kind filename
           in
           let end_time = Unix.gettimeofday () in
           let duration = end_time -. start_time in
           Ok (duration, size_mb)
         with ex -> Error (filename, Printexc.to_string ex) )
 
-let run_benchmark root sample_rate extension max_files =
-  let kind = Nx.Float32 in
+let run_benchmark device root sample_rate extension max_files =
+  let kind = Rune.Float32 in
   let all_files = find_ext_files root extension in
   let all_files =
     List.filteri (fun i _ -> if i >= max_files then false else true) all_files
@@ -85,7 +85,7 @@ let run_benchmark root sample_rate extension max_files =
       let warmup_files = List.filteri (fun i _ -> i < warmup_count) all_files in
       List.iter
         (fun f ->
-          match benchmark_read kind f sample_rate with
+          match benchmark_read device kind f sample_rate with
           | Ok _ ->
               ()
           | Error _ ->
@@ -95,7 +95,7 @@ let run_benchmark root sample_rate extension max_files =
   let total_size = ref 0.0 in
   List.iter
     (fun filename ->
-      match benchmark_read kind filename sample_rate with
+      match benchmark_read device kind filename sample_rate with
       | Ok (duration, size_mb) ->
           total_time := !total_time +. duration ;
           total_size := !total_size +. size_mb
@@ -111,6 +111,7 @@ let () =
     eprintf "Usage: %s  <root_directory> <sample_rate> <format> <max_files>\n"
       Sys.argv.(0)
   else
+    let device = Rune.c in
     let root_dir = Sys.argv.(1) in
     let sample_rate = int_of_string Sys.argv.(2) in
     let extension = Sys.argv.(3) in
@@ -118,7 +119,7 @@ let () =
     if not (Sys.file_exists root_dir && Sys.is_directory root_dir) then
       eprintf "Can't read directory: %s.\n" root_dir
     else
-      try run_benchmark root_dir sample_rate extension max_files
+      try run_benchmark device root_dir sample_rate extension max_files
       with ex ->
         eprintf "An unexpected  error occurred: %s\n" (Printexc.to_string ex) ;
         exit 1

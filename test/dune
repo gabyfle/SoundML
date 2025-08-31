@@ -8,15 +8,15 @@
   ;test_time
   test_window
   ;test_filter
-  ;test_filterbank)
+  ;test_filterbank
   )
- (libraries alcotest soundml)
+ (libraries alcotest soundml rune)
  (action
   (run %{test})))
 
 (tests
  (names test_stft)
- (libraries alcotest str yojson nx.io soundml)
+ (libraries alcotest str yojson nx rune nx.io soundml)
  (package soundml)
  (deps
   generate_vectors.py

@@ -23,31 +23,43 @@
 *)
 module Check : sig
   val rallclose :
-    ?rtol:float -> ?atol:float -> (float, 'b) Nx.t -> (float, 'b) Nx.t -> bool
+       ?rtol:float
+    -> ?atol:float
+    -> (float, 'b, 'dev) Rune.t
+    -> (float, 'b, 'dev) Rune.t
+    -> bool
   (** Real-valued all-close function *)
 
   val callclose :
-    'a.
+    'a 'dev.
        ?rtol:float
     -> ?atol:float
-    -> (Complex.t, 'a) Nx.t
-    -> (Complex.t, 'a) Nx.t
+    -> (Complex.t, 'a, 'dev) Rune.t
+    -> (Complex.t, 'a, 'dev) Rune.t
     -> bool
   (** Complex-valued all-close function *)
 
-  val shape : ('a, 'b) Nx.t -> ('a, 'b) Nx.t -> bool
+  val shape : ('a, 'b, 'dev) Rune.t -> ('a, 'b, 'dev) Rune.t -> bool
   (** Check the shape of two ndarrays are equal *)
 end
 
 val allclose :
-  'a 'b. ?rtol:float -> ?atol:float -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t -> bool
-(** Checks if two Ndarrays are allclose. This is equivalent to
+  'a 'b 'dev.
+     ?rtol:float
+  -> ?atol:float
+  -> ('a, 'b, 'dev) Rune.t
+  -> ('a, 'b, 'dev) Rune.t
+  -> bool
+(** Checks if two Rune tensors are allclose. This is equivalent to
     NumPy's allclose function. *)
 
 val tensor_testable :
-  'a 'b.
-     ('a, 'b) Nx.dtype
+  'a 'b 'dev.
+     ('a, 'b) Rune.dtype
   -> rtol:float
   -> atol:float
-  -> ('a, 'b) Nx.t Alcotest.testable
-(** An Alcotest.testable for Nx tensors. *)
+  -> ('a, 'b, 'dev) Rune.t Alcotest.testable
+(** An Alcotest.testable for Rune tensors. *)
+
+val device : [`c] Rune.device
+(** Device used to run the tests *)
