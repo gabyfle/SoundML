@@ -30,6 +30,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Checkout raven-ml/raven
+        uses: actions/checkout@v4
+        with:
+          repository: raven-ml/raven
+          path: raven
+
       - name: Set up OCaml ${{ matrix.ocaml-compiler }} on ${{ matrix.os }}
         uses: ocaml/setup-ocaml@v3
         with:
@@ -53,10 +59,8 @@ jobs:
         run: sudo apt-get install -y ffmpeg
         shell: bash
 
-      - name: Pin Rune and Nx to latest raven-ml/raven commit
-        run: |
-            opam pin add rune git+https://github.com/raven-ml/raven.git --kind=git --yes
-            opam pin add nx git+https://github.com/raven-ml/raven.git --kind=git --yes || true
+      - name: Pin raven packages from working directory
+        run: opam pin add ./raven --working-dir --yes
         shell: bash
 
       - name: Install SoundML dependencies (with test)
