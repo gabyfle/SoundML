@@ -76,8 +76,7 @@ module type Testable = sig
   val generate :
        (a, b) Rune.dtype
     -> string * string * Parameters.t
-    -> (float, Bigarray.float64_elt, [`c]) Rune.t
-       (* Audio is always float *)
+    -> (float, Bigarray.float64_elt, [`c]) Rune.t (* Audio is always float *)
     -> (a, b, [`c]) Rune.t
   (** Generate a testing vector given some parameters and an audio array *)
 end
