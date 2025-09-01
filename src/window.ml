@@ -34,7 +34,7 @@ let cosine_sum ?(fftbins = false) (device : 'dev Rune.device)
         let full_range =
           Rune.linspace device dtype (-.Float.pi) Float.pi (m + 1)
         in
-        Rune.slice [R [0; m; 1]] full_range
+        Rune.slice [Rs (0, m, 1)] full_range
     in
     let w =
       if Array.length a > 0 then Rune.full device dtype [|m|] a.(0)

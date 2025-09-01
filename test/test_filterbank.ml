@@ -29,7 +29,7 @@ let test_mel_shape () =
   let nfft = 2048 in
   let nmels = 128 in
   let fmin = 0.0 in
-  let filters = Filterbank.mel Float32 sr nfft nmels fmin in
+  let filters = Filterbank.mel_filterbank Float32 sr nfft nmels fmin in
   let expected_shape = [|nmels; (nfft / 2) + 1|] in
   Alcotest.(check (array int))
     "Shape matches [nmels; nfft/2 + 1]" expected_shape (G.shape filters)

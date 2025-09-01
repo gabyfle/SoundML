@@ -173,26 +173,30 @@ module Tests_cases (T : Testable) = struct
     in
     audio
 
-  let read_npy : type a b.
-      (a, b) Rune.dtype -> string -> (a, b, [`c]) Rune.t =
+  let read_npy : type a b. (a, b) Rune.dtype -> string -> (a, b, [`c]) Rune.t =
    fun dtype path ->
     let packed = Nx_io.load_npy path in
     let device = Rune.c in
     match dtype with
     | Rune.Float32 ->
-        let nx_tensor = Nx_io.to_float32 packed in
+        let nx_tensor = Nx_io.as_float32 packed in
         Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
     | Rune.Float64 ->
-        let nx_tensor = Nx_io.to_float64 packed in
-        Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
-    | Rune.Complex32 ->
-        let nx_tensor = Nx_io.to_complex32 packed in
+        let nx_tensor = Nx_io.as_float64 packed in
         Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
     | Rune.Complex64 ->
-        let nx_tensor = Nx_io.to_complex64 packed in
+        let nx_tensor = Nx_io.as_complex64 packed in
         Rune.of_bigarray device (Nx.to_bigarray nx_tensor)
     | _ ->
         failwith "Unsupported datatype"
+  (* let packed = Nx_io.load_npy path in let device = Rune.c in match dtype with
+     | Rune.Float32 -> let nx_tensor = Nx.as_float32 packed in Rune.of_bigarray
+     device (Nx.to_bigarray nx_tensor) | Rune.Float64 -> let nx_tensor =
+     Nx_io.to_float64 packed in Rune.of_bigarray device (Nx.to_bigarray
+     nx_tensor) | Rune.Complex32 -> let nx_tensor = Nx_io.to_complex32 packed in
+     Rune.of_bigarray device (Nx.to_bigarray nx_tensor) | Rune.Complex64 -> let
+     nx_tensor = Nx_io.to_complex64 packed in Rune.of_bigarray device
+     (Nx.to_bigarray nx_tensor) | _ -> failwith "Unsupported datatype" *)
 
   let create_tests (data : (string * string * Parameters.t) list) (rtol : float)
       (atol : float) : unit Alcotest.test_case list =

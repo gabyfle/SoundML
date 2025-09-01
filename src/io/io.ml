@@ -192,8 +192,7 @@ let write : type a.
   let channels = if Array.length dshape > 1 then dshape.(1) else 1 in
   try
     let dtype = Rune.dtype data in
-    write_func dtype filename
-      (Rune.unsafe_to_bigarray data)
+    write_func dtype filename (Rune.to_bigarray data)
       (nframes, sample_rate, channels, format)
   with
   | ( File_not_found _

@@ -225,38 +225,6 @@ val melfreqs :
 
 (** {2 Mathematical Utilities} *)
 
-val unwrap :
-     ?discontinuity:float
-  -> ?axis:int
-  -> ?period:float
-  -> (float, 'a, 'dev) Rune.t
-  -> (float, 'a, 'dev) Rune.t
-(** [unwrap phase_values] unwraps phase values by removing discontinuities.
-
-   Corrects phase values by adding multiples of 2π to remove artificial
-   discontinuities caused by the periodic nature of phase. This is essential
-   for phase-based audio analysis and synthesis.
-
-   @param discontinuity Threshold for detecting discontinuities (default: π)
-   @param axis Axis along which to unwrap (default: -1)
-   @param period Period of the phase values (default: 2π)
-   @param phase_values Phase values to unwrap
-   @return Unwrapped phase values
-
-   @raise Invalid_argument if discontinuity <= 0.0
-   @raise Invalid_argument if period <= 0.0
-   @raise Invalid_argument if axis is out of bounds
-
-   {3 Example}
-
-   {[
-     let wrapped_phase = (* phase from STFT *) in
-     let unwrapped = Utils.unwrap wrapped_phase in
-     (* Remove 2π discontinuities for smooth phase *)
-   ]}
-
-   See: {{:https://numpy.org/doc/stable/reference/generated/numpy.unwrap.html}numpy.unwrap} *)
-
 val outer :
      (('a, 'b, 'dev) Rune.t -> ('a, 'b, 'dev) Rune.t -> ('a, 'b, 'dev) Rune.t)
   -> ('a, 'b, 'dev) Rune.t
