@@ -53,6 +53,12 @@ jobs:
         run: sudo apt-get install -y ffmpeg
         shell: bash
 
+      - name: Pin Rune and Nx to latest raven-ml/raven commit
+        run: |
+            opam pin add rune git+https://github.com/raven-ml/raven.git --kind=git --yes
+            opam pin add nx git+https://github.com/raven-ml/raven.git --kind=git --yes || true
+        shell: bash
+
       - name: Install SoundML dependencies (with test)
         run: opam install . --deps-only --with-test --yes --confirm-level=unsafe-yes --verbose
         shell: bash

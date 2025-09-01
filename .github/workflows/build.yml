@@ -38,6 +38,12 @@ jobs:
             sudo apt-get install -y libsoxr-dev
         shell: bash
 
+      - name: Pin Rune and Nx to latest raven-ml/raven commit
+        run: |
+            opam pin add rune git+https://github.com/raven-ml/raven.git --kind=git --yes
+            opam pin add nx git+https://github.com/raven-ml/raven.git --kind=git --yes || true
+        shell: bash
+
       - name: Install SoundML
         run: opam install . --yes --confirm-level=unsafe-yes
         shell: bash
