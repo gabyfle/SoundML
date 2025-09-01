@@ -56,19 +56,19 @@ let mel_filterbank ?f_max ?(htk : bool = false) ?norm ~sample_rate ~n_fft
     let fdiff =
       let n = Rune.size mel_freqs in
       Rune.sub
-        (Rune.slice [R [1; n]] mel_freqs)
-        (Rune.slice [R [0; n - 1]] mel_freqs)
+        (Rune.slice [R (1, n)] mel_freqs)
+        (Rune.slice [R (0, n - 1)] mel_freqs)
     in
     let ramps = Utils.outer Rune.sub mel_freqs fftfreqs in
     let lower =
       Rune.div
-        (Rune.neg (Rune.slice [R [0; n_mels]] ramps))
-        (Rune.reshape [|n_mels; 1|] (Rune.slice [R [0; n_mels]] fdiff))
+        (Rune.neg (Rune.slice [R (0, n_mels)] ramps))
+        (Rune.reshape [|n_mels; 1|] (Rune.slice [R (0, n_mels)] fdiff))
     in
     let upper =
       Rune.div
-        (Rune.slice [R [2; n_mels + 2]] ramps)
-        (Rune.reshape [|n_mels; 1|] (Rune.slice [R [1; n_mels + 1]] fdiff))
+        (Rune.slice [R (2, n_mels + 2)] ramps)
+        (Rune.reshape [|n_mels; 1|] (Rune.slice [R (1, n_mels + 1)] fdiff))
     in
     (* Intersect slopes *)
     let weights =
@@ -81,8 +81,8 @@ let mel_filterbank ?f_max ?(htk : bool = false) ?norm ~sample_rate ~n_fft
             Rune.div
               (Rune.scalar device dtype 2.0)
               (Rune.sub
-                 (Rune.slice [R [2; n_mels + 2]] mel_freqs)
-                 (Rune.slice [R [0; n_mels]] mel_freqs) )
+                 (Rune.slice [R (2, n_mels + 2)] mel_freqs)
+                 (Rune.slice [R (0, n_mels)] mel_freqs) )
           in
           let enorm = Rune.reshape [|n_mels; 1|] enorm in
           Rune.mul weights enorm

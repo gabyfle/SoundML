@@ -41,7 +41,7 @@ module Check = struct
       in
       let comparison_mask = Rune.less_equal abs_diff tolerance in
       let all_close = Rune.all comparison_mask in
-      Rune.unsafe_get [] all_close = 1
+      Rune.item [] all_close = 1
 
   let callclose : type a dev.
          ?rtol:float
@@ -64,7 +64,7 @@ module Check = struct
       in
       let comparison_mask = Rune.less_equal abs_diff tolerance in
       let all_close = Rune.all comparison_mask in
-      Rune.unsafe_get [] all_close = 1
+      Rune.item [] all_close = 1
 end
 
 let allclose_aux : type a b dev.
