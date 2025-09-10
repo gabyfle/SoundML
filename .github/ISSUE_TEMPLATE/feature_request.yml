@@ -1,0 +1,64 @@
+name: "🚀 New Feature Proposal"
+description: "Propose and scope out a new feature for SoundML."
+title: "[Feature]: A brief, descriptive title of the feature"
+labels: ["feature", "needs-triage"]
+body:
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: "Initial Checklist"
+      description: "Please check for existing feature requests before submitting."
+      options:
+        - label: "I have searched the existing [issues](https://github.com/gabyfle/SoundML/issues) to ensure this feature has not already been requested."
+          required: true
+  - type: textarea
+    id: problem-statement
+    attributes:
+      label: "Problem Statement & User Value"
+      description: "Describe the problem this feature solves. Frame it from a user's perspective using the format: **As a [persona], I want to [action], so that [value/outcome].** This helps us understand the core value."
+      placeholder: |
+        As a data scientist, I want to export audio spectrograms as high-resolution images, so that I can include them in my research papers and presentations.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: "Acceptance Criteria (Definition of Done)"
+      description: "Provide a clear, testable checklist of requirements that must be met for this feature to be considered complete. This ensures everyone agrees on what 'done' means."
+      placeholder: |
+        - [ ] A new function `export_spectrogram(data, path)` is available.
+        - [ ] The function supports exporting to PNG and JPG formats.
+        - [ ] Users can specify the image resolution (e.g., DPI).
+        - [ ] The function raises an error if an invalid file path is provided.
+        - [ ] Documentation for the new function is added to the user guide.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: "Proposed Solution or Technical Approach (Optional)"
+      description: "If you have ideas on how to implement this, please share them. You can describe the high-level strategy, libraries you might use, or potential code structure. It's okay to leave this blank!"
+      placeholder: |
+       We could use the existing implementation of the STFT to create a new log-spectrogram function.
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: "Additional Context (Mockups, Links, etc.)"
+      description: "Add any other context that might be helpful, such as screenshots, mockups of the desired output, or links to similar features in other libraries."
+  
+  - type: textarea
+    id: references
+    attributes:
+      label: "References"
+      description: "Please add links to any relevant scientific papers, blog posts, or other library implementations that could inform this feature."
+      placeholder: |
+        - [Short-Time Fourier Transform - Wikipedia](https://en.wikipedia.org/wiki/Short-time_Fourier_transform)
+        - [Librosa's implementation of melspectrogram](https://librosa.org/doc/main/generated/librosa.feature.melspectrogram.html)
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: "Code of Conduct"
+      description: "By submitting this issue, you agree to follow our Code of Conduct."
+      options:
+        - label: "I agree to follow this project's [Code of Conduct](https://github.com/gabyfle/SoundML/blob/main/CODE_OF_CONDUCT.md)."
+          required: true
