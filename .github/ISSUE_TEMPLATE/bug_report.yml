@@ -1,0 +1,77 @@
+name: "🐛 Bug Report"
+description: "Report a reproducible bug or issue."
+title: "[Bug]: A brief, descriptive title of the bug"
+labels: ["bug", "needs-triage"]
+body:
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: "Initial Checklist"
+      description: "Please complete these steps before submitting. This helps us resolve issues faster."
+      options:
+        - label: "I have searched the existing [issues](https://github.com/gabyfle/SoundML/issues) to make sure this is not a duplicate."
+          required: true
+        - label: "I have updated to the latest version of SoundML to see if the issue has already been fixed."
+          required: true
+        - label: "I am not reporting a security vulnerability."
+          required: true
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: "Bug Description"
+      description: "Provide a clear and concise description of what the bug is."
+      placeholder: "e.g., The `read` function throws a `Invalid_format` when processing 24-bit WAV files, even though they should be supported."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: "Steps to Reproduce"
+      description: "Provide a **minimal** code snippet or a step-by-step guide to reliably reproduce the bug."
+      placeholder: |
+        1. Create a 24-bit WAV file named `test.wav`.
+        2. Run the following OCaml code:
+           ```ocaml
+           let () =
+               let audio, _ = Soundml.Io.read Rune.c Float32 filename in
+               ignore audio
+           ```
+        3. Observe the error output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: "Expected Behavior"
+      description: "What did you expect to happen when you followed the steps above?"
+      placeholder: "The audio file should load into a Rune tensor without raising an exception."
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: "Actual Behavior & Logs"
+      description: "What actually happened? Please include the full error message, stack trace, and any relevant logs. Format them in a code block."
+      placeholder: |
+        ```
+        Fatal error: exception Invalid_format("[...]")
+        ```
+    validations:
+      required: true
+
+  # SECTION 5: ENVIRONMENT
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Your Environment"
+      description: "Please provide details about the environment where you encountered the bug."
+      placeholder: |
+        - SoundML Version: 0.0.1 (or commit hash)
+        - OCaml Version: 5.3.0
+        - Operating System: Ubuntu 22.04
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: "Additional Context (Optional)"
+      description: "Add any other context that might be helpful, such as screenshots or ideas about the potential cause."
