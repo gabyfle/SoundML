@@ -1,0 +1,43 @@
+name: "❓ Question or Help Request"
+description: "Ask a question about how to use SoundML."
+title: "[Question]: A brief summary of the question"
+labels: ["question"]
+body:
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: "Prerequisites"
+      description: "Please confirm the following before asking your question."
+      options:
+        - label: "I have read the official [documentation](https://github.com/gabyfle/SoundML/tree/main/docs)." # <-- Update this link
+          required: true
+        - label: "I have searched the existing [issues](https://github.com/gabyfle/SoundML/issues) to see if my question has already been answered."
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: "Your Question"
+      description: "Please provide a clear and detailed description of your question."
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-you-tried
+    attributes:
+      label: "What have you tried so far?"
+      description: "Show us what you've already tried to solve the problem. Include any relevant code snippets."
+      placeholder: |
+        ```ocaml
+        (* Add your code here that isn't working as expected *)
+        ```
+  
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Your Environment"
+      description: "This can help us understand the context of your question."
+      placeholder: |
+        - SoundML Version: 
+        - OCaml Version: 
+        - Operating System: 
