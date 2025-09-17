@@ -48,9 +48,9 @@ jobs:
             sudo apt-get install -y libsoxr-dev
         shell: bash
 
-      - name: Install libsndfile
+      - name: Install libsndfile and libsamplerate
         run: |
-            sudo apt-get install libsndfile-dev
+            sudo apt-get install libsndfile-dev libsamplerate0-dev
 
       - name: Install llvm # required for rune
         run: |
