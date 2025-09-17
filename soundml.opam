@@ -11,8 +11,8 @@ homepage: "https://github.com/gabyfle/SoundML"
 doc: "https://soundml.dev"
 bug-reports: "https://github.com/gabyfle/SoundML/issues"
 depends: [
-  "ocaml" {>= "5.2.0"}
-  "dune" {>= "3.18"}
+  "ocaml" {>= "5.3.0"}
+  "dune" {>= "3.17"}
   "conf-sndfile" {build}
   "conf-rubberband" {build}
   "conf-samplerate" {build}
@@ -38,4 +38,3 @@ build: [
   ]
 ]
 dev-repo: "git+https://github.com/gabyfle/SoundML.git"
-x-maintenance-intent: ["(latest)"]
