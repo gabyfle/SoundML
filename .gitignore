@@ -1,6 +1,7 @@
 .DS_Store
 _build
 dune.lock
+dev-tools.locks
 dataset/
 cache/
 report/
@@ -11,3 +12,4 @@ wav/
 mp3/
 bench/.DS_Store
 databench/
+.DS_Store
