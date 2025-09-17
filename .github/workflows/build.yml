@@ -25,12 +25,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Checkout raven-ml/raven
-        uses: actions/checkout@v4
-        with:
-          repository: raven-ml/raven
-          path: raven
-
       - name: Set up OCaml ${{ matrix.ocaml-compiler }} on ${{ matrix.os }}
         uses: ocaml/setup-ocaml@v3
         with:
@@ -44,10 +38,10 @@ jobs:
             sudo apt-get install -y libsoxr-dev
         shell: bash
 
-      - name: Pin raven packages from working directory
-        run: opam pin add ./raven --working-dir --yes
+      - name: Lock the dependencies 
+        run: opam exec -- dune pkg lock
         shell: bash
 
-      - name: Install SoundML
-        run: opam install . --yes --confirm-level=unsafe-yes
+      - name: Build SoundML
+        run: opam exec -- dune build
         shell: bash

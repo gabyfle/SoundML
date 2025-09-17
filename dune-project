@@ -1,4 +1,4 @@
-(lang dune 3.18)
+(lang dune 3.17)
 
 (name soundml)
 
@@ -15,6 +15,14 @@
 
 (documentation https://soundml.dev)
 
+(pin
+ (url "git+https://github.com/raven-ml/raven.git")
+ (package (name nx)))
+
+(pin
+ (url "git+https://github.com/raven-ml/raven.git")
+ (package (name rune)))
+
 (package
  (name soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
@@ -22,7 +30,7 @@
   "SoundML is a library built on top of Rune to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
  (depends
   (ocaml
-   (>= 5.2.0))
+   (>= 5.3.0))
   dune
   (conf-sndfile :build)
   (conf-rubberband :build)

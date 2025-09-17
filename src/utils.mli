@@ -27,59 +27,6 @@
 
 (** {2 Signal Framing and Windowing} *)
 
-val frame :
-     ?axis:int
-  -> ('a, 'b, 'dev) Rune.t
-  -> frame_length:int
-  -> hop_length:int
-  -> ('a, 'b, 'dev) Rune.t
-(** [frame signal ~frame_length ~hop_length] slices a signal into overlapping frames.
-
-   This function creates overlapping windows of the input signal, which is essential
-   for Short-Time Fourier Transform (STFT) and other windowed analysis techniques.
-   The implementation uses efficient stride manipulation to avoid copying data.
-
-   @param axis The axis along which to frame (default: -1, last axis)
-   @param signal Input signal to frame
-   @param frame_length Length of each frame in samples (must be > 0)
-   @param hop_length Number of samples to advance between frames (must be >= 1)
-   @return Framed view of the input signal with one additional dimension
-
-   @raise Stdlib.Invalid_argument if frame_length <= 0
-   @raise Stdlib.Invalid_argument if hop_length < 1
-   @raise Stdlib.Invalid_argument if signal is too short for even one frame
-   @raise Stdlib.Invalid_argument if axis is out of bounds
-
-   {3 Examples}
-
-   Basic signal framing:
-   {[
-     let signal = Rune.arange Rune.float32 0.0 10.0 1.0 in
-     let frames = Utils.frame signal ~frame_length:3 ~hop_length:2 in
-     (* frames has shape [3; 4] with overlapping windows *)
-   ]}
-
-   Frame a stereo signal:
-   {[
-     let stereo = Rune.ones Rune.float32 [|2; 1000|] in
-     let frames = Utils.frame stereo ~frame_length:512 ~hop_length:256 in
-     (* frames has shape [2; 512; 3] - frames along last axis *)
-   ]}
-
-   Frame along first axis:
-   {[
-     let signal = Rune.arange Rune.float32 0.0 100.0 1.0 in
-     let frames = Utils.frame ~axis:0 signal ~frame_length:10 ~hop_length:5 in
-     (* frames along first dimension *)
-   ]}
-
-   {3 Performance Notes}
-
-   - Creates a view of the original data, not a copy (O(1) memory)
-   - The returned tensor shares memory with the input
-   - Modifications to frames affect the original signal
-   - Most efficient when frame_length and hop_length are powers of 2 *)
-
 val pad_center :
   ('a, 'b, 'dev) Rune.t -> size:int -> pad_value:'a -> ('a, 'b, 'dev) Rune.t
 (** [pad_center signal ~size ~pad_value] pads a signal to center it.
