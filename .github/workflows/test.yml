@@ -48,6 +48,10 @@ jobs:
             sudo apt-get install -y libsoxr-dev
         shell: bash
 
+      - name: Install libsndfile
+        run: |
+            sudo apt-get install libsndfile-dev
+
       - name: Install llvm # required for rune
         run: |
             sudo apt-get install libllvm-20-ocaml-dev libllvm20 llvm-20 llvm-20-dev llvm-20-doc llvm-20-examples llvm-20-runtime
