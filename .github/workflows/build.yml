@@ -16,8 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-latest] # , macos-latest, windows-latest]
         ocaml-compiler:
-          - "5.3.0" # Latest stable
-          - "5.2.0"
+          - "5.3.0"
 
     runs-on: ${{ matrix.os }}
 
@@ -37,6 +36,10 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y libsoxr-dev
         shell: bash
+
+      - name: Install llvm # required for rune
+        run: |
+            sudo apt-get install libllvm-20-ocaml-dev libllvm20 llvm-20 llvm-20-dev llvm-20-doc llvm-20-examples llvm-20-runtime
 
       - name: Lock the dependencies 
         run: opam exec -- dune pkg lock
