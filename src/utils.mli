@@ -27,15 +27,13 @@
 
 (** {2 Signal Framing and Windowing} *)
 
-val pad_center :
-  ('a, 'b, 'dev) Rune.t -> size:int -> pad_value:'a -> ('a, 'b, 'dev) Rune.t
+val pad_center : ('a, 'b) Nx.t -> size:int -> pad_value:'a -> ('a, 'b) Nx.t
 (** [pad_center signal ~size ~pad_value] pads a signal to center it.
 
    Centers the signal by padding it symmetrically on both sides. This is commonly
    used in STFT preprocessing to ensure the first and last frames are properly
    centered on the signal boundaries.
 
-   @param device Rune device to use for computation (default: same as input)
    @param signal Input signal to pad
    @param size Total desired size after padding
    @param pad_value Value to use for padding
@@ -47,7 +45,7 @@ val pad_center :
    {3 Example}
 
    {[
-     let signal = Rune.ones Rune.float32 [|100|] in
+     let signal = Nx.ones Nx.float32 [|100|] in
      let padded = Utils.pad_center signal ~size:200 ~pad_value:0.0 in
      (* padded has 50 zeros, then 100 ones, then 50 zeros *)
    ]} *)
@@ -57,8 +55,7 @@ val pad_center :
 module Convert : sig
   (** Frequency and amplitude scale conversion functions. *)
 
-  val mel_to_hz :
-    ?htk:bool -> (float, 'a, 'dev) Rune.t -> (float, 'a, 'dev) Rune.t
+  val mel_to_hz : ?htk:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
   (** [mel_to_hz mel_values] converts mel-scale values to Hz.
       
       @param htk Use HTK mel scale formula (default: false, uses Slaney formula)
@@ -68,13 +65,12 @@ module Convert : sig
       {3 Example}
       
       {[
-        let mel_freqs = Rune.linspace Rune.float32 0.0 2595.0 100 in
+        let mel_freqs = Nx.linspace Nx.float32 0.0 2595.0 100 in
         let hz_freqs = Utils.Convert.mel_to_hz mel_freqs in
         (* Convert 100 mel frequencies to Hz *)
       ]} *)
 
-  val hz_to_mel :
-    ?htk:bool -> (float, 'a, 'dev) Rune.t -> (float, 'a, 'dev) Rune.t
+  val hz_to_mel : ?htk:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
   (** [hz_to_mel hz_values] converts Hz frequency values to mel scale.
       
       @param htk Use HTK mel scale formula (default: false, uses Slaney formula)
@@ -84,17 +80,17 @@ module Convert : sig
       This is the inverse function of {!mel_to_hz}. *)
 
   (** Reference value specification for dB conversions. *)
-  type ('a, 'dev) reference =
+  type 'a reference =
     | RefFloat of float  (** Use a constant reference value. *)
-    | RefFunction of ((float, 'a, 'dev) Rune.t -> float)
+    | RefFunction of ((float, 'a) Nx.t -> float)
         (** Compute reference from the input tensor (e.g., maximum value). *)
 
   val power_to_db :
        ?amin:float
     -> ?top_db:float
-    -> ('a, 'dev) reference
-    -> (float, 'a, 'dev) Rune.t
-    -> (float, 'a, 'dev) Rune.t
+    -> 'a reference
+    -> (float, 'a) Nx.t
+    -> (float, 'a) Nx.t
   (** [power_to_db reference power_spectrum] converts power values to decibels.
       
       @param amin Minimum amplitude threshold (default: 1e-10)
@@ -110,16 +106,13 @@ module Convert : sig
       {[
         let power_spec = (* compute power spectrum *) in
         let db_spec = Utils.Convert.power_to_db 
-          (RefFunction Rune.max) 
+          (RefFunction (fun x -> Nx.item [] (Nx.max x)))
           power_spec in
         (* Convert to dB relative to maximum value *)
       ]} *)
 
   val db_to_power :
-       ?amin:float
-    -> ('a, 'dev) reference
-    -> (float, 'a, 'dev) Rune.t
-    -> (float, 'a, 'dev) Rune.t
+    ?amin:float -> 'a reference -> (float, 'a) Nx.t -> (float, 'a) Nx.t
   (** [decibels_to_power reference db_values] converts decibel values to power.
       
       This is the inverse function of {!power_to_db}.
@@ -137,10 +130,9 @@ val melfreqs :
   -> ?f_min:float
   -> ?f_max:float
   -> ?htk:bool
-  -> 'dev Rune.device
-  -> (float, 'b) Rune.dtype
-  -> (float, 'b, 'dev) Rune.t
-(** [melfreqs device dtype] generates mel-scale frequency values.
+  -> (float, 'b) Nx.dtype
+  -> (float, 'b) Nx.t
+(** [melfreqs dtype] generates mel-scale frequency values.
 
    Computes a tensor of acoustic frequencies tuned to the mel scale, which
    approximates human auditory perception. This is used internally by
@@ -150,7 +142,6 @@ val melfreqs :
    @param f_min Minimum frequency in Hz (default: 0.0)
    @param f_max Maximum frequency in Hz (default: 11025.0)
    @param htk Use HTK mel scale formula (default: false)
-   @param device Rune device on which the Tensor should be created
    @param dtype Data type for the output tensor
    @return Tensor of mel-scale frequencies
 
@@ -161,10 +152,10 @@ val melfreqs :
 
    {[
      let mel_freqs = Utils.melfreqs 
-       Rune.float32 
        ~n_mels:80 
        ~f_min:80.0 
-       ~f_max:7600.0 in
+       ~f_max:7600.0
+       Nx.float32 in
      (* 80 mel-scale frequencies from 80 Hz to 7600 Hz *)
    ]}
 
@@ -173,17 +164,17 @@ val melfreqs :
 (** {2 Mathematical Utilities} *)
 
 val outer :
-     (('a, 'b, 'dev) Rune.t -> ('a, 'b, 'dev) Rune.t -> ('a, 'b, 'dev) Rune.t)
-  -> ('a, 'b, 'dev) Rune.t
-  -> ('a, 'b, 'dev) Rune.t
-  -> ('a, 'b, 'dev) Rune.t
+     (('a, 'b) Nx.t -> ('a, 'b) Nx.t -> ('a, 'b) Nx.t)
+  -> ('a, 'b) Nx.t
+  -> ('a, 'b) Nx.t
+  -> ('a, 'b) Nx.t
 (** [outer_product operation x y] computes generalized outer product.
 
    Applies a binary operation between all pairs of elements from two tensors,
    creating a matrix where result[i,j] = operation(x[i], y[j]). This is useful
    for creating distance matrices, correlation matrices, and other pairwise operations.
 
-   @param operation Binary operation to apply (e.g., Rune.add, Rune.mul)
+   @param operation Binary operation to apply (e.g., Nx.add, Nx.mul)
    @param x First input tensor (1D)
    @param y Second input tensor (1D)
    @return 2D tensor with shape [length(x); length(y)]
@@ -193,8 +184,8 @@ val outer :
    {3 Example}
 
    {[
-     let x = Rune.arange Rune.float32 1.0 4.0 1.0 in
-     let y = Rune.arange Rune.float32 1.0 3.0 1.0 in
-     let product = Utils.outer_product Rune.mul x y in
+     let x = Nx.arange_f Nx.float32 1.0 4.0 1.0 in
+     let y = Nx.arange_f Nx.float32 1.0 3.0 1.0 in
+     let product = Utils.outer Nx.mul x y in
      (* Multiplication table: [[1,2], [2,4], [3,6]] *)
    ]} *)

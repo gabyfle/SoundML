@@ -32,8 +32,8 @@ val stft :
   -> ?center:bool
   -> n_fft:int
   -> hop_length:int
-  -> (float, 'a, 'dev) Rune.t
-  -> (Complex.t, Bigarray_ext.complex64_elt, 'dev) Rune.t
+  -> (float, 'a) Nx.t
+  -> Nx.complex128_t
 (** [stft ~n_fft ~hop_length x] computes the Short-Time Fourier Transform.
     
     The STFT transforms a time-domain signal into a time-frequency representation
@@ -45,13 +45,14 @@ val stft :
     @param center Whether to center the signal by padding (default: true)
     @param n_fft FFT size, determines frequency resolution (must be positive)
     @param hop_length Number of samples between successive frames (must be positive)
-    @param x Input audio signal (1D tensor)
-    @return Complex STFT matrix of shape [n_fft/2 + 1; n_frames]
+    @param x Input audio tensor whose last axis contains the samples
+    @return Complex STFT tensor of shape [...; n_fft/2 + 1; n_frames]
     
     @raise Invalid_argument if n_fft <= 0
     @raise Invalid_argument if hop_length <= 0
+    @raise Invalid_argument if win_length <= 0
     @raise Invalid_argument if win_length > n_fft (when specified)
-    @raise Invalid_argument if signal is not 1D
+    @raise Invalid_argument if n_fft is larger than the padded signal
     
     {3 Examples}
     
@@ -87,7 +88,6 @@ val stft :
     
     {3 Performance Notes}
     
-    - Use Metal device for best performance on Apple Silicon
     - Powers of 2 for n_fft are most efficient (e.g., 512, 1024, 2048)
     - Larger hop_length reduces computation but may miss transient events
     - Consider using float32 input for better performance *)
