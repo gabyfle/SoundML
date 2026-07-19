@@ -2,50 +2,38 @@
  (name aformat)
  (package soundml)
  (modules aformat)
- (instrumentation
-  (backend bisect_ppx))
  (wrapped false))
 
 (library
  (name window)
  (package soundml)
- (libraries rune utils)
+ (libraries nx utils)
  (modules window)
- (instrumentation
-  (backend bisect_ppx))
  (wrapped false))
 
 (library
  (name utils)
  (package soundml)
- (libraries rune)
+ (libraries nx)
  (modules utils)
- (instrumentation
-  (backend bisect_ppx))
  (wrapped false))
 
 (library
  (name transform)
  (package soundml)
  (modules transform)
- (libraries rune window utils)
- (instrumentation
-  (backend bisect_ppx))
+ (libraries nx window utils)
  (wrapped false))
 
 (library
  (name filterbank)
  (package soundml)
  (modules filterbank)
- (libraries rune utils)
- (instrumentation
-  (backend bisect_ppx))
+ (libraries nx utils)
  (wrapped false))
 
 (library
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries aformat window io utils transform filterbank)
- (instrumentation
-  (backend bisect_ppx)))
+ (libraries aformat window io utils transform filterbank))

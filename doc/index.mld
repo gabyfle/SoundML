@@ -7,7 +7,7 @@
 %}
 
 {!Soundml} is an OCaml library that enables audio processing. It provides tools to read, write, extract features and manipulate audio as time series data.
-The library is built on top of the Owl library and provides a high-level API to work with audio data. It's still in an experimental stage.
+The library is built on top of Raven's Nx package and provides a high-level API to work with audio data. It's still in an experimental stage.
 
 
 {1 API Documentation}

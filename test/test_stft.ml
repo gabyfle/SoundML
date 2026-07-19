@@ -37,14 +37,13 @@ let string_to_window = function
 module StftTestable = struct
   type a = Complex.t
 
-  type b = Rune.complex64_elt
+  type b = Nx.complex64_elt
 
-  let dtype = Rune.Complex64
+  let dtype = Nx.Complex128
 
   let typ = "stft"
 
-  let generate (_ : (a, b) Rune.dtype) (case : string * string * Parameters.t)
-      (audio : (float, Bigarray.float64_elt, [`c]) Rune.t) =
+  let generate (case : string * string * Parameters.t) (audio : Nx.float64_t) =
     let _, _, params = case in
     let n_fft =
       Option.value ~default:2048 @@ Parameters.get_int "n_fft" params
@@ -53,20 +52,17 @@ module StftTestable = struct
       Option.value ~default:512 @@ Parameters.get_int "hop_size" params
     in
     let win_length =
-      Option.value ~default:2048 @@ Parameters.get_int "window_length" params
+      Option.value ~default:n_fft @@ Parameters.get_int "window_length" params
     in
     let window =
       string_to_window
-        (Option.value ~default:"hann" @@ Parameters.get_string "window" params)
+        ( Option.value ~default:"hann"
+        @@ Parameters.get_string "window_type" params )
     in
     let center =
       Option.value ~default:false @@ Parameters.get_bool "center" params
     in
-    let stft =
-      Transform.stft ~n_fft ~hop_length:hop_size ~win_length ~window ~center
-        audio
-    in
-    stft
+    Transform.stft ~n_fft ~hop_length:hop_size ~win_length ~window ~center audio
 end
 
 module Tests = Tests_cases (StftTestable)

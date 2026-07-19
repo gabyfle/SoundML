@@ -16,34 +16,28 @@
 (documentation https://soundml.dev)
 
 (pin
- (url "git+https://github.com/raven-ml/raven.git")
+ (url
+  "git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b")
  (package (name nx)))
-
-(pin
- (url "git+https://github.com/raven-ml/raven.git")
- (package (name rune)))
 
 (package
  (name soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
  (description
-  "SoundML is a library built on top of Rune to analyse sounds files. It can read, write audio, extract various features from audio files and much more.")
+  "SoundML is a library built on top of Raven's Nx package to analyse sound files. It can read and write audio, extract features from audio files, and much more.")
  (depends
   (ocaml
-   (>= 5.3.0))
+   (>= 5.5.0))
   dune
   (conf-sndfile :build)
   (conf-rubberband :build)
   ; Samplerate is already a requirement of rubberband
   (conf-samplerate :build)
   (dune-configurator :build)
-  rune
+  (nx
+   (= dev))
   (odoc :with-doc)
   (alcotest :with-test)
-  (yojson :with-test)
-  (bisect_ppx
-   (and
-    :with-test
-    (>= 2.5.0))))
+  (yojson :with-test))
  (tags
   (sound spectrogram fourier digital-filters)))
