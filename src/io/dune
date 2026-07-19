@@ -15,9 +15,7 @@
  (c_library_flags
   (:include c_library_flags.sexp))
  (modules io)
- (libraries aformat utils)
- (instrumentation
-  (backend bisect_ppx))
+ (libraries aformat nx utils)
  (wrapped true))
 
 (rule

@@ -23,14 +23,13 @@
 type normalization = Slaney | Power_norm of float
 
 let mel_filterbank ?f_max ?(htk : bool = false) ?norm ~sample_rate ~n_fft
-    ~n_mels ~f_min (device : 'dev Rune.device) (dtype : (float, 'b) Rune.dtype)
-    =
+    ~n_mels ~f_min (dtype : (float, 'b) Nx.dtype) =
   (* Input validation *)
   if sample_rate <= 0 then invalid_arg "sample_rate must be positive" ;
   if n_fft <= 0 then invalid_arg "n_fft must be positive" ;
   if n_mels <= 0 then invalid_arg "n_mels must be positive" ;
   if f_min < 0.0 then invalid_arg "f_min must be non-negative" ;
-  if n_mels = 0 then Rune.empty device dtype [|0; (n_fft / 2) + 1|]
+  if n_mels = 0 then Nx.empty dtype [|0; (n_fft / 2) + 1|]
   else
     let f_max =
       match f_max with
@@ -48,52 +47,46 @@ let mel_filterbank ?f_max ?(htk : bool = false) ?norm ~sample_rate ~n_fft
     let freq_step = 1.0 /. (float_of_int n_fft *. d) in
     let fftfreqs =
       let indices = Array.init n_freqs (fun i -> float_of_int i *. freq_step) in
-      Rune.create device dtype [|n_freqs|] indices
+      Nx.create dtype [|n_freqs|] indices
     in
     let mel_freqs =
-      Utils.melfreqs ~n_mels:(n_mels + 2) ~f_min ~f_max ~htk device dtype
+      Utils.melfreqs ~n_mels:(n_mels + 2) ~f_min ~f_max ~htk dtype
     in
     let fdiff =
-      let n = Rune.size mel_freqs in
-      Rune.sub
-        (Rune.slice [R (1, n)] mel_freqs)
-        (Rune.slice [R (0, n - 1)] mel_freqs)
+      let n = Nx.numel mel_freqs in
+      Nx.sub (Nx.slice [R (1, n)] mel_freqs) (Nx.slice [R (0, n - 1)] mel_freqs)
     in
-    let ramps = Utils.outer Rune.sub mel_freqs fftfreqs in
+    let ramps = Utils.outer Nx.sub mel_freqs fftfreqs in
     let lower =
-      Rune.div
-        (Rune.neg (Rune.slice [R (0, n_mels)] ramps))
-        (Rune.reshape [|n_mels; 1|] (Rune.slice [R (0, n_mels)] fdiff))
+      Nx.div
+        (Nx.neg (Nx.slice [R (0, n_mels)] ramps))
+        (Nx.reshape [|n_mels; 1|] (Nx.slice [R (0, n_mels)] fdiff))
     in
     let upper =
-      Rune.div
-        (Rune.slice [R (2, n_mels + 2)] ramps)
-        (Rune.reshape [|n_mels; 1|] (Rune.slice [R (1, n_mels + 1)] fdiff))
+      Nx.div
+        (Nx.slice [R (2, n_mels + 2)] ramps)
+        (Nx.reshape [|n_mels; 1|] (Nx.slice [R (1, n_mels + 1)] fdiff))
     in
     (* Intersect slopes *)
-    let weights =
-      Rune.maximum (Rune.zeros_like lower) (Rune.minimum lower upper)
-    in
+    let weights = Nx.maximum (Nx.zeros_like lower) (Nx.minimum lower upper) in
     let weights =
       match norm with
       | Some Slaney ->
           let enorm =
-            Rune.div
-              (Rune.scalar device dtype 2.0)
-              (Rune.sub
-                 (Rune.slice [R (2, n_mels + 2)] mel_freqs)
-                 (Rune.slice [R (0, n_mels)] mel_freqs) )
+            Nx.div (Nx.scalar dtype 2.0)
+              (Nx.sub
+                 (Nx.slice [R (2, n_mels + 2)] mel_freqs)
+                 (Nx.slice [R (0, n_mels)] mel_freqs) )
           in
-          let enorm = Rune.reshape [|n_mels; 1|] enorm in
-          Rune.mul weights enorm
+          let enorm = Nx.reshape [|n_mels; 1|] enorm in
+          Nx.mul weights enorm
       | Some (Power_norm p) ->
           let norm =
-            Rune.pow_s
-              (Rune.sum ~axes:[|-1|] ~keepdims:true
-                 (Rune.pow_s (Rune.abs weights) p) )
+            Nx.pow_s
+              (Nx.sum ~axes:[-1] ~keepdims:true (Nx.pow_s (Nx.abs weights) p))
               (1. /. p)
           in
-          Rune.div weights (Rune.add_s norm 1e-8)
+          Nx.div weights (Nx.add_s norm 1e-8)
       | None ->
           weights
     in

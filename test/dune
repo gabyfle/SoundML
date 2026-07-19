@@ -3,6 +3,7 @@
 (tests
  (names
   test_aformat
+  test_transform
   test_write
   test_utils
   ;test_time
@@ -10,13 +11,20 @@
   ;test_filter
   ;test_filterbank
   )
- (libraries alcotest soundml rune)
+ (modules
+  test_aformat
+  test_transform
+  test_write
+  test_utils
+  test_window
+  tutils)
+ (libraries alcotest nx soundml)
  (action
   (run %{test})))
 
 ;(tests
 ; (names test_stft)
-; (libraries alcotest str yojson nx rune nx.io soundml)
+; (libraries alcotest str yojson nx nx.io soundml)
 ; (package soundml)
 ; (deps
 ;  generate_vectors.py

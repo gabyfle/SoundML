@@ -43,10 +43,9 @@ val mel_filterbank :
   -> n_fft:int
   -> n_mels:int
   -> f_min:float
-  -> 'dev Rune.device
-  -> (float, 'b) Rune.dtype
-  -> (float, 'b, 'dev) Rune.t
-(** [mel_filterbank dtype ~sample_rate ~n_fft ~n_mels ~f_min] creates a mel-scale filterbank.
+  -> (float, 'b) Nx.dtype
+  -> (float, 'b) Nx.t
+(** [mel_filterbank ~sample_rate ~n_fft ~n_mels ~f_min dtype] creates a mel-scale filterbank.
     
     A mel filterbank is a collection of triangular filters spaced according to the
     mel scale, which approximates human auditory perception. Each filter has a
@@ -60,8 +59,7 @@ val mel_filterbank :
     @param n_fft FFT size, determines frequency resolution (must be positive)
     @param n_mels Number of mel bands to generate (must be positive)
     @param f_min Minimum frequency in Hz (must be non-negative and < f_max)
-    @param device Rune device to use for computation (default: automatic selection)
-    @param dtype Data type for the filterbank (e.g., Rune.float32, Rune.float64)
+    @param dtype Data type for the filterbank (e.g., Nx.float32, Nx.float64)
     @return Mel filterbank matrix of shape [n_mels; n_fft/2 + 1]
     
     @raise Invalid_argument if sample_rate <= 0
@@ -75,17 +73,16 @@ val mel_filterbank :
     Basic usage with automatic device selection:
     {[
       let filterbank = Filterbank.mel_filterbank 
-        Rune.float32 
         ~sample_rate:22050 
         ~n_fft:1024 
         ~n_mels:128 
-        ~f_min:0.0 in
+        ~f_min:0.0
+        Nx.float32 in
       (* filterbank has shape [128; 513] *)
     ]}
     
-    With explicit device and normalization:
+    With Slaney normalization:
     {[
-      let device = Rune.metal () in
       let filterbank = Filterbank.mel_filterbank 
         ~norm:Slaney
         ~f_max:8000.0 
@@ -93,8 +90,7 @@ val mel_filterbank :
         ~n_fft:512 
         ~n_mels:80 
         ~f_min:80.0
-        device
-        Rune.float64
+        Nx.float64
       in
       (* filterbank has shape [80; 257] with Slaney normalization *)
     ]}
@@ -107,8 +103,7 @@ val mel_filterbank :
         ~n_fft:2048 
         ~n_mels:40 
         ~f_min:20.0
-        Rune.float32
-        Rune.ocaml
+        Nx.float32
       in
       (* filterbank uses HTK mel scale formula *)
     ]}
@@ -126,7 +121,5 @@ val mel_filterbank :
     
     {3 Performance Notes}
     
-    - Use Metal device for best performance on Apple Silicon
-    - Use C device for good performance on other platforms  
     - Float32 is usually sufficient precision and faster than Float64
     - Larger n_fft values provide better frequency resolution but are slower *)

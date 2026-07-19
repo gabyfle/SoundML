@@ -34,7 +34,7 @@ body:
         2. Run the following OCaml code:
            ```ocaml
            let () =
-               let audio, _ = Soundml.Io.read Rune.c Float32 filename in
+               let audio, _ = Soundml.Io.read Nx.float32 filename in
                ignore audio
            ```
         3. Observe the error output.
@@ -45,7 +45,7 @@ body:
     attributes:
       label: "Expected Behavior"
       description: "What did you expect to happen when you followed the steps above?"
-      placeholder: "The audio file should load into a Rune tensor without raising an exception."
+      placeholder: "The audio file should load into an Nx tensor without raising an exception."
     validations:
       required: true
   - type: textarea
@@ -68,7 +68,7 @@ body:
       description: "Please provide details about the environment where you encountered the bug."
       placeholder: |
         - SoundML Version: 0.0.1 (or commit hash)
-        - OCaml Version: 5.3.0
+        - OCaml Version: 5.5.0
         - Operating System: Ubuntu 22.04
   - type: textarea
     id: additional-context

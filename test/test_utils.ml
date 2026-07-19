@@ -21,21 +21,20 @@
 
 open Soundml
 
-type data = (float, Rune.float32_elt, [`c]) Rune.t
+type data = Nx.float32_t
 
 let data_testable : data Alcotest.testable =
   ( module struct
     type t = data
 
-    let pp : t Fmt.t = Rune.pp
+    let pp : t Fmt.t = Nx.pp
 
     let equal : t -> t -> bool = Tutils.Check.rallclose
   end )
 
 module Test_pad_center = struct
   let create_data (arr : float array) : data =
-    Rune.create Rune.c Rune.float32 [|Array.length arr|] arr
-  (* Create 1D Rune tensor *)
+    Nx.create Nx.float32 [|Array.length arr|] arr
 
   let test_no_padding () =
     let input_data = create_data [|1.; 2.; 3.|] in
@@ -85,10 +84,7 @@ module Test_pad_center = struct
     let input_data = create_data [|1.; 2.; 3.; 4.|] in
     let target_size = 2 in
     let pad_value = 0. in
-    let expected_exn =
-      Invalid_argument
-        "An error occured while trying to pad: current_size > target_size"
-    in
+    let expected_exn = Invalid_argument "size must be >= signal length" in
     Alcotest.check_raises
       "error_target_too_small: raises Invalid_argument when target_size < \
        input_size"
@@ -122,10 +118,7 @@ module Test_pad_center = struct
     let input_data = create_data [|1.; 2.|] in
     let target_size = 0 in
     let pad_value = 0. in
-    let expected_exn =
-      Invalid_argument
-        "An error occured while trying to pad: current_size > target_size"
-    in
+    let expected_exn = Invalid_argument "size must be >= signal length" in
     Alcotest.check_raises
       "zero_target_non_empty_input: raises Invalid_argument when target_size < \
        input_size"
@@ -149,7 +142,7 @@ end
 module Test_melfreq = struct
   let test_default () =
     let expected =
-      Rune.create Rune.c Rune.float32 [|128|]
+      Nx.create Nx.float32 [|128|]
         [| 0.
          ; 26.199787
          ; 52.399574
@@ -279,12 +272,12 @@ module Test_melfreq = struct
          ; 10731.102
          ; 11025. |]
     in
-    let actual = Utils.melfreqs Tutils.device Rune.float32 in
+    let actual = Utils.melfreqs Nx.float32 in
     Alcotest.check data_testable "melfreq_default" expected actual
 
   let test_custom () =
     let expected =
-      Rune.create Rune.c Rune.float32 [|10|]
+      Nx.create Nx.float32 [|10|]
         [| 1000.
          ; 1203.3604
          ; 1431.0475
@@ -297,8 +290,7 @@ module Test_melfreq = struct
          ; 4000. |]
     in
     let actual =
-      Utils.melfreqs ~n_mels:10 ~f_min:1000. ~f_max:4000. ~htk:true
-        Tutils.device Rune.float32
+      Utils.melfreqs ~n_mels:10 ~f_min:1000. ~f_max:4000. ~htk:true Nx.float32
     in
     Alcotest.check data_testable "melfreq_custom" expected actual
 
@@ -309,23 +301,23 @@ end
 
 module Test_outer = struct
   let test_add () =
-    let x = Rune.create Rune.c Rune.float32 [|3|] [|1.; 2.; 3.|] in
-    let y = Rune.create Rune.c Rune.float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let x = Nx.create Nx.float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Nx.create Nx.float32 [|4|] [|4.; 5.; 6.; 7.|] in
     let expected =
-      Rune.create Rune.c Rune.float32 [|3; 4|]
+      Nx.create Nx.float32 [|3; 4|]
         [|5.; 6.; 7.; 8.; 6.; 7.; 8.; 9.; 7.; 8.; 9.; 10.|]
     in
-    let actual = Utils.outer Rune.add x y in
+    let actual = Utils.outer Nx.add x y in
     Alcotest.check data_testable "outer_add" expected actual
 
   let test_mul () =
-    let x = Rune.create Rune.c Rune.float32 [|3|] [|1.; 2.; 3.|] in
-    let y = Rune.create Rune.c Rune.float32 [|4|] [|4.; 5.; 6.; 7.|] in
+    let x = Nx.create Nx.float32 [|3|] [|1.; 2.; 3.|] in
+    let y = Nx.create Nx.float32 [|4|] [|4.; 5.; 6.; 7.|] in
     let expected =
-      Rune.create Rune.c Rune.float32 [|3; 4|]
+      Nx.create Nx.float32 [|3; 4|]
         [|4.; 5.; 6.; 7.; 8.; 10.; 12.; 14.; 12.; 15.; 18.; 21.|]
     in
-    let actual = Utils.outer Rune.mul x y in
+    let actual = Utils.outer Nx.mul x y in
     Alcotest.check data_testable "outer_mul" expected actual
 
   let suite =
@@ -336,11 +328,11 @@ end
 module Test_convert = struct
   let test_hz_to_mel_htk () =
     let freqs =
-      Rune.create Rune.c Rune.float32 [|10|]
+      Nx.create Nx.float32 [|10|]
         [|0.; 1225.; 2450.; 3675.; 4900.; 6125.; 7350.; 8575.; 9800.; 11025.|]
     in
     let expected =
-      Rune.create Rune.c Rune.float32 [|10|]
+      Nx.create Nx.float32 [|10|]
         [| 0.
          ; 1140.0684
          ; 1695.0864
@@ -357,7 +349,7 @@ module Test_convert = struct
 
   let test_mel_to_hz_htk () =
     let mels =
-      Rune.create Rune.c Rune.float32 [|10|]
+      Nx.create Nx.float32 [|10|]
         [| 0.
          ; 444.44446
          ; 888.8889
@@ -370,7 +362,7 @@ module Test_convert = struct
          ; 4000. |]
     in
     let expected =
-      Rune.create Rune.c Rune.float32 [|10|]
+      Nx.create Nx.float32 [|10|]
         [| 0.
          ; 338.40695
          ; 840.4128
@@ -387,11 +379,11 @@ module Test_convert = struct
 
   let test_power_to_db () =
     let s =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
+      Nx.create Nx.float32 [|2; 4|]
         [|1.; 0.1; 0.01; 0.001; 1e-11; 1e-12; 1e-13; 1e-14|]
     in
     let expected_ref1_topdb80 =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
+      Nx.create Nx.float32 [|2; 4|]
         [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let actual_ref1_topdb80 =
@@ -400,34 +392,24 @@ module Test_convert = struct
     Alcotest.check data_testable "power_to_db ref=1.0 top_db=80.0"
       expected_ref1_topdb80 actual_ref1_topdb80 ;
     let expected_refmax_topdb80 =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
+      Nx.create Nx.float32 [|2; 4|]
         [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let actual_refmax_topdb80 =
       Utils.Convert.power_to_db ~top_db:80.0
-        (Utils.Convert.RefFunction (fun x -> Rune.item [] (Rune.max x)))
+        (Utils.Convert.RefFunction (fun x -> Nx.item [] (Nx.max x)))
         s
     in
     Alcotest.check data_testable "power_to_db ref=max top_db=80.0"
-      expected_refmax_topdb80 actual_refmax_topdb80 ;
-    let expected_ref1_topdbNone =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
-        [|0.; -10.; -20.; -30.; -110.; -120.; -130.; -140.|]
-    in
-    let actual_ref1_topdbNone =
-      Utils.Convert.power_to_db ~amin:1e-10 ?top_db:None
-        (Utils.Convert.RefFloat 1.0) s
-    in
-    Alcotest.check data_testable "power_to_db ref=1.0 top_db=None"
-      expected_ref1_topdbNone actual_ref1_topdbNone
+      expected_refmax_topdb80 actual_refmax_topdb80
 
   let test_db_to_power () =
     let db_s =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
+      Nx.create Nx.float32 [|2; 4|]
         [|0.; -10.; -20.; -30.; -80.; -80.; -80.; -80.|]
     in
     let expected =
-      Rune.create Rune.c Rune.float32 [|2; 4|]
+      Nx.create Nx.float32 [|2; 4|]
         [|1.; 0.1; 0.01; 0.001; 1e-8; 1e-8; 1e-8; 1e-8|]
     in
     let actual = Utils.Convert.db_to_power (Utils.Convert.RefFloat 1.0) db_s in

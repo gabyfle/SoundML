@@ -1,8 +1,6 @@
 ;(library
 ; (name effects)
 ; (public_name soundml.effects)
-; (instrumentation
-;  (backend bisect_ppx))
 ; (modules
 ;  time
 ;  filter

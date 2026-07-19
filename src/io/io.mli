@@ -58,11 +58,10 @@ val read :
      ?res_typ:resampling_t
   -> ?sample_rate:int
   -> ?mono:bool
-  -> 'dev Rune.device
-  -> (float, 'a) Rune.dtype
+  -> (float, 'a) Nx.dtype
   -> string
-  -> (float, 'a, 'dev) Rune.t * int
-(** [read device dtype filename] reads an audio file and returns audio data with sample rate.
+  -> (float, 'a) Nx.t * int
+(** [read dtype filename] reads an audio file and returns audio data with sample rate.
 
    Loads audio data from various file formats with optional resampling and
    channel conversion. The function automatically handles format detection
@@ -71,8 +70,7 @@ val read :
    @param resampling Resampling quality (default: High_quality)
    @param target_sample_rate Target sample rate in Hz (default: 22050)
    @param force_mono Convert to mono by averaging channels (default: true)
-   @param device Device on which the resulting tensor should be loaded.
-   @param dtype Data type for audio samples (Rune.float32 or Rune.float64)
+   @param dtype Data type for audio samples (Nx.float32 or Nx.float64)
    @param filename Path to the audio file to read
    @return Tuple of (audio_tensor, actual_sample_rate)
 
@@ -84,30 +82,28 @@ val read :
 
    Basic audio loading:
    {[
-     let audio_data, sample_rate = IO.read ~device:Rune.ocaml 
-       Rune.float32 
-       ~filename:"audio.wav" in
+     let audio_data, sample_rate = Io.read Nx.float32 "audio.wav" in
      (* audio_data is mono float32 tensor at 22050 Hz *)
    ]}
 
    Load stereo audio without resampling:
    {[
-     let audio_data, sample_rate = IO.read_audio_file 
-       ~resampling:No_resampling
-       ~force_mono:false
-       Rune.float64 
-       ~filename:"stereo.flac" in
+     let audio_data, sample_rate = Io.read
+       ~res_typ:Io.NONE
+       ~mono:false
+       Nx.float64
+       "stereo.flac" in
      (* Preserves original sample rate and stereo channels *)
    ]}
 
-   Load with specific device and sample rate:
+   Load with a specific sample rate:
    {[
-     let audio_data, sample_rate = IO.read
-       ~target_sample_rate:44100
-       ~resampling:Very_high_quality
-       Rune.float32 
-       ~filename:"music.mp3" in
-     (* High-quality resampling to 44.1 kHz on Metal device *)
+     let audio_data, sample_rate = Io.read
+       ~sample_rate:44100
+       ~res_typ:Io.SOXR_VHQ
+       Nx.float32
+       "music.mp3" in
+     (* Very-high-quality resampling to 44.1 kHz *)
    ]}
 
    {3 Supported Formats}
@@ -127,8 +123,7 @@ val read :
 
 (** {2 Audio File Writing} *)
 
-val write :
-  ?format:Aformat.t -> string -> (float, 'a, 'dev) Rune.t -> int -> unit
+val write : ?format:Aformat.t -> string -> (float, 'a) Nx.t -> int -> unit
 (** [write filename audio_data sample_rate] writes audio data to a file.
 
    Saves audio tensor data to various file formats with automatic format

@@ -260,7 +260,7 @@ namespace SoundML
 template <typename T>
 inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
 {
-    CAMLparam0();
+    CAMLparam3(filename, res_typ, trgt_sr);
     CAMLlocal3(audio_array, caml_sample_rate, returns);
 
     using namespace SoundML::IO;
@@ -290,7 +290,7 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     }
     else
     {
-        trgt_sr = sample_rate;
+        trgt_sr_val = sample_rate;
         reader = new SndfileReader<T>(nframes, channels, sample_rate);
     }
 
@@ -342,7 +342,7 @@ inline value caml_read_audio_file(value filename, value res_typ, value trgt_sr)
     Store_field(returns, 0, audio_array);
     Store_field(returns, 1, caml_sample_rate);
 
-    return returns;
+    CAMLreturn(returns);
 }
 
 #endif /* SOUNDFILE_READER_H */
