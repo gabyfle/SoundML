@@ -54,26 +54,30 @@ let file_exists name =
 
 let create_test_audio channels samples sample_rate =
   let shape = if channels > 1 then [|channels; samples|] else [|samples|] in
-  let data = Rune.zeros Rune.c Rune.float32 shape in
-  let freq = 23000. in
+  let data = Nx.zeros Nx.float32 shape in
   for channel = 0 to channels - 1 do
+    let frequency = 440. +. (110. *. Float.of_int channel) in
     for i = 0 to samples - 1 do
       let idx = if channels > 1 then [channel; i] else [i] in
-      let value = sin (2. *. Float.pi *. (freq *. Float.of_int channel)) in
-      let scalar_value = Rune.scalar Rune.c Rune.float32 value in
-      Rune.set idx scalar_value data
+      let value =
+        sin
+          ( 2. *. Float.pi *. frequency *. Float.of_int i
+          /. Float.of_int sample_rate )
+      in
+      Nx.set_item idx value data
     done
   done ;
   (data, sample_rate)
 
 let create_empty_audio channels sample_rate =
   let shape = if channels > 1 then [|channels; 0|] else [|0|] in
-  let data = Rune.zeros Rune.c Rune.float32 shape in
+  let data = Nx.zeros Nx.float32 shape in
   (data, sample_rate)
 
 let check_write_read name
     ?(format : Aformat.t = Aformat.{ftype= WAV; sub= PCM_16; endian= FILE})
-    channels samples target_sr ext =
+    ?(rtol = 10e-5) ?(atol = 10e-5) ?max_abs_error channels samples target_sr
+    ext =
   let test_name =
     Printf.sprintf "%s_%dch_%dsamples_%dHz%s" name channels samples target_sr
       ext
@@ -86,20 +90,28 @@ let check_write_read name
         (file_exists filename) true ;
       let read_audio, sample_rate =
         try
-          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Rune.c
-            Rune.float32 filename
+          Io.read ~mono:(channels = 1) ~sample_rate:target_sr Nx.float32
+            filename
         with ex ->
           Alcotest.failf "Failed to read back file %s: %s" filename
             (Printexc.to_string ex)
       in
       Alcotest.check
         (Alcotest.array Alcotest.int)
-        "Channels match after write" (Rune.shape audio) (Rune.shape read_audio) ;
+        "Channels match after write" (Nx.shape audio) (Nx.shape read_audio) ;
       Alcotest.check Alcotest.int "Sample rate match after write" target_sr
         sample_rate ;
-      Alcotest.check
-        (Tutils.tensor_testable (Rune.dtype audio) ~rtol:10e-5 ~atol:10e-5)
-        "Data unchanged after write" audio read_audio )
+      match max_abs_error with
+      | None ->
+          Alcotest.check
+            (Tutils.tensor_testable ~rtol ~atol)
+            "Data unchanged after write" audio read_audio
+      | Some tolerance ->
+          let max_error =
+            Nx.item [] (Nx.max (Nx.abs (Nx.sub audio read_audio)))
+          in
+          Alcotest.check (Alcotest.float tolerance) "Maximum absolute error" 0.
+            max_error )
 
 let check_write_empty name
     ?(format : Aformat.t = Aformat.{ftype= WAV; sub= PCM_16; endian= FILE})
@@ -110,11 +122,17 @@ let check_write_empty name
   Alcotest.test_case test_name `Quick (fun () ->
       let filename = temp_file ~ext test_name in
       let audio, sr = create_empty_audio channels target_sr in
-      Alcotest.check
-        (Alcotest.neg Alcotest.reject)
-        "Write empty audio don't raise"
-        (fun () -> ())
-        (fun () -> Io.write ~format filename audio sr) )
+      Io.write ~format filename audio sr )
+
+let read_without_resampling_preserves_sample_rate () =
+  let filename = temp_file "read_without_resampling_preserves_sample_rate" in
+  let audio, sample_rate = create_test_audio 1 1024 44100 in
+  Io.write filename audio sample_rate ;
+  let _, actual_sample_rate =
+    Io.read ~res_typ:NONE ~sample_rate:22050 Nx.float32 filename
+  in
+  Alcotest.check Alcotest.int "Original sample rate" sample_rate
+    actual_sample_rate
 
 let tests =
   let wav = Result.get_ok (Aformat.create Aformat.WAV) in
@@ -123,15 +141,18 @@ let tests =
   [ check_write_read "write_f32_mono_wav_deduced" 1 1024 44100 ".wav"
   ; check_write_read "write_f32_stereo_wav_deduced" 2 1024 44100 ".wav"
   ; check_write_read "write_f32_stereo_flac_deduced" 2 512 22050 ".flac"
-  ; check_write_read "write_f32_mono_ogg_deduced" 1 2048 48000 ".ogg"
+  ; check_write_read "write_f32_mono_ogg_deduced" ~max_abs_error:0.1 1 2048
+      48000 ".ogg"
   ; check_write_read "write_f32_stereo_wav_explicit" ~format:wav 2 1024 44100
       ".wav"
   ; check_write_read "write_f32_stereo_flac_explicit" ~format:flac 2 512 22050
       ".flac"
-  ; check_write_read "write_f32_mono_ogg_explicit" ~format:ogg 1 2048 48000
-      ".ogg"
+  ; check_write_read "write_f32_mono_ogg_explicit" ~format:ogg
+      ~max_abs_error:0.1 1 2048 48000 ".ogg"
   ; check_write_empty "write_f32_mono_empty" 1 44100 ".wav"
-  ; check_write_empty "write_f32_stereo_empty" 2 44100 ".wav" ]
+  ; check_write_empty "write_f32_stereo_empty" 2 44100 ".wav"
+  ; Alcotest.test_case "read without resampling preserves sample rate" `Quick
+      read_without_resampling_preserves_sample_rate ]
 
 let suite = [("Write/Read Roundtrip", tests)]
 

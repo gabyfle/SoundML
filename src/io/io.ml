@@ -59,13 +59,13 @@ external caml_read_audio_file_f64 :
   -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Genarray.t * int
   = "caml_read_audio_file_f64"
 
-let to_mono (audio_tensor : (float, 'a, 'dev) Rune.t) =
+let to_mono (audio_tensor : (float, 'a) Nx.t) =
   try
-    if Rune.ndim audio_tensor > 1 then
-      let shape = Rune.shape audio_tensor in
+    if Nx.ndim audio_tensor > 1 then
+      let shape = Nx.shape audio_tensor in
       if Array.length shape < 2 then
         raise (Invalid_argument "Invalid tensor shape for mono conversion")
-      else Rune.mean ~axes:[|1|] ~keepdims:false audio_tensor
+      else Nx.mean ~axes:[1] ~keepdims:false audio_tensor
     else audio_tensor
   with
   | Invalid_argument _ as e ->
@@ -79,28 +79,26 @@ let read : type a.
        ?res_typ:resampling_t
     -> ?sample_rate:int
     -> ?mono:bool
-    -> 'dev Rune.device
-    -> (float, a) Rune.dtype
+    -> (float, a) Nx.dtype
     -> string
-    -> (float, a, 'dev) Rune.t * int =
+    -> (float, a) Nx.t * int =
  fun ?(res_typ : resampling_t = SOXR_HQ) ?(sample_rate : int = 22050)
-     ?(mono : bool = true) (device : 'dev Rune.device) typ
-     (filename : string) ->
+     ?(mono : bool = true) typ (filename : string) ->
   if sample_rate <= 0 then
     raise (Invalid_argument "Sample rate must be positive") ;
   if String.length filename = 0 then
     raise (Invalid_argument "Filename cannot be empty") ;
   let read_func : type a.
-         (float, a) Rune.dtype
+         (float, a) Nx.dtype
       -> string
       -> resampling_t
       -> int
       -> (float, a, Bigarray.c_layout) Bigarray.Genarray.t * int =
    fun typ ->
     match typ with
-    | Rune.Float32 ->
+    | Nx.Float32 ->
         caml_read_audio_file_f32
-    | Rune.Float64 ->
+    | Nx.Float64 ->
         caml_read_audio_file_f64
     | _ ->
         raise
@@ -113,13 +111,13 @@ let read : type a.
     let data_shape = Bigarray.Genarray.dims data in
     if Array.length data_shape = 0 || Array.fold_left ( * ) 1 data_shape = 0
     then raise (Invalid_format "Audio file contains no data") ;
-    let data = Rune.of_bigarray device data in
+    let data = Nx.of_bigarray data in
     (* Apply mono conversion if requested *)
     let data = if mono then to_mono data else data in
     (* Transpose if multi-dimensional (channels first to channels last) *)
     let data =
-      if Rune.ndim data > 1 then
-        try Rune.transpose data
+      if Nx.ndim data > 1 then
+        try Nx.transpose data
         with exn ->
           raise (Internal_error ("Transpose failed: " ^ Printexc.to_string exn))
       else data
@@ -152,23 +150,23 @@ external caml_write_audio_file_f64 :
   -> unit = "caml_write_audio_file_f64"
 
 let write : type a.
-    ?format:Aformat.t -> string -> (float, a, 'dev) Rune.t -> int -> unit =
- fun ?format (filename : string) (x : (float, a, 'dev) Rune.t) sample_rate ->
+    ?format:Aformat.t -> string -> (float, a) Nx.t -> int -> unit =
+ fun ?format (filename : string) (x : (float, a) Nx.t) sample_rate ->
   if sample_rate <= 0 then
     raise (Invalid_argument "Sample rate must be positive") ;
   if String.length filename = 0 then
     raise (Invalid_argument "Filename cannot be empty") ;
   let write_func : type a.
-         (float, a) Rune.dtype
+         (float, a) Nx.dtype
       -> string
       -> (float, a, Bigarray.c_layout) Bigarray.Genarray.t
       -> int * int * int * int
       -> unit =
    fun typ ->
     match typ with
-    | Rune.Float32 ->
+    | Nx.Float32 ->
         caml_write_audio_file_f32
-    | Rune.Float64 ->
+    | Nx.Float64 ->
         caml_write_audio_file_f64
     | _ ->
         raise
@@ -186,13 +184,13 @@ let write : type a.
     else Option.get format
   in
   let format = Aformat.to_int format in
-  let data = Rune.transpose x in
-  let dshape = Rune.shape data in
+  let data = Nx.transpose x in
+  let dshape = Nx.shape data in
   let nframes = dshape.(0) in
   let channels = if Array.length dshape > 1 then dshape.(1) else 1 in
   try
-    let dtype = Rune.dtype data in
-    write_func dtype filename (Rune.to_bigarray data)
+    let dtype = Nx.dtype data in
+    write_func dtype filename (Nx.to_bigarray data)
       (nframes, sample_rate, channels, format)
   with
   | ( File_not_found _
