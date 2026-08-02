@@ -1,39 +1,5 @@
 (library
- (name aformat)
- (package soundml)
- (modules aformat)
- (wrapped false))
-
-(library
- (name window)
- (package soundml)
- (libraries nx utils)
- (modules window)
- (wrapped false))
-
-(library
- (name utils)
- (package soundml)
- (libraries nx)
- (modules utils)
- (wrapped false))
-
-(library
- (name transform)
- (package soundml)
- (modules transform)
- (libraries nx window utils)
- (wrapped false))
-
-(library
- (name filterbank)
- (package soundml)
- (modules filterbank)
- (libraries nx utils)
- (wrapped false))
-
-(library
  (name soundml)
  (public_name soundml)
  (modules soundml)
- (libraries aformat window io utils transform filterbank))
+ (libraries nx))

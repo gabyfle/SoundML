@@ -14,9 +14,18 @@
 ## About the Project
 
 > [!WARNING]
-> The project is still in development and is not yet ready for use.
+> The project is being rebuilt from the ground up and is not yet ready for use.
+> The public API is being redesigned and nothing here is stable.
 
-## Features
+SoundML is distributed as three opam packages:
+
+| Package | Contents |
+| --- | --- |
+| `soundml` | the core library; depends on `nx` only |
+| `soundml-io` | audio-file decoding and encoding, resampling |
+| `soundml-rubberband` | time stretching and pitch shifting |
+
+## Planned Features
  - A fast I/O for interacting with audio files
  - Feature extraction
  - Audio effects
@@ -24,6 +33,19 @@
    - Filtering
      - IIR filters (Generic, Lowpass, Highpass)
      - Generic FIR filter implementation
+
+## Building
+
+SoundML tracks a single, pinned revision of [Raven](https://github.com/raven-ml/raven)
+rather than a released version of `nx`. The revision is recorded in `dune-project`:
+
+```
+git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b
+```
+
+Raven is pre-release and its tensor API still moves between revisions, so moving the
+pin is a deliberate change and not something a build picks up on its own. That
+revision requires OCaml >= 5.5.0, which is therefore also SoundML's lower bound.
 
 ## License
 

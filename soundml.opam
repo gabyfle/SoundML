@@ -13,10 +13,6 @@ bug-reports: "https://github.com/gabyfle/SoundML/issues"
 depends: [
   "ocaml" {>= "5.5.0"}
   "dune" {>= "3.17"}
-  "conf-sndfile" {build}
-  "conf-rubberband" {build}
-  "conf-samplerate" {build}
-  "dune-configurator" {build}
   "nx" {= "dev"}
   "odoc" {with-doc}
   "alcotest" {with-test}

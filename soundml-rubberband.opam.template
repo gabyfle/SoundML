@@ -1,0 +1,6 @@
+pin-depends: [
+  [
+    "nx.dev"
+    "git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b"
+  ]
+]
