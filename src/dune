@@ -1,0 +1,5 @@
+(library
+ (name soundml)
+ (public_name soundml)
+ (modules soundml)
+ (libraries nx))
