@@ -1,0 +1,15 @@
+pin-depends: [
+  [
+    "nx.dev"
+    "git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b"
+  ]
+]
+
+depexts: [
+  ["libsoxr-dev"] {os-family = "debian" | os-family = "ubuntu"}
+  ["soxr"] {os-family = "arch"}
+  ["soxr-dev"] {os-distribution = "alpine"}
+  ["soxr-devel"] {os-family = "fedora" | os-distribution = "centos" | os-distribution = "rhel"}
+  ["audio/libsoxr"] {os = "freebsd" | os = "openbsd"}
+  ["soxr"] {os = "macos" & os-distribution = "homebrew"}
+]
