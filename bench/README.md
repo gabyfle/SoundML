@@ -30,16 +30,22 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   spec the default preset is designed to) and torchaudio at its published
   `kaiser_best` triple and its defaults.
 
-  The measured position, both sides on the maintainer machine in one quiet
-  session (arm64, min-of-N): librosa `soxr_hq` converts the same one-second
-  clips about 2.5-3x faster at equal spec — libsoxr runs a SIMD-vectorized
-  convolution engine that this direct polyphase executor does not attempt —
-  while SoundML runs 1.2-3x faster than torchaudio at its published
-  `kaiser_best` settings and behind torchaudio's faster, lower-spec
-  defaults. None of the references carries the bit-exact
-  partition-invariance law that is this resampler's defining contract, and
-  none exposes an incremental kernel with exact rational latency
-  accounting.
+  The measured position, both sides on the maintainer machine in one
+  session (arm64, min-of-N, python-soxr 1.1.0 driving the maintained
+  libsoxr fork): at equal spec on 30-second clips, `soxr_hq` converts
+  44.1 ↔ 48 kHz about 3.6-3.7x faster at float32 — libsoxr executes its
+  sharp filter as overlap-save FFT convolution, an O(log N)-per-sample
+  engine this all-FIR executor deliberately does not attempt — and the
+  wide-ratio pairs sit closer since the two-stage cascade landed
+  (44.1 → 16 kHz about 5.8x, 48 → 8 kHz about 3.0x, previously 8.6x and
+  7.1x). The float64 rows are not an equal-precision comparison: soxr HQ
+  runs single-precision internally regardless of I/O dtype, while SoundML
+  float64 is a genuine double-precision path. SoundML runs 1.2-3x faster
+  than torchaudio at its published `kaiser_best` settings and behind
+  torchaudio's faster, lower-spec defaults. None of the references
+  carries the bit-exact partition-invariance law that is this resampler's
+  defining contract, and none exposes an incremental kernel with exact
+  rational latency accounting.
 
 `bench/soxr_reference.py` is not a benchmark: it is the dev-time SoXR oracle
 that regenerates the committed quality-harness vectors under

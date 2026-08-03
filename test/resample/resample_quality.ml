@@ -439,9 +439,16 @@ let q10 () =
                 let c = cfg (sr, target) in
                 let l = (Resample.Config.rate c).Pipeline.Rate.num in
                 let k = Resample.Config.latency c in
+                (* memory guard at the documented creation budget (8 MB). The
+                   quantity is the single-stage bank formula over the composite
+                   L and K — exact for single-stage plans, an upper proxy for
+                   cascades (their composite K folds both stage delays over one
+                   L while the real footprint is two far smaller banks, enforced
+                   per stage at create; worst standard-rate proxy: 11025 ->
+                   192000 at 4.3 MB). *)
                 let bank_bytes = l * ((2 * k) + 1) * 8 in
-                if bank_bytes > 4 * 1024 * 1024 then
-                  failf "%d->%d: bank %d bytes > 4 MB" sr target bank_bytes ;
+                if bank_bytes > 8 * 1024 * 1024 then
+                  failf "%d->%d: bank %d bytes > 8 MB" sr target bank_bytes ;
                 let nyq = Float.of_int (Stdlib.min sr target) /. 2. in
                 (* Q1/Q2 at scaled tone positions (the 1/5/10/17 kHz set as
                    fractions of the lower Nyquist) *)
