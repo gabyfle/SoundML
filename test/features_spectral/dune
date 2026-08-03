@@ -1,0 +1,11 @@
+(test
+ (name test_features_spectral)
+ (package soundml)
+ (modules
+  spectral_goldens
+  spectral_props
+  spectral_law
+  test_features_spectral)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files ../vectors/features_spectral/*.json)))

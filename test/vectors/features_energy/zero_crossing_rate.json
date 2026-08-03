@@ -1,0 +1,17 @@
+{
+"schema": 1,
+"suite": "features_energy",
+"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"cases": [
+  {"name": "defaults_float64", "params": {"frame_length": 2048, "hop": 512, "threshold": null, "length": 3000, "channels": 1, "dtype": "float64"}, "shape": [1, 6], "values": [0.24072265625, 0.365234375, 0.490234375, 0.4931640625, 0.4765625, 0.35205078125]},
+  {"name": "defaults_float32", "params": {"frame_length": 2048, "hop": 512, "threshold": null, "length": 3000, "channels": 1, "dtype": "float32"}, "shape": [1, 6], "values": [0.24072265625, 0.365234375, 0.490234375, 0.4931640625, 0.4765625, 0.35205078125]},
+  {"name": "fl16_hop4_float64", "params": {"frame_length": 16, "hop": 4, "threshold": null, "length": 100, "channels": 1, "dtype": "float64"}, "shape": [1, 26], "values": [0.3125, 0.375, 0.5, 0.4375, 0.4375, 0.4375, 0.5, 0.4375, 0.5, 0.5, 0.5625, 0.625, 0.625, 0.5, 0.4375, 0.4375, 0.4375, 0.4375, 0.4375, 0.3125, 0.1875, 0.25, 0.25, 0.375, 0.3125, 0.125]},
+  {"name": "fl16_hop4_float32", "params": {"frame_length": 16, "hop": 4, "threshold": null, "length": 100, "channels": 1, "dtype": "float32"}, "shape": [1, 26], "values": [0.3125, 0.375, 0.5, 0.4375, 0.4375, 0.4375, 0.5, 0.4375, 0.5, 0.5, 0.5625, 0.625, 0.625, 0.5, 0.4375, 0.4375, 0.4375, 0.4375, 0.4375, 0.3125, 0.1875, 0.25, 0.25, 0.375, 0.3125, 0.125]},
+  {"name": "fl15_hop7_odd_float64", "params": {"frame_length": 15, "hop": 7, "threshold": null, "length": 64, "channels": 1, "dtype": "float64"}, "shape": [1, 10], "values": [0.3333333333333333, 0.5333333333333333, 0.4666666666666667, 0.4666666666666667, 0.4, 0.4666666666666667, 0.6, 0.6, 0.4666666666666667, 0.2]},
+  {"name": "fl8_hop11_gap_float64", "params": {"frame_length": 8, "hop": 11, "threshold": null, "length": 60, "channels": 1, "dtype": "float64"}, "shape": [1, 6], "values": [0.25, 0.375, 0.375, 0.5, 0.75, 0.375]},
+  {"name": "fl16_hop8_thr0_float64", "params": {"frame_length": 16, "hop": 8, "threshold": 0.0, "length": 100, "channels": 1, "dtype": "float64"}, "shape": [1, 13], "values": [0.3125, 0.5, 0.4375, 0.5, 0.5, 0.5625, 0.625, 0.4375, 0.4375, 0.4375, 0.1875, 0.25, 0.3125]},
+  {"name": "fl16_hop8_thr05_float64", "params": {"frame_length": 16, "hop": 8, "threshold": 0.5, "length": 100, "channels": 1, "dtype": "float64"}, "shape": [1, 13], "values": [0.3125, 0.625, 0.375, 0.4375, 0.4375, 0.375, 0.5625, 0.5625, 0.375, 0.125, 0.125, 0.125, 0.125]},
+  {"name": "fl16_hop8_thr05_float32", "params": {"frame_length": 16, "hop": 8, "threshold": 0.5, "length": 100, "channels": 1, "dtype": "float32"}, "shape": [1, 13], "values": [0.3125, 0.625, 0.375, 0.4375, 0.4375, 0.375, 0.5625, 0.5625, 0.375, 0.125, 0.125, 0.125, 0.125]},
+  {"name": "fl16_hop4_stereo_float64", "params": {"frame_length": 16, "hop": 4, "threshold": null, "length": 80, "channels": 2, "dtype": "float64"}, "shape": [2, 1, 21], "values": [0.3125, 0.375, 0.5, 0.4375, 0.4375, 0.4375, 0.5, 0.4375, 0.5, 0.5, 0.5625, 0.625, 0.625, 0.5, 0.4375, 0.4375, 0.4375, 0.4375, 0.4375, 0.3125, 0.125, 0.0625, 0.1875, 0.25, 0.375, 0.375, 0.3125, 0.4375, 0.5, 0.5625, 0.5625, 0.4375, 0.5, 0.4375, 0.375, 0.375, 0.4375, 0.375, 0.4375, 0.375, 0.1875, 0.125]}
+]
+}
