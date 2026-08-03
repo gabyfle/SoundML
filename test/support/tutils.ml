@@ -66,7 +66,7 @@ module Golden = struct
     | Some value ->
         value
     | None ->
-        Alcotest.failf "golden case %s: missing parameter %s" case.name key
+        Windtrap.failf "golden case %s: missing parameter %s" case.name key
 
   let bool_param case key = Yojson.Safe.Util.to_bool (param case key)
 
@@ -92,14 +92,14 @@ let check_close ?(rtol = float64_rtol) ?(atol = float64_atol) ?shape ~msg
     ~expected actual =
   ( match shape with
   | Some shape when shape <> Nx.shape actual ->
-      Alcotest.failf "%s: shape [%s], expected [%s]" msg
+      Windtrap.failf "%s: shape [%s], expected [%s]" msg
         (pp_shape (Nx.shape actual))
         (pp_shape shape)
   | _ ->
       () ) ;
   let got = Nx.to_array actual in
   if Array.length got <> Array.length expected then
-    Alcotest.failf "%s: %d elements, expected %d" msg (Array.length got)
+    Windtrap.failf "%s: %d elements, expected %d" msg (Array.length got)
       (Array.length expected) ;
   Array.iteri
     (fun i e ->
@@ -109,7 +109,7 @@ let check_close ?(rtol = float64_rtol) ?(atol = float64_atol) ?shape ~msg
         (Float.is_nan e && Float.is_nan a) || Float.abs (a -. e) <= tolerance
       in
       if not close then
-        Alcotest.failf
+        Windtrap.failf
           "%s: index %d: got %.17g, expected %.17g (delta %.3g, tolerance %.3g)"
           msg i a e
           (Float.abs (a -. e))

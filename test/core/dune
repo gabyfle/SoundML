@@ -2,6 +2,6 @@
  (name test_window)
  (package soundml)
  (modules test_window)
- (libraries alcotest nx soundml tutils yojson)
+ (libraries nx soundml tutils windtrap yojson)
  (deps
   (glob_files ../vectors/windows/*.json)))

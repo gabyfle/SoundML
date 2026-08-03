@@ -54,7 +54,7 @@ module Golden : sig
 
   val param : case -> string -> Yojson.Safe.t
   (** [param case key] is the [key] parameter of [case]. Fails the running
-      Alcotest case if [key] is absent. *)
+      test case if [key] is absent. *)
 
   val bool_param : case -> string -> bool
   (** [bool_param case key] is {!param} as a boolean. *)
@@ -90,7 +90,7 @@ val check_close :
   -> (float, 'a) Nx.t
   -> unit
 (** [check_close ?rtol ?atol ?shape ~msg ~expected actual] fails the running
-    Alcotest case unless [actual] matches [expected] elementwise within
+    test case unless [actual] matches [expected] elementwise within
     [atol + rtol * |expected|], reporting the first offending index. [rtol]
     defaults to {!float64_rtol} and [atol] to {!float64_atol}; [shape], when
     given, must equal the shape of [actual]. [expected] is compared against
