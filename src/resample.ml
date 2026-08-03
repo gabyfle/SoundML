@@ -94,11 +94,21 @@ let kaiser_numtaps att width =
   (* odd length: linear phase with an integral group delay *)
   if Float.rem n 2. = 0. then n +. 1. else n
 
+(* [1 / k^2] for the [bessel_i0] series: the per-term division dominates the
+   series cost (the window evaluates [I0] once per tap of a filter that can run
+   tens of thousands of taps), so the reciprocals are precomputed once. The
+   series at the betas admitted here converges within a few dozen terms; the
+   table covers far more, and the fallback division keeps the function total. *)
+let i0_inv_sq =
+  Array.init 129 (fun k -> if k = 0 then 0. else 1. /. Float.of_int (k * k))
+
 let bessel_i0 x =
-  let hx = 0.5 *. x in
+  let hx2 = 0.25 *. x *. x in
   let rec go k term sum =
-    let f = hx /. Float.of_int k in
-    let term = term *. f *. f in
+    let term =
+      if k < 129 then term *. hx2 *. i0_inv_sq.(k)
+      else term *. hx2 /. Float.of_int (k * k)
+    in
     let sum' = sum +. term in
     if term <= Float.epsilon *. sum' || k > 1000 then sum'
     else go (k + 1) term sum'
@@ -108,21 +118,24 @@ let bessel_i0 x =
 (* [design_prototype ~l ~k ~fc ~beta] is the [2*K*L + 1]-tap prototype: a
    windowed sinc with cutoff [fc] (Nyquist units of the interpolated rate),
    normalised so the full filter sums to [L] — unit passband gain after the
-   zero-stuffing of upsampling. *)
+   zero-stuffing of upsampling. Both factors are even in [z], so only the right
+   half is evaluated and the left half mirrors it — the symmetry is exact, not a
+   rounding shortcut. *)
 let design_prototype ~l ~k ~fc ~beta =
   let mid = k * l in
   let n = (2 * mid) + 1 in
   let i0_beta = bessel_i0 beta in
-  let h =
-    Array.init n (fun i ->
-        let z = Float.of_int (i - mid) in
-        let s =
-          if i = mid then fc
-          else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
-        in
-        let r = z /. Float.of_int mid in
-        s *. (bessel_i0 (beta *. Float.sqrt (1. -. (r *. r))) /. i0_beta) )
-  in
+  let h = Array.make n 0. in
+  for i = mid to n - 1 do
+    let z = Float.of_int (i - mid) in
+    let s =
+      if i = mid then fc else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
+    in
+    let r = z /. Float.of_int mid in
+    let v = s *. (bessel_i0 (beta *. Float.sqrt (1. -. (r *. r))) /. i0_beta) in
+    h.(i) <- v ;
+    h.(n - 1 - i) <- v
+  done ;
   let sum = Array.fold_left ( +. ) 0. h in
   let gain = Float.of_int l /. sum in
   Array.iteri (fun i v -> h.(i) <- v *. gain) h ;
@@ -144,6 +157,24 @@ let bank_of_prototype ~l ~k h =
   done ;
   b
 
+(* [gemm_bank ~l ~m ~k bank] is the [P; L] matrix [G] of the tensor formulation
+   ([apply_gemm]), with [P = 2K + 1 + floor((L-1)*M/L)] and [G[q, r] =
+   bank[(r*M) mod L, q - floor(r*M/L)]] where in range and zero elsewhere:
+   column [r] is the phase-[(r*M) mod L] row of the polyphase bank, shifted down
+   by the integer input advance [floor(r*M/L)] of output [r] within the block.
+   [bank] is the phase-major array of [bank_of_prototype]. *)
+let gemm_bank ~l ~m ~k bank =
+  let taps = (2 * k) + 1 in
+  let p_len = taps + ((l - 1) * m / l) in
+  let g = Array.make (p_len * l) 0. in
+  for r = 0 to l - 1 do
+    let d = r * m / l and ph = r * m mod l in
+    for s = 0 to taps - 1 do
+      g.(((d + s) * l) + r) <- bank.((ph * taps) + s)
+    done
+  done ;
+  Nx.create Nx.float64 [|p_len; l|] g
+
 (* {1 Configuration} *)
 
 let bank_budget_bytes = 8 * 1024 * 1024
@@ -156,7 +187,11 @@ type config =
   ; m: int (* input samples per L/M block *)
   ; k: int (* group delay in input samples; 0 for the identity *)
   ; prototype: (float, Nx.float64_elt) Nx.t (* [2*K*L + 1] *)
-  ; bank: (float, Nx.float64_elt) Nx.t (* [L; 2K + 1], rows reversed *) }
+  ; bank: (float, Nx.float64_elt) Nx.t (* [L; 2K + 1], rows reversed *)
+  ; gemm: (float, Nx.float64_elt) Nx.t Lazy.t
+        (* [P; L], built on the first [apply_gemm] and shared by every later
+           call on this config; forcing is not domain-safe, like every other
+           piece of state in this module *) }
 
 let is_identity c = c.l = 1 && c.m = 1 && c.k = 0
 
@@ -223,7 +258,8 @@ module Config = struct
       ; m= 1
       ; k= 0
       ; prototype= Nx.create Nx.float64 [|1|] [|1.|]
-      ; bank= Nx.create Nx.float64 [|1; 1|] [|1.|] }
+      ; bank= Nx.create Nx.float64 [|1; 1|] [|1.|]
+      ; gemm= lazy (Nx.create Nx.float64 [|1; 1|] [|1.|]) }
     else begin
       let width = (1. -. passband) /. Float.of_int (Stdlib.max l m) in
       let ntaps = kaiser_numtaps attenuation width in
@@ -245,6 +281,7 @@ module Config = struct
       let beta = kaiser_beta attenuation in
       let h = design_prototype ~l ~k ~fc ~beta in
       let taps = (2 * k) + 1 in
+      let bank = Nx.create Nx.float64 [|l; taps|] (bank_of_prototype ~l ~k h) in
       { sample_rate
       ; target
       ; quality
@@ -252,7 +289,8 @@ module Config = struct
       ; m
       ; k
       ; prototype= Nx.create Nx.float64 [|Array.length h|] h
-      ; bank= Nx.create Nx.float64 [|l; taps|] (bank_of_prototype ~l ~k h) }
+      ; bank
+      ; gemm= lazy (gemm_bank ~l ~m ~k (Nx.to_array bank)) }
     end
 
   let sample_rate c = c.sample_rate
@@ -508,24 +546,8 @@ let apply c x =
    P] times a [P; L] arrangement of the bank — the strided formulation whose
    arithmetic redundancy is [P / taps]. The matrix product sums in whatever
    order the backend blocks it, which is exactly why this surface is documented
-   as numerically distinct and carries no partitioning law. *)
-
-(* [gemm_bank c] is the [P; L] matrix [G] with [G[q, r] = bank[(r*M) mod L, q -
-   floor(r*M/L)]] where in range and zero elsewhere: column [r] is the
-   phase-[(r*M) mod L] row of the polyphase bank, shifted down by the integer
-   input advance [floor(r*M/L)] of output [r] within the block. *)
-let gemm_bank c =
-  let taps = (2 * c.k) + 1 in
-  let p_len = taps + ((c.l - 1) * c.m / c.l) in
-  let bank = Nx.to_array c.bank in
-  let g = Array.make (p_len * c.l) 0. in
-  for r = 0 to c.l - 1 do
-    let d = r * c.m / c.l and ph = r * c.m mod c.l in
-    for s = 0 to taps - 1 do
-      g.(((d + s) * c.l) + r) <- bank.((ph * taps) + s)
-    done
-  done ;
-  Nx.create Nx.float64 [|p_len; c.l|] g
+   as numerically distinct and carries no partitioning law. The [P; L] matrix
+   itself is [gemm_bank] above, built once per config on the first call. *)
 
 let apply_gemm c x =
   check_rank "apply_gemm" x ;
@@ -573,7 +595,9 @@ let apply_gemm c x =
             else i )
       in
       let y =
-        Nx.matmul (Nx.transpose ~axes patches) (Nx.cast dtype (gemm_bank c))
+        Nx.matmul
+          (Nx.transpose ~axes patches)
+          (Nx.cast dtype (Lazy.force c.gemm))
       in
       let y = Nx.reshape (Array.append lead [|frames * c.l|]) y in
       Nx.shrink
