@@ -1,0 +1,25 @@
+{
+"schema": 1,
+"suite": "windows",
+"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"cases": [
+  {"name": "rectangular_periodic_1", "params": {"window": "rectangular", "periodic": true, "n": 1}, "shape": [1], "values": [1.0]},
+  {"name": "rectangular_periodic_2", "params": {"window": "rectangular", "periodic": true, "n": 2}, "shape": [2], "values": [1.0, 1.0]},
+  {"name": "rectangular_periodic_3", "params": {"window": "rectangular", "periodic": true, "n": 3}, "shape": [3], "values": [1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_8", "params": {"window": "rectangular", "periodic": true, "n": 8}, "shape": [8], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_15", "params": {"window": "rectangular", "periodic": true, "n": 15}, "shape": [15], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_16", "params": {"window": "rectangular", "periodic": true, "n": 16}, "shape": [16], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_17", "params": {"window": "rectangular", "periodic": true, "n": 17}, "shape": [17], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_64", "params": {"window": "rectangular", "periodic": true, "n": 64}, "shape": [64], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_periodic_128", "params": {"window": "rectangular", "periodic": true, "n": 128}, "shape": [128], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_1", "params": {"window": "rectangular", "periodic": false, "n": 1}, "shape": [1], "values": [1.0]},
+  {"name": "rectangular_symmetric_2", "params": {"window": "rectangular", "periodic": false, "n": 2}, "shape": [2], "values": [1.0, 1.0]},
+  {"name": "rectangular_symmetric_3", "params": {"window": "rectangular", "periodic": false, "n": 3}, "shape": [3], "values": [1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_8", "params": {"window": "rectangular", "periodic": false, "n": 8}, "shape": [8], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_15", "params": {"window": "rectangular", "periodic": false, "n": 15}, "shape": [15], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_16", "params": {"window": "rectangular", "periodic": false, "n": 16}, "shape": [16], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_17", "params": {"window": "rectangular", "periodic": false, "n": 17}, "shape": [17], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_64", "params": {"window": "rectangular", "periodic": false, "n": 64}, "shape": [64], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]},
+  {"name": "rectangular_symmetric_128", "params": {"window": "rectangular", "periodic": false, "n": 128}, "shape": [128], "values": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}
+]
+}

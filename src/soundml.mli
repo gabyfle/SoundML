@@ -3,16 +3,20 @@
     {1:conventions Conventions}
 
     The time axis is always the last axis. Audio is [[channels; frames]]; a
-    rank-one tensor is mono audio.
+    rank-one tensor is mono audio. Spectral data is
+    [[channels; bins; frames]]. Leading axes broadcast: every function
+    accepts [[...; channels; frames]] and maps over the leading axes, so a
+    batch of clips is one call.
 
     Functions return fresh tensors unless documented {e view}. Nothing copies
-    defensively; nothing mutates its input.
+    defensively; nothing mutates its input unless the function takes [~out].
 
-    Sample rates are explicit arguments on the functions whose result depends
-    on one; rate-agnostic functions do not take it.
+    Sample rates are explicit [~sample_rate] arguments on the functions whose
+    result depends on one; rate-agnostic functions do not take it.
 
-    Preconditions raise [Invalid_argument]; no [result] values in numeric
-    paths.
+    Numerical defaults follow librosa 0.11; every deviation is a named
+    option. Preconditions raise [Invalid_argument]; no [result] values in
+    numeric paths.
 
     Incremental processing: every stateful algorithm is a Mealy kernel
     ([prepare]/[step]/[flush]/[reset]) composable as a {!Pipeline} stage.
@@ -25,6 +29,9 @@
 (** Streaming and offline chunk pipelines: one pipeline value drives both the
     offline driver {!Pipeline.run} and the online driver {!Pipeline.Stream}. *)
 module Pipeline = Pipeline
+
+(** Window-function specifications and their instantiation. *)
+module Window = Window
 
 val version : string
 (** [version] is the version of the SoundML distribution this library was built
