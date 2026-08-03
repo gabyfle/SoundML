@@ -1,0 +1,47 @@
+; Must-not-compile gate: [Stream.prepare] applied to a [Db.stage Maximum]
+; pipeline is rejected by the compiler with an error naming the capability
+; types. The companion must-compile test (a [Db.stage (Value _)] pipeline
+; driven both offline and streaming) is [../accept_value_stage.ml], part of
+; the test executable.
+
+(rule
+ (copy %{lib:soundml:soundml.cmi} soundml.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__.cmi} soundml__.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__Pipeline.cmi} soundml__Pipeline.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__Db.cmi} soundml__Db.cmi))
+
+; OCAMLLIB points %{ocamlc} at its standard library explicitly: the compiler
+; resolves it relative to its own path, which a sandboxed run breaks.
+
+(rule
+ (targets reject_maximum_stream.err)
+ (deps
+  soundml.cmi
+  soundml__.cmi
+  soundml__Pipeline.cmi
+  soundml__Db.cmi
+  (:src reject_maximum_stream.ml))
+ (action
+  (setenv
+   OCAMLLIB
+   %{ocaml_where}
+   (with-accepted-exit-codes
+    2
+    (with-stderr-to
+     %{targets}
+     (run %{ocamlc} -color never -I . -c %{src}))))))
+
+(rule
+ (alias runtest)
+ (deps reject_maximum_stream.err)
+ (action
+  (progn
+   (run grep -q "Soundml.Pipeline.offline" %{deps})
+   (run grep -q "Soundml.Pipeline.causal" %{deps})
+   (run grep -q "is not compatible with" %{deps}))))

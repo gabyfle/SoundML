@@ -33,6 +33,15 @@ module Pipeline = Pipeline
 (** Window-function specifications and their instantiation. *)
 module Window = Window
 
+(** Unit and scale conversions: decibels, the mel and MIDI frequency scales,
+    and the frame grid. *)
+module Convert = Convert
+
+(** Decibel scaling as {!Pipeline} stages, the reference capability-indexed:
+    [Db.stage (Value r)] streams, [Db.stage Maximum] is offline by the
+    argument's own type. *)
+module Db = Db
+
 val version : string
 (** [version] is the version of the SoundML distribution this library was built
     from. *)

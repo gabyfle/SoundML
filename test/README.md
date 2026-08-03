@@ -26,6 +26,11 @@ Current suites:
 - `windows` — every `Soundml.Window` type, periodic and symmetric, at odd
   and even lengths including the 1/2/3-point edge cases, plus
   `scipy.signal.check_COLA` truths for `Window.cola` (`cola.json`).
+- `db` — the `Soundml.Convert` decibel conversions (`power_to_db`,
+  `amplitude_to_db`) over synthetic seeded inputs: fixed references, the
+  `amin` floor, `top_db` clamping (global across a rank-two input),
+  negative entries, both element dtypes. Each case stores its input in the
+  params, flattened in C order.
 
 ## Regenerating the vectors
 
