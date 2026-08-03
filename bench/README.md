@@ -33,12 +33,13 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   The measured position, both sides on the maintainer machine in one
   session (arm64, min-of-N, python-soxr 1.1.0 driving the maintained
   libsoxr fork): at equal spec on 30-second clips, `soxr_hq` converts
-  44.1 ↔ 48 kHz about 3.6-3.7x faster at float32 — libsoxr executes its
+  44.1 ↔ 48 kHz about 3.5-3.8x faster at float32 — libsoxr executes its
   sharp filter as overlap-save FFT convolution, an O(log N)-per-sample
   engine this all-FIR executor deliberately does not attempt — and the
-  wide-ratio pairs sit closer since the two-stage cascade landed
-  (44.1 → 16 kHz about 5.8x, 48 → 8 kHz about 3.0x, previously 8.6x and
-  7.1x). The float64 rows are not an equal-precision comparison: soxr HQ
+  wide-ratio pairs sit closer since the two-stage cascade and the
+  visit-order bank layout landed (44.1 → 16 kHz about 4.7x, 48 → 8 kHz
+  about 3.1x, previously 8.6x and 7.1x). The float64 rows are not an
+  equal-precision comparison: soxr HQ
   runs single-precision internally regardless of I/O dtype, while SoundML
   float64 is a genuine double-precision path. SoundML runs 1.2-3x faster
   than torchaudio at its published `kaiser_best` settings and behind

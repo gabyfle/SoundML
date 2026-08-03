@@ -80,8 +80,11 @@ module Config : sig
   (** The type for validated, immutable resampling configurations. Creation
       reduces the ratio, plans the stage decomposition (one polyphase stage,
       or two for wide ratios — see the module overview), designs each
-      prototype filter (float64) and lays the polyphase banks out
-      phase-major; configs are cheap to share, and one config serves any
+      prototype filter (float64) and lays each polyphase bank out both
+      phase-major and in the executor's row-visit order — kernels pick the
+      visit-order copy when their bank outgrows L1, so streaming a large bank
+      reads it sequentially; configs are cheap to share, and one config serves
+      any
       number of {!apply} calls and prepared kernels. Construction is {e not}
       cheap: a prototype runs tens of thousands of taps (measured, [`High]
       44.1 → 48 kHz: about 1 ms, roughly twice the cost of resampling one

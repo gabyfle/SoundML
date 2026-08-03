@@ -29,8 +29,12 @@
    group delay is exactly [K] stage-input samples. Output [i] sits at input time
    [i * m / l]: with [t = i * m], its phase is [t mod l] and it reads the [2K +
    1] input samples [t/l - K .. t/l + K] (delay already compensated). The bank
-   stores one row per phase, phase-major, each row the prototype decimated by
-   [l] and reversed so the executor reads input windows forward.
+   stores one row per phase, each row the prototype decimated by [l] and
+   reversed so the executor reads input windows forward — laid out twice:
+   phase-major ([sbank], the mathematical object the GEMM arrangement is built
+   from) and in executor visit order ([svisit], see [visit_bank]);
+   [Kernel.prepare] hands the executor whichever layout its instantiated bank
+   wants.
 
    The C executor (resample_stubs.c) computes each output as one dot product
    over [history ++ chunk] with a fixed summation order, so offline equals
@@ -79,6 +83,10 @@ let check_dtype : type a. string -> (float, a) Nx.dtype -> unit =
 let ceil_pos a b = if a <= 0 then 0 else ((a - 1) / b) + 1
 
 let rec gcd a b = if b = 0 then a else gcd b (a mod b)
+
+(* The flat storage of a contiguous tensor, shared (not copied): the seam
+   between config-owned filter tensors and the C executor's arrays. *)
+let array1_of t = Nx_buffer.to_bigarray1 (Nx.to_buffer t)
 
 (* {1 Filter design}
 
@@ -165,6 +173,32 @@ let bank_of_prototype ~l ~k h =
   done ;
   b
 
+(* [visit_bank ~l ~m ~taps bank] re-lays the phase-major bank tensor in the
+   executor's visit order: consecutive outputs walk phases [(i * M) mod L], so
+   slot [j] holds the phase-[(j * M) mod L] row and the row of absolute output
+   [i] is simply slot [i mod L] — the walk reads the bank forward, one wrap per
+   [L] outputs, instead of hopping [M] rows per output. The hop was the cost on
+   banks past L1: it streams them from L2 with no prefetchable pattern (measured
+   57-60% of the load-bound dot ceiling vs 76-94% for resident or sequential
+   banks, Apple M4 Pro). Row contents and the per-output summation order are
+   untouched, so the relayout cannot move a bit. [Kernel.prepare] picks this
+   layout only when the dtype-instantiated bank passes the L1 edge: below it
+   both layouts are resident, the walk order is free, and the executor's
+   phase-major loop carries no row counter — measured 6% on the short-dot wide
+   stages of the 8 -> 48 kHz cascade. Built by blitting rows between the two
+   tensors' storage: element-wise construction (an [Nx.create] from a staging
+   array, or generic bigarray access) boxes per element — a measured +15% on
+   [Config.create]. *)
+let visit_bank ~l ~m ~taps bank =
+  let v = Nx.zeros Nx.float64 [|l; taps|] in
+  let src = array1_of bank and dst = array1_of v in
+  for j = 0 to l - 1 do
+    Bigarray.Array1.blit
+      (Bigarray.Array1.sub src (j * m mod l * taps) taps)
+      (Bigarray.Array1.sub dst (j * taps) taps)
+  done ;
+  v
+
 (* [gemm_bank ~l ~m ~k bank] is the [P; L] matrix [G] of the tensor formulation
    ([apply_gemm]), with [P = 2K + 1 + floor((L-1)*M/L)] and [G[q, r] =
    bank[(r*M) mod L, q - floor(r*M/L)]] where in range and zero elsewhere:
@@ -187,6 +221,11 @@ let gemm_bank ~l ~m ~k bank =
 
 let bank_budget_bytes = 8 * 1024 * 1024
 
+(* The L1 residency edge (128 KB of data L1 on the reference machine's
+   performance cores), shared by the planner's cost model and the bank-layout
+   choice at [Kernel.prepare]. *)
+let l1_edge_bytes = 128 * 1024
+
 (* One polyphase stage of a plan: factors [sl / sm], group delay [sk] in
    stage-input samples, and the designed filter in its three layouts. *)
 type stage_plan =
@@ -194,7 +233,10 @@ type stage_plan =
   ; sm: int
   ; sk: int
   ; sproto: (float, Nx.float64_elt) Nx.t (* [2*sk*sl + 1] *)
-  ; sbank: (float, Nx.float64_elt) Nx.t (* [sl; 2*sk + 1], rows reversed *)
+  ; sbank: (float, Nx.float64_elt) Nx.t (* [sl; 2*sk + 1], phase-major *)
+  ; svisit: (float, Nx.float64_elt) Nx.t
+        (* [sbank] rows permuted into executor visit order ([visit_bank]); the
+           layout the C executor is handed at [Kernel.prepare] *)
   ; sgemm: (float, Nx.float64_elt) Nx.t Lazy.t
         (* [P; sl], built on the first [apply_gemm] and shared by every later
            call on this config; forcing is not domain-safe, like every other
@@ -280,7 +322,7 @@ type stage_geom = {gl: int; gm: int; gk: int; gfc: float}
    instantiation. *)
 let bank_cost l k =
   let macs = (2. *. Float.of_int k) +. 1. in
-  if l * ((2 * k) + 1) * 4 > 128 * 1024 then macs *. 1.25 else macs
+  if l * ((2 * k) + 1) * 4 > l1_edge_bytes then macs *. 1.25 else macs
 
 let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_single =
   let att = attenuation +. (20. *. Float.log10 2.) in
@@ -388,12 +430,14 @@ let gemm_block = 64
 let make_stage ~l ~m ~k ~fc ~beta =
   let h = design_prototype ~l ~k ~fc ~beta in
   let taps = (2 * k) + 1 in
-  let bank = Nx.create Nx.float64 [|l; taps|] (bank_of_prototype ~l ~k h) in
+  let b = bank_of_prototype ~l ~k h in
+  let bank = Nx.create Nx.float64 [|l; taps|] b in
   { sl= l
   ; sm= m
   ; sk= k
   ; sproto= Nx.create Nx.float64 [|Array.length h|] h
   ; sbank= bank
+  ; svisit= visit_bank ~l ~m ~taps bank
   ; sgemm=
       lazy
         ( if l = 1 then
@@ -446,6 +490,7 @@ module Config = struct
             ; sk= 0
             ; sproto= Nx.create Nx.float64 [|1|] [|1.|]
             ; sbank= Nx.create Nx.float64 [|1; 1|] [|1.|]
+            ; svisit= Nx.create Nx.float64 [|1; 1|] [|1.|]
             ; sgemm= lazy (Nx.create Nx.float64 [|1; 1|] [|1.|]) } ] }
     else begin
       let width = (1. -. passband) /. Float.of_int (Stdlib.max l m) in
@@ -636,8 +681,9 @@ end
 (* One call per chunk per stage; the stub does all slicing internally, validates
    every extent against the arrays it was actually handed, and releases the
    runtime lock around the bulk work (hence no [@@noalloc]). Argument order:
-   bank, history, scratch, input, output, n, n_out, channels, K, L, M, phase0,
-   s0, is_flush. *)
+   bank, history, scratch, input, output, n, n_out, channels, K, L, M, row0, s0,
+   visit (the bank's layout: visit order when true, phase-major when false),
+   is_flush. *)
 external resample_step_c :
      (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
   -> (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
@@ -653,9 +699,8 @@ external resample_step_c :
   -> int
   -> int
   -> bool
+  -> bool
   -> unit = "soundml_resample_step_bc" "soundml_resample_step"
-
-let array1_of t = Nx_buffer.to_bigarray1 (Nx.to_buffer t)
 
 (* {1 Incremental kernel} *)
 
@@ -663,6 +708,11 @@ module Kernel = struct
   type 'a stage_state =
     { sp: stage_plan
     ; bank: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+    ; visit: bool
+          (* [bank]'s layout: [svisit] when the instantiated bank passes the L1
+             edge (the walk then streams it forward), [sbank] under it (the
+             phase walk is free on a resident bank, and the executor's
+             phase-major loop carries no row counter) *)
     ; hist: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
           (* [channels * 2K], planar *)
     ; scratch: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
@@ -706,9 +756,13 @@ module Kernel = struct
             least 1)"
            max_block ) ;
     let mk max_in sp =
+      let hist = array1_of (Nx.zeros dtype [|channels * 2 * sp.sk|]) in
+      let elt = Bigarray.kind_size_in_bytes (Bigarray.Array1.kind hist) in
+      let visit = sp.sl * ((2 * sp.sk) + 1) * elt > l1_edge_bytes in
       { sp
-      ; bank= array1_of (Nx.cast dtype sp.sbank)
-      ; hist= array1_of (Nx.zeros dtype [|channels * 2 * sp.sk|])
+      ; bank= array1_of (Nx.cast dtype (if visit then sp.svisit else sp.sbank))
+      ; visit
+      ; hist
       ; scratch=
           array1_of (Nx.zeros dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
       ; fed= 0
@@ -742,17 +796,18 @@ module Kernel = struct
 
   (* [run k st ~n ~n_out ~is_flush x y] drives the executor for one stage over
      [n] stage-input samples ([x] when streaming, virtual zeros when draining),
-     writing [n_out] freshly computed planar outputs into [y]. The phase state
-     of the first output [i = emitted] is exact integer arithmetic: [t = i * M],
-     phase [t mod L], window start [t / L + K - fed] in scratch coordinates.
-     Advances [emitted]; the caller advances [fed] — a drain feeds no real
-     samples. *)
+     writing [n_out] freshly computed planar outputs into [y]. The state of the
+     first output [i = emitted] is exact integer arithmetic: [t = i * M], bank
+     row [i mod L] in visit order (the executor reconstructs the phase [t mod L]
+     from it; in phase-major layout it recomputes the row too), window start [t
+     / L + K - fed] in scratch coordinates. Advances [emitted]; the caller
+     advances [fed] — a drain feeds no real samples. *)
   let run k st ~n ~n_out ~is_flush x y =
     let t = st.emitted * st.sp.sm in
-    let phase0 = t mod st.sp.sl in
+    let row0 = st.emitted mod st.sp.sl in
     let s0 = (t / st.sp.sl) + st.sp.sk - st.fed in
     resample_step_c st.bank st.hist st.scratch x y n n_out k.channels st.sp.sk
-      st.sp.sl st.sp.sm phase0 s0 is_flush ;
+      st.sp.sl st.sp.sm row0 s0 st.visit is_flush ;
     st.emitted <- st.emitted + n_out
 
   let step k chunk =
