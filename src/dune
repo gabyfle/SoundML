@@ -1,5 +1,5 @@
 (library
  (name soundml)
  (public_name soundml)
- (modules soundml pipeline window stft convert db)
+ (modules soundml pipeline window stft convert db mel)
  (libraries nx))
