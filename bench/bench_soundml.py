@@ -50,6 +50,77 @@ def bench(name: str, fn: Callable[[], Any]) -> Tuple[str, Callable[[], Any]]:
     return (name, fn)
 
 
+# The published librosa kaiser_best triple, as documented by
+# torchaudio.functional.resample.
+KAISER_BEST = {
+    "lowpass_filter_width": 64,
+    "rolloff": 0.9475937167399596,
+    "resampling_method": "sinc_interp_kaiser",
+    "beta": 14.769656459379492,
+}
+
+RESAMPLE_PAIRS = [("44k1-48k", 44100, 48000), ("44k1-16k", 44100, 16000)]
+
+
+def resample_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
+    """The fair fight for ``resample/apply high``: librosa's soxr_hq (the
+    spec SoundML's default is designed to) and torchaudio at both its
+    defaults (quality documented as incomparable) and its published librosa
+    kaiser_best triple. torchaudio rows appear only when torch is
+    installed."""
+    benches: List[Tuple[str, Callable[[], Any]]] = []
+    rng = np.random.default_rng(42)
+
+    for pair, sr, target in RESAMPLE_PAIRS:
+        clip = rng.standard_normal(sr).astype(np.float32)
+
+        def make_librosa(clip: np.ndarray, sr: int, target: int):
+            def run() -> None:
+                librosa.resample(
+                    clip, orig_sr=sr, target_sr=target, res_type="soxr_hq"
+                )
+
+            return run
+
+        benches.append(
+            bench(
+                f"resample/apply high {pair} f32 (librosa soxr_hq)",
+                make_librosa(clip, sr, target),
+            )
+        )
+
+    try:
+        import torch
+        import torchaudio.functional as taf
+    except ImportError:
+        print("torchaudio not installed: skipping its resample rows")
+        return benches
+
+    for pair, sr, target in RESAMPLE_PAIRS:
+        clip = torch.from_numpy(rng.standard_normal(sr).astype(np.float32))
+
+        def make_ta(clip: "torch.Tensor", sr: int, target: int, kwargs: dict):
+            def run() -> None:
+                taf.resample(clip, sr, target, **kwargs)
+
+            return run
+
+        benches.append(
+            bench(
+                f"resample/apply high {pair} f32 (torchaudio kaiser_best)",
+                make_ta(clip, sr, target, KAISER_BEST),
+            )
+        )
+        benches.append(
+            bench(
+                f"resample/apply high {pair} f32 (torchaudio defaults)",
+                make_ta(clip, sr, target, {}),
+            )
+        )
+
+    return benches
+
+
 def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
     benches: List[Tuple[str, Callable[[], Any]]] = []
 
@@ -97,6 +168,7 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
             )
         )
 
+    benches.extend(resample_benchmarks())
     return benches
 
 

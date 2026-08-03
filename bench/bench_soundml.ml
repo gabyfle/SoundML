@@ -12,7 +12,15 @@
    The stft and mel groups time the offline analysis paths end to end —
    [Stft.power_spectrum] and [mel_spectrogram] over 30 s of mono audio at 22.05
    kHz, fft 2048 and hop 512, in both float32 and float64 — one row per dtype,
-   mirroring the librosa rows of [bench_soundml.py] one to one. *)
+   mirroring the librosa rows of [bench_soundml.py] one to one.
+
+   The resample group covers every face of [Resample] on one-second mono clips:
+   [apply] across the three presets, the three headline rate pairs and both
+   dtypes; the GEMM surface next to the executor at [`High]; the streaming
+   kernel at [`High] float32 across chunk sizes (the 1024 row keeps the
+   per-chunk dispatch overhead honest); the stage inside a resample-then-STFT
+   front next to the same computation hand-written; and the identity-rate
+   passthrough. *)
 
 let n_window = 2048
 
@@ -86,6 +94,98 @@ let pipeline_benchmarks () =
         Soundml.Pipeline.run ~source chain x )
   ; Thumper.bench "direct gain+bias+abs 1M" (fun () -> direct x) ]
 
+(* One-second mono clips; every row's throughput in input Msamples/s is the
+   clip's sample rate over the row's wall time. *)
+
+let resample_pairs =
+  [ ("44k1-48k", 44100, 48000)
+  ; ("48k-44k1", 48000, 44100)
+  ; ("44k1-16k", 44100, 16000) ]
+
+let resample_tiers = [("fast", `Fast); ("high", `High); ("best", `Best)]
+
+let resample_apply_benchmarks () =
+  List.concat_map
+    (fun (pair, sample_rate, target) ->
+      let clip32 = Nx.rand Nx.float32 [|sample_rate|] in
+      let clip64 = Nx.rand Nx.float64 [|sample_rate|] in
+      List.concat_map
+        (fun (tier, quality) ->
+          let cfg =
+            Soundml.Resample.Config.create ~quality ~sample_rate ~target ()
+          in
+          [ Thumper.bench (Printf.sprintf "apply %s %s f32" tier pair) (fun () ->
+                Soundml.Resample.apply cfg clip32 )
+          ; Thumper.bench (Printf.sprintf "apply %s %s f64" tier pair)
+              (fun () -> Soundml.Resample.apply cfg clip64 ) ] )
+        resample_tiers )
+    resample_pairs
+
+let resample_gemm_benchmarks () =
+  List.concat_map
+    (fun (pair, sample_rate, target) ->
+      let clip32 = Nx.rand Nx.float32 [|sample_rate|] in
+      let clip64 = Nx.rand Nx.float64 [|sample_rate|] in
+      let cfg = Soundml.Resample.Config.create ~sample_rate ~target () in
+      [ Thumper.bench (Printf.sprintf "gemm high %s f32" pair) (fun () ->
+            Soundml.Resample.apply_gemm cfg clip32 )
+      ; Thumper.bench (Printf.sprintf "gemm high %s f64" pair) (fun () ->
+            Soundml.Resample.apply_gemm cfg clip64 ) ] )
+    [("44k1-48k", 44100, 48000); ("44k1-16k", 44100, 16000)]
+
+let resample_stream_benchmarks () =
+  let sample_rate = 44100 in
+  let clip = Nx.rand Nx.float32 [|sample_rate|] in
+  let cfg = Soundml.Resample.Config.create ~sample_rate ~target:48000 () in
+  List.map
+    (fun max_chunk ->
+      let kernel =
+        Soundml.Resample.Kernel.prepare cfg Nx.float32 ~channels:1
+          ~max_block:max_chunk
+      in
+      let chunks =
+        let rec cut off =
+          if off >= sample_rate then []
+          else
+            let stop = min sample_rate (off + max_chunk) in
+            Nx.shrink [|(off, stop)|] clip :: cut stop
+        in
+        cut 0
+      in
+      Thumper.bench
+        (Printf.sprintf "stream high 44k1-48k f32 chunk %d" max_chunk)
+        (fun () ->
+          Soundml.Resample.Kernel.reset kernel ;
+          List.iter
+            (fun c -> ignore (Soundml.Resample.Kernel.step kernel c))
+            chunks ;
+          ignore (Soundml.Resample.Kernel.flush kernel) ) )
+    [1024; 4096; 16384]
+
+let resample_stage_benchmarks () =
+  let sample_rate = 44100 in
+  let clip = Nx.rand Nx.float32 [|sample_rate|] in
+  let cfg = Soundml.Resample.Config.create ~sample_rate ~target:48000 () in
+  let stft_cfg = Soundml.Stft.Config.create ~fft_size:1024 () in
+  let source =
+    Soundml.Pipeline.Format.audio Nx.float32 ~sample_rate ~channels:1
+  in
+  let front =
+    Soundml.Pipeline.( >> )
+      (Soundml.Resample.stage cfg)
+      (Soundml.Stft.power_stage stft_cfg)
+  in
+  let identity =
+    Soundml.Resample.Config.create ~sample_rate:48000 ~target:48000 ()
+  in
+  let clip_id = Nx.rand Nx.float32 [|1_000_000|] in
+  [ Thumper.bench "stage resample>>stft 44k1-48k f32" (fun () ->
+        Soundml.Pipeline.run ~source front clip )
+  ; Thumper.bench "direct apply+stft 44k1-48k f32" (fun () ->
+        Soundml.Stft.power_spectrum stft_cfg (Soundml.Resample.apply cfg clip) )
+  ; Thumper.bench "apply identity 1M f32" (fun () ->
+        Soundml.Resample.apply identity clip_id ) ]
+
 let () =
   Nx.Rng.run ~seed:42
   @@ fun () ->
@@ -96,4 +196,9 @@ let () =
     [ Thumper.group "window" (window_benchmarks ())
     ; Thumper.group "pipeline" (pipeline_benchmarks ())
     ; Thumper.group "stft" (stft_benchmarks ())
-    ; Thumper.group "mel" (mel_benchmarks ()) ]
+    ; Thumper.group "mel" (mel_benchmarks ())
+    ; Thumper.group "resample"
+        ( resample_apply_benchmarks ()
+        @ resample_gemm_benchmarks ()
+        @ resample_stream_benchmarks ()
+        @ resample_stage_benchmarks () ) ]
