@@ -163,6 +163,44 @@ let law_tests =
       (fun () ->
         Stft.Config.create ~pad:(`Constant 0.25) ~fft_size:8 ~hop:5 () ) ]
 
+(* {2 Kernel sequencing} *)
+
+(* Draining consumes the tail: a drained kernel refuses further samples instead
+   of silently emitting frames against a cleared state, and reset restores a
+   usable kernel. *)
+let kernel_tests =
+  [ test "step after flush raises until reset" (fun () ->
+        let c = Stft.Config.create ~fft_size:16 ~hop:5 () in
+        let k =
+          Stft.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:1
+            ~max_block:64
+        in
+        let x =
+          Nx.create Nx.float64 [|45|]
+            (Array.init 45 (fun i -> Float.sin (0.23 *. Float.of_int i)))
+        in
+        (* [@] evaluates its right operand first: sequence step before flush *)
+        let stepped = Stft.Kernel.step k x in
+        let drained = Stft.Kernel.flush k in
+        is_true ~msg:"step and flush emitted"
+          (Option.is_some stepped && Option.is_some drained) ;
+        raises_invalid_arg ~msg:"drained step refuses samples"
+          "step: cannot feed a drained kernel (flush consumed the tail; reset \
+           before reusing)" (fun () -> ignore (Stft.Kernel.step k x) ) ;
+        Stft.Kernel.reset k ;
+        is_true ~msg:"reset revives the kernel"
+          (Option.is_some (Stft.Kernel.step k x)) )
+  ; test "zero-size leading axis chunk raises" (fun () ->
+        let c = Stft.Config.create ~fft_size:8 ~hop:2 () in
+        let k =
+          Stft.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:1
+            ~max_block:32
+        in
+        raises_invalid_arg ~msg:"no signals at all"
+          "step: cannot analyse a chunk with a zero-size leading axis \
+           (channels must be at least 1)" (fun () ->
+            ignore (Stft.Kernel.step k (Nx.zeros Nx.float64 [|0; 20|])) ) ) ]
+
 (* {2 Static queries} *)
 
 let r num den = {Pipeline.Rate.num; den}
@@ -272,5 +310,6 @@ let capability_tests =
 
 let suite =
   [ group "law" law_tests
+  ; group "kernel" kernel_tests
   ; group "static" static_tests
   ; group "capability" capability_tests ]

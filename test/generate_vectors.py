@@ -194,7 +194,9 @@ class StftVectorGenerator:
     float dtypes. The float32 cases quantize the signal to float32 and
     compute in float64, so the reference isolates input rounding from
     implementation precision. Also emits librosa.fft_frequencies and
-    librosa.frames_to_time truths for Stft.frequencies and Stft.times.
+    librosa.frames_to_time truths for Stft.frequencies and Stft.times, and one
+    complex-valued case (real and imaginary parts) pinning the FFT sign
+    convention, which magnitude-only cases cannot see.
     """
 
     SUITE = "stft"
@@ -210,6 +212,8 @@ class StftVectorGenerator:
     ]
 
     LENGTHS = [127, 128]
+
+    COMPLEX_LENGTH = 37
 
     @staticmethod
     def lcg_signal(n, seed=20250803):
@@ -268,6 +272,45 @@ class StftVectorGenerator:
                         )
         return cases
 
+    def complex_cases(self, fft_size, hop):
+        """Real and imaginary parts of one centered transform: a global
+        conjugation or FFT sign-convention error passes every magnitude
+        case, so one complex-valued golden pins the convention."""
+        y = self.lcg_signal(self.COMPLEX_LENGTH)
+        spectrum = librosa.stft(
+            y,
+            n_fft=fft_size,
+            hop_length=hop,
+            win_length=fft_size,
+            window="hann",
+            center=True,
+            pad_mode="reflect",
+            dtype=np.complex128,
+        )
+        cases = []
+        for kind, expected in (
+            ("real", np.real(spectrum)),
+            ("imag", np.imag(spectrum)),
+        ):
+            params = {
+                "fft_size": fft_size,
+                "hop": hop,
+                "win_length": fft_size,
+                "alignment": "centered",
+                "length": self.COMPLEX_LENGTH,
+                "dtype": "float64",
+                "kind": kind,
+            }
+            cases.append(
+                {
+                    "name": f"{kind}_centered_float64_n{self.COMPLEX_LENGTH}",
+                    "params": params,
+                    "shape": list(expected.shape),
+                    "values": expected.flatten().tolist(),
+                }
+            )
+        return cases
+
     def coordinate_cases(self):
         cases = []
         for key, fft_size, hop, _ in self.COMBOS:
@@ -316,6 +359,7 @@ class StftVectorGenerator:
             write_suite(
                 self.SUITE, key, self.spectra_cases(fft_size, hop, win_length)
             )
+        write_suite(self.SUITE, "complex_fft16_hop4", self.complex_cases(16, 4))
         write_suite(self.SUITE, "coordinates", self.coordinate_cases())
 
 

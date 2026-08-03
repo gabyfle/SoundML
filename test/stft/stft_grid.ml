@@ -210,7 +210,29 @@ let broadcast_tests =
         in
         equal ~msg:"shape" (array int)
           [|2; Stft.Config.bins config; Stft.frames config ~n:40|]
-          (Nx.shape (Stft.power_spectrum config x)) ) ]
+          (Nx.shape (Stft.power_spectrum config x)) )
+  ; (* a zero-size leading axis holds no signals: every offline entry point
+       returns the broadcast-consistent empty spectrum instead of evaluating
+       frames *)
+    test "zero-size leading axes yield empty spectra" (fun () ->
+        let config = Stft.Config.create ~fft_size:8 ~hop:2 () in
+        let bins = Stft.Config.bins config in
+        let count = Stft.frames config ~n:20 in
+        equal ~msg:"transform rank two" (array int) [|0; bins; count|]
+          (Nx.shape
+             (Stft.transform Nx.complex128 config
+                (Nx.zeros Nx.float64 [|0; 20|]) ) ) ;
+        equal ~msg:"transform rank three" (array int) [|3; 0; bins; count|]
+          (Nx.shape
+             (Stft.transform Nx.complex128 config
+                (Nx.zeros Nx.float64 [|3; 0; 20|]) ) ) ;
+        equal ~msg:"transform_range" (array int) [|0; bins; 2|]
+          (Nx.shape
+             (Stft.transform_range Nx.complex128 config ~p0:0 ~p1:2
+                (Nx.zeros Nx.float64 [|0; 20|]) ) ) ;
+        equal ~msg:"power_spectrum" (array int) [|0; bins; count|]
+          (Nx.shape
+             (Stft.power_spectrum config (Nx.zeros Nx.float32 [|0; 20|])) ) ) ]
 
 let suite =
   [ group "grid-tiling" tiling_tests

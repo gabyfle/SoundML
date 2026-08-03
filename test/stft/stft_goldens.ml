@@ -39,27 +39,49 @@ let config_of_params (case : Tutils.Golden.case) =
     ~fft_size:(Tutils.Golden.int_param case "fft_size")
     ()
 
-let power_of_kind case =
+let kind_of_param case =
   match Tutils.Golden.string_param case "kind" with
   | "magnitude" ->
-      1.
+      `Power 1.
   | "power" ->
-      2.
+      `Power 2.
+  | "real" ->
+      `Real
+  | "imag" ->
+      `Imag
   | other ->
       failf "golden case %s: unknown kind %s" case.name other
+
+(* [complex_part kind z] is the real or imaginary component of [z] as float64. A
+   complex-to-float cast reads the real component (the behavior the module
+   header pins), and multiplying by [-i] rotates the imaginary component into
+   the real one exactly. *)
+let complex_part kind z =
+  match kind with
+  | `Real ->
+      Nx.cast Nx.float64 z
+  | `Imag ->
+      Nx.cast Nx.float64 (Nx.mul_s z Complex.{re= 0.; im= -1.})
 
 let spectrum_case (case : Tutils.Golden.case) =
   test case.name (fun () ->
       let config = config_of_params case in
       let signal = lcg_signal (Tutils.Golden.int_param case "length") in
-      let power = power_of_kind case in
-      match Tutils.Golden.string_param case "dtype" with
-      | "float64" ->
+      let kind = kind_of_param case in
+      match (Tutils.Golden.string_param case "dtype", kind) with
+      | "float64", `Power power ->
           let x = Nx.create Nx.float64 [|Array.length signal|] signal in
           Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
             ~shape:case.shape ~msg:case.name ~expected:case.values
             (Stft.power_spectrum ~power config x)
-      | "float32" ->
+      | "float64", ((`Real | `Imag) as part) ->
+          (* the sign-convention pin: magnitudes cannot distinguish a conjugated
+             spectrum, the complex parts can *)
+          let x = Nx.create Nx.float64 [|Array.length signal|] signal in
+          Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
+            ~shape:case.shape ~msg:case.name ~expected:case.values
+            (complex_part part (Stft.transform Nx.complex128 config x))
+      | "float32", `Power power ->
           let x = Nx.create Nx.float32 [|Array.length signal|] signal in
           Tutils.check_close ~rtol:Tutils.float32_rtol ~atol:Tutils.float32_atol
             ~shape:case.shape ~msg:case.name ~expected:case.values
@@ -73,7 +95,9 @@ let spectrum_case (case : Tutils.Golden.case) =
               ~expected:case.values
               (Nx.cast Nx.float32
                  (Nx.abs (Stft.transform Nx.complex64 config x)) )
-      | other ->
+      | "float32", (`Real | `Imag) ->
+          failf "golden case %s: complex parts are float64-only" case.name
+      | other, _ ->
           failf "golden case %s: unknown dtype %s" case.name other )
 
 let coordinate_case (case : Tutils.Golden.case) =
