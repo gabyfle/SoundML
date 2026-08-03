@@ -81,10 +81,13 @@ different compiler and fails.
 ### The Raven pin
 
 SoundML tracks a single, pinned revision of [Raven](https://github.com/raven-ml/raven)
-rather than a released version of `nx`. The revision is recorded in `dune-project`:
+rather than a released version of `nx`. The pin currently points at an integration
+branch of the [gabyfle/raven](https://github.com/gabyfle/raven) fork that carries the
+FFT and framing work SoundML relies on ahead of upstream review. The revision is
+recorded in `dune-project`:
 
 ```
-git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b
+git+https://github.com/gabyfle/raven.git#69aa608f93ae6583a4d9f8d69c233c9f66bc0920
 ```
 
 Raven is pre-release and its tensor API still moves between revisions, so moving the
