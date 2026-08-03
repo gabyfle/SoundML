@@ -20,7 +20,13 @@ let block_sum w =
   let sum = Array.fold_left ( +. ) 0. in
   Pipeline.kernel
     ~rate:{Pipeline.Rate.num= 1; den= w}
-    ~flush:(fun st -> if Array.length !st = 0 then [] else [[|sum !st|]])
+    ~flush:(fun st ->
+      if Array.length !st = 0 then []
+      else begin
+        let tail = !st in
+        st := [||] ;
+        [[|sum tail|]]
+      end )
     ~reset:(fun st -> st := [||])
     ~concat:Array.concat
     ~prepare:(fun fmt ->
@@ -64,7 +70,13 @@ let decim4 () =
 let lookahead d =
   if d < 0 then invalid_arg "lookahead: lookahead must be non-negative" ;
   Pipeline.kernel ~latency:d
-    ~flush:(fun st -> if Array.length !st = 0 then [] else [!st])
+    ~flush:(fun st ->
+      if Array.length !st = 0 then []
+      else begin
+        let tail = !st in
+        st := [||] ;
+        [tail]
+      end )
     ~reset:(fun st -> st := [||])
     ~concat:Array.concat
     ~prepare:(fun _ -> ref [||])
@@ -98,25 +110,40 @@ let nx_concat = function
 
 let nx_gain g = Pipeline.stateless (fun t -> Nx.mul_s t g)
 
-(* The [lookahead] toy over real tensors. *)
+(* The [lookahead] toy over real tensors. Models the two runtime contracts a
+   tensor kernel must honour: [prepare] validates the element dtype against the
+   incoming format, and [step] borrows its chunk — the retained tail is copied
+   out of the caller's buffer, and the emitted head is copied whenever it would
+   otherwise alias it. *)
 let nx_lookahead d =
   if d < 0 then invalid_arg "nx_lookahead: lookahead must be non-negative" ;
   let empty () = Nx.zeros Nx.float32 [|0|] in
   Pipeline.kernel ~latency:d
-    ~flush:(fun st -> if Nx.numel !st = 0 then [] else [!st])
+    ~flush:(fun st ->
+      if Nx.numel !st = 0 then []
+      else begin
+        let tail = !st in
+        st := empty () ;
+        [tail]
+      end )
     ~reset:(fun st -> st := empty ())
     ~concat:nx_concat
-    ~prepare:(fun _ -> ref (empty ()))
+    ~prepare:(fun fmt ->
+      let open Pipeline.Format in
+      if not (equal_dtype (dtype fmt) (Dtype Nx.float32)) then
+        invalid_arg "nx_lookahead: float32 input required" ;
+      ref (empty ()) )
     ~step:(fun st chunk ->
       let data =
         if Nx.numel !st = 0 then chunk else Nx.concatenate ~axis:0 [!st; chunk]
       in
       let n = Nx.numel data in
       if n <= d then (
-        st := data ;
+        st := Nx.copy data ;
         None )
       else begin
-        st := Nx.shrink [|(n - d, n)|] data ;
-        Some (Nx.shrink [|(0, n - d)|] data)
+        st := Nx.copy (Nx.shrink [|(n - d, n)|] data) ;
+        let head = Nx.shrink [|(0, n - d)|] data in
+        Some (if data == chunk then Nx.copy head else head)
       end )
     ()

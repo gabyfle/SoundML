@@ -195,7 +195,32 @@ let nx_tests =
             check_nx_law ~name:"nx"
               (Pipeline.( >> ) (Toys.nx_gain 2.0) (Toys.nx_lookahead 4))
               x )
-          inputs ) ]
+          inputs )
+  ; Alcotest.test_case "push borrows: no aliasing of the caller's buffer" `Quick
+      (fun () ->
+        (* the caller reuses one block buffer across pushes — the audio callback
+           pattern; previously returned chunks must not change *)
+        let s =
+          Pipeline.Stream.prepare (Toys.nx_lookahead 4) ~source:(source ())
+            ~max_chunk:6
+        in
+        let buf = Nx.create Nx.float32 [|6|] [|1.; 2.; 3.; 4.; 5.; 6.|] in
+        let out1 =
+          match Pipeline.Stream.push s buf with
+          | Some out ->
+              out
+          | None ->
+              Alcotest.fail "first push must emit"
+        in
+        let snap = Nx.to_array out1 in
+        Nx.blit (Nx.create Nx.float32 [|6|] [|7.; 8.; 9.; 10.; 11.; 12.|]) buf ;
+        let rest = Option.to_list (Pipeline.Stream.push s buf) in
+        let tail = Pipeline.Stream.flush s in
+        Alcotest.check farray "returned chunk survives buffer reuse" snap
+          (Nx.to_array out1) ;
+        Alcotest.check farray "stream equals the logical signal"
+          (Array.init 12 (fun i -> float_of_int (i + 1)))
+          (Nx.to_array (Toys.nx_concat ((out1 :: rest) @ tail))) ) ]
 
 (* {1 Reset: a reset plan replays the law from scratch} *)
 
@@ -217,7 +242,24 @@ let reset_tests =
           List.filter_map (Pipeline.Stream.push s) (split x [16; 16; 16; 13])
         in
         let outs = pushed @ Pipeline.Stream.flush s in
-        Alcotest.check farray "post-reset law" expected (Array.concat outs) ) ]
+        Alcotest.check farray "post-reset law" expected (Array.concat outs) )
+  ; Alcotest.test_case "flush drains: a second flush emits nothing" `Quick
+      (fun () ->
+        let q = Pipeline.( >> ) (Toys.lookahead 3) (Toys.block_sum 2) in
+        let s = Pipeline.Stream.prepare q ~source:(source ()) ~max_chunk:8 in
+        ignore (Pipeline.Stream.push s [|1.; 2.; 3.; 4.; 5.|]) ;
+        ignore (Pipeline.Stream.flush s) ;
+        Alcotest.(check (list farray))
+          "second flush" [] (Pipeline.Stream.flush s) ;
+        let nx =
+          Pipeline.Stream.prepare (Toys.nx_lookahead 3) ~source:(source ())
+            ~max_chunk:8
+        in
+        ignore (Pipeline.Stream.push nx (Nx.create Nx.float32 [|2|] [|1.; 2.|])) ;
+        ignore (Pipeline.Stream.flush nx) ;
+        Alcotest.(check int)
+          "second nx flush" 0
+          (List.length (Pipeline.Stream.flush nx)) ) ]
 
 (* {1 Static queries: latency and rate fold exactly, as rationals} *)
 
@@ -297,7 +339,41 @@ let format_tests =
               (Pipeline.Format.items_per_second fmt) ;
             Alcotest.(check (option int))
               "offline bound stays unbounded" None
-              (Pipeline.Format.max_items fmt) ) ]
+              (Pipeline.Format.max_items fmt) )
+  ; Alcotest.test_case "latency widens the threaded bound for drain" `Quick
+      (fun () ->
+        (* a latency-50 stage may flush its whole 50-item tail as one chunk: the
+           stage downstream must be sized for it at prepare *)
+        let seen = ref None in
+        let p = Pipeline.( >> ) (Toys.lookahead 50) (probe seen) in
+        ignore (Pipeline.Stream.prepare p ~source:(source ()) ~max_chunk:4) ;
+        match !seen with
+        | None ->
+            Alcotest.fail "probe prepare did not run"
+        | Some fmt ->
+            Alcotest.(check (option int))
+              "bound covers the drained tail" (Some 50)
+              (Pipeline.Format.max_items fmt) )
+  ; Alcotest.test_case "Format.equal and equal_dtype observe every field" `Quick
+      (fun () ->
+        let f = source () in
+        let open Pipeline.Format in
+        Alcotest.(check bool) "reflexive" true (equal f f) ;
+        Alcotest.(check bool)
+          "dtype differs" false
+          (equal f (with_dtype Nx.float64 f)) ;
+        Alcotest.(check bool)
+          "channels differ" false
+          (equal f (with_channels 2 f)) ;
+        Alcotest.(check bool)
+          "bound differs" false
+          (equal f (with_max_items (Some 8) f)) ;
+        Alcotest.(check bool)
+          "equal_dtype float32" true
+          (equal_dtype (dtype f) (Dtype Nx.float32)) ;
+        Alcotest.(check bool)
+          "equal_dtype float64" false
+          (equal_dtype (dtype f) (Dtype Nx.float64)) ) ]
 
 (* {1 Prepare-time validation: Invalid_argument, never mid-stream} *)
 
@@ -307,6 +383,20 @@ let expect_invalid_arg name f =
       ()
   | _ ->
       Alcotest.fail (name ^ ": expected Invalid_argument")
+
+(* a kernel whose [out_format] forgets to scale items/s: must be rejected
+   wherever it sits — standalone, composed, or inside a fanout branch. The
+   [stepped] flag proves no data flowed before the rejection. *)
+let bad_rate_kernel stepped =
+  Pipeline.kernel
+    ~rate:{Pipeline.Rate.num= 1; den= 2}
+    ~out_format:(fun fmt -> fmt)
+    ~concat:Array.concat
+    ~prepare:(fun _ -> ())
+    ~step:(fun () (c : float array) ->
+      stepped := true ;
+      Some c )
+    ()
 
 let validation_tests =
   [ Alcotest.test_case "stage validates its format at prepare" `Quick (fun () ->
@@ -318,17 +408,40 @@ let validation_tests =
             Pipeline.run ~source:stereo (Toys.block_sum 4) [|1.; 2.|] ) )
   ; Alcotest.test_case "out_format must agree with the declared rate" `Quick
       (fun () ->
-        let bad =
+        let bad = bad_rate_kernel (ref false) in
+        expect_invalid_arg "inconsistent out_format" (fun () ->
+            Pipeline.Stream.prepare bad ~source:(source ()) ~max_chunk:8 ) )
+  ; Alcotest.test_case "fanout validates both branches at prepare" `Quick
+      (fun () ->
+        let stepped = ref false in
+        expect_invalid_arg "bad left branch" (fun () ->
+            Pipeline.Stream.prepare
+              (Pipeline.fanout (bad_rate_kernel stepped) (Toys.gain 1.))
+              ~source:(source ()) ~max_chunk:8 ) ;
+        (* a bad terminal stage of a multi-stage branch, through run: the
+           rejection must come before any data flows *)
+        expect_invalid_arg "bad nested right branch" (fun () ->
+            Pipeline.run ~source:(source ())
+              (Pipeline.fanout (Toys.gain 1.)
+                 (Pipeline.( >> ) (Toys.gain 1.) (bad_rate_kernel stepped)) )
+              [|1.; 2.; 3.|] ) ;
+        Alcotest.(check bool)
+          "no data flowed through the bad stage" false !stepped )
+  ; Alcotest.test_case "out_format built from scratch is rejected" `Quick
+      (fun () ->
+        let fabricator =
           Pipeline.kernel
-            ~rate:{Pipeline.Rate.num= 1; den= 2}
-            ~out_format:(fun fmt -> fmt) (* forgets to scale items/s *)
+            ~out_format:(fun _ ->
+              Pipeline.Format.audio Nx.float32 ~sample_rate:1000 ~channels:1 )
             ~concat:Array.concat
             ~prepare:(fun _ -> ())
             ~step:(fun () (c : float array) -> Some c)
             ()
         in
-        expect_invalid_arg "inconsistent out_format" (fun () ->
-            Pipeline.Stream.prepare bad ~source:(source ()) ~max_chunk:8 ) )
+        expect_invalid_arg "from-scratch out_format at prepare" (fun () ->
+            Pipeline.Stream.prepare fabricator ~source:(source ()) ~max_chunk:8 ) ;
+        expect_invalid_arg "from-scratch out_format offline" (fun () ->
+            Pipeline.run ~source:(source ()) fabricator [|1.|] ) )
   ; Alcotest.test_case "constructor preconditions" `Quick (fun () ->
         expect_invalid_arg "negative latency" (fun () ->
             Pipeline.kernel ~latency:(-1) ~concat:Array.concat
