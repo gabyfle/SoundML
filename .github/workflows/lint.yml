@@ -7,6 +7,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+env:
+  DUNE_VERSION: "3.24.1"
+
 jobs:
   lint-fmt:
     runs-on: ubuntu-latest
@@ -15,10 +18,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up OCaml for linting
-        uses: ocaml/setup-ocaml@v3
+      - name: Install dune
+        run: |
+            curl -fsSL https://get.dune.build/install | sh -s -- --release "$DUNE_VERSION"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Cache the dune package management artifacts
+        uses: actions/cache@v4
         with:
-          ocaml-compiler: "5.5"
-          dune-cache: true
-      - name: Run OCaml Lint & Format Check
-        uses: ocaml/setup-ocaml/lint-fmt@v2
+          path: ~/.cache/dune
+          key: dune-lint-ubuntu-latest-${{ env.DUNE_VERSION }}-${{ hashFiles('dune-project', '.ocamlformat') }}
+          restore-keys: |
+            dune-lint-ubuntu-latest-${{ env.DUNE_VERSION }}-
+            dune-ubuntu-latest-${{ env.DUNE_VERSION }}-
+
+      - name: Lock the dependencies
+        run: dune pkg lock
+        shell: bash
+
+      # Builds the exact ocamlformat recorded in .ocamlformat
+      - name: Install ocamlformat
+        run: dune tools install ocamlformat
+        shell: bash
+
+      - name: Check the formatting
+        run: dune build @fmt
+        shell: bash

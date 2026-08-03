@@ -1,5 +1,6 @@
 .DS_Store
 _build
+_build-*
 dune.lock
 dev-tools.locks
 dataset/

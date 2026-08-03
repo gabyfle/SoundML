@@ -36,6 +36,50 @@ SoundML is distributed as three opam packages:
 
 ## Building
 
+SoundML is built with dune package management. Dune solves the dependencies, fetches
+them, builds the OCaml compiler it needs and then builds the project. There is no
+opam switch to create and nothing to install by hand.
+
+You need dune 3.24 or later, which installs on its own:
+
+```console
+$ curl -fsSL https://get.dune.build/install | sh
+```
+
+plus the system libraries the satellite packages bind to. On Debian and Ubuntu:
+
+```console
+$ sudo apt-get install pkg-config libsndfile-dev libsamplerate0-dev librubberband-dev libsoxr-dev
+```
+
+Then, from the root of the repository:
+
+```console
+$ dune pkg lock     # solve the dependencies and write dune.lock
+$ dune build
+$ dune runtest
+```
+
+`dune pkg lock` selects OCaml 5.5.0 and dune builds that compiler itself. The first
+build therefore takes a while; later ones are served from `~/.cache/dune`. The lock
+directory is not committed, so `dune pkg lock` has to be run once after cloning and
+again whenever `dune-project` changes.
+
+Developer tooling comes from dune as well, as *dev tools*: dune builds them from
+source, at the version the repository asks for, outside the project's own dependency
+solution. They are installed once:
+
+```console
+$ dune tools install ocamlformat   # the version recorded in .ocamlformat
+$ dune tools install odoc
+```
+
+after which `dune fmt` and `dune build @doc` use them. Without the install step dune
+falls back to whatever happens to be on `PATH`, which is usually built against a
+different compiler and fails.
+
+### The Raven pin
+
 SoundML tracks a single, pinned revision of [Raven](https://github.com/raven-ml/raven)
 rather than a released version of `nx`. The revision is recorded in `dune-project`:
 

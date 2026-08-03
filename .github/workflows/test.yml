@@ -10,14 +10,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+env:
+  DUNE_VERSION: "3.24.1"
+
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest] # , macos-latest, windows-latest]
-        ocaml-compiler:
-          - "5.5.0"
 
     runs-on: ${{ matrix.os }}
 
@@ -25,37 +26,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up OCaml ${{ matrix.ocaml-compiler }} on ${{ matrix.os }}
-        uses: ocaml/setup-ocaml@v3
-        with:
-          ocaml-compiler: ${{ matrix.ocaml-compiler }}
-          dune-cache: true
-
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12.3' 
+          python-version: '3.12.3'
       - run: pip install --upgrade pip
       - run: pip install numpy librosa==0.11.0
 
       # temporary, waiting for the conf-soxr package to be published to opam repo
-      - name: Install libsoxr-dev
+      - name: Install libsndfile, libsamplerate, librubberband and libsoxr
         run: |
             sudo apt-get update
-            sudo apt-get install -y libsoxr-dev
+            sudo apt-get install -y pkg-config libsndfile-dev libsamplerate0-dev librubberband-dev libsoxr-dev
         shell: bash
-
-      - name: Install libsndfile, libsamplerate and librubberband
-        run: |
-            sudo apt-get install -y libsndfile-dev libsamplerate0-dev librubberband-dev
 
       - name: Install FFmpeg CLI (to generate test data)
         run: sudo apt-get install -y ffmpeg
         shell: bash
 
+      - name: Install dune
+        run: |
+            curl -fsSL https://get.dune.build/install | sh -s -- --release "$DUNE_VERSION"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Cache the dune package management artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ matrix.os }}-${{ env.DUNE_VERSION }}-${{ hashFiles('dune-project') }}
+          restore-keys: |
+            dune-${{ matrix.os }}-${{ env.DUNE_VERSION }}-
+
       - name: Lock dune packages
-        run: opam exec -- dune pkg lock
+        run: dune pkg lock
         shell: bash
 
       - name: Run tests
-        run: opam exec -- dune runtest
+        run: dune runtest
         shell: bash

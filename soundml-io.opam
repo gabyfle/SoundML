@@ -12,7 +12,7 @@ doc: "https://soundml.dev"
 bug-reports: "https://github.com/gabyfle/SoundML/issues"
 depends: [
   "ocaml" {>= "5.5.0"}
-  "dune" {>= "3.17"}
+  "dune" {>= "3.24"}
   "soundml" {= version}
   "nx" {= "dev"}
   "conf-c++" {build}
@@ -38,6 +38,7 @@ build: [
   ]
 ]
 dev-repo: "git+https://github.com/gabyfle/SoundML.git"
+x-maintenance-intent: ["(latest)"]
 pin-depends: [
   [
     "nx.dev"
