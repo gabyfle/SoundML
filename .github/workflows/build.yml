@@ -54,3 +54,10 @@ jobs:
       - name: Build SoundML
         run: dune build
         shell: bash
+
+      # Compile-only gate for the thumper suite: the bench alias itself runs
+      # the benches against the committed machine-specific baseline, so CI
+      # only checks that the benchmarks keep building (see bench/README.md).
+      - name: Build the benchmarks
+        run: dune build bench/bench_soundml.exe
+        shell: bash

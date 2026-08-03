@@ -21,7 +21,7 @@ depends: [
   "conf-samplerate" {build}
   "dune-configurator" {build}
   "odoc" {with-doc}
-  "alcotest" {with-test}
+  "windtrap" {with-test}
 ]
 build: [
   ["dune" "subst"] {dev}

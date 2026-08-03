@@ -8,6 +8,7 @@
    shorter than the pipeline's total latency. The PRNG is seeded so CI is
    deterministic. *)
 
+open Windtrap
 open Soundml
 
 let seed = 0x5eed
@@ -15,9 +16,9 @@ let seed = 0x5eed
 let source ?(sample_rate = 1000) ?(channels = 1) () =
   Pipeline.Format.audio Nx.float32 ~sample_rate ~channels
 
-let rate_t = Alcotest.testable Pipeline.Rate.pp Pipeline.Rate.equal
+let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
 
-let farray = Alcotest.(array (float 0.))
+let farray = array (float 0.)
 
 (* {1 Partitionings} *)
 
@@ -76,9 +77,9 @@ let check_law ~name p x =
       let chunks = split x sizes in
       let max_chunk = List.fold_left max 1 sizes in
       let got = Array.concat (stream_outputs p ~source:src ~max_chunk chunks) in
-      Alcotest.check farray
-        (Printf.sprintf "%s/%s/n=%d" name pname (Array.length x))
-        expected got )
+      equal
+        ~msg:(Printf.sprintf "%s/%s/n=%d" name pname (Array.length x))
+        farray expected got )
     (partitions rng (Array.length x))
 
 let inputs =
@@ -88,8 +89,7 @@ let inputs =
   ; [||] (* empty input, empty partition *) ]
 
 let law_case name mk =
-  Alcotest.test_case name `Quick (fun () ->
-      List.iter (fun x -> check_law ~name (mk ()) x) inputs )
+  test name (fun () -> List.iter (fun x -> check_law ~name (mk ()) x) inputs)
 
 let law_tests =
   [ law_case "gain" (fun () -> Toys.gain 2.0)
@@ -123,10 +123,10 @@ let check_fanout ~name f g x =
   let expected_g = Pipeline.run ~source:src g x in
   ( match Pipeline.run ~source:src p x with
   | Some bf, Some bg ->
-      Alcotest.check farray (name ^ "/run/left") expected_f bf ;
-      Alcotest.check farray (name ^ "/run/right") expected_g bg
+      equal ~msg:(name ^ "/run/left") farray expected_f bf ;
+      equal ~msg:(name ^ "/run/right") farray expected_g bg
   | _ ->
-      Alcotest.fail (name ^ "/run: fanout run must pair both branches") ) ;
+      fail (name ^ "/run: fanout run must pair both branches") ) ;
   List.iter
     (fun (pname, sizes) ->
       let chunks = split x sizes in
@@ -134,21 +134,19 @@ let check_fanout ~name f g x =
       let outs = stream_outputs p ~source:src ~max_chunk chunks in
       let left = Array.concat (List.filter_map fst outs) in
       let right = Array.concat (List.filter_map snd outs) in
-      Alcotest.check farray
-        (Printf.sprintf "%s/%s/left" name pname)
-        expected_f left ;
-      Alcotest.check farray
-        (Printf.sprintf "%s/%s/right" name pname)
-        expected_g right )
+      equal ~msg:(Printf.sprintf "%s/%s/left" name pname) farray expected_f left ;
+      equal
+        ~msg:(Printf.sprintf "%s/%s/right" name pname)
+        farray expected_g right )
     (partitions rng (Array.length x))
 
 let fanout_tests =
-  [ Alcotest.test_case "fanout gain/block_sum" `Quick (fun () ->
+  [ test "fanout gain/block_sum" (fun () ->
         List.iter
           (fun x ->
             check_fanout ~name:"fanout" (Toys.gain 2.0) (Toys.block_sum 4) x )
           inputs )
-  ; Alcotest.test_case "fanout differing rate and latency" `Quick (fun () ->
+  ; test "fanout differing rate and latency" (fun () ->
         List.iter
           (fun x ->
             check_fanout ~name:"fanout-rl"
@@ -183,21 +181,20 @@ let check_nx_law ~name p x =
       let max_chunk = List.fold_left max 1 sizes in
       let outs = stream_outputs p ~source:src ~max_chunk chunks in
       let got = Nx.to_array (Toys.nx_concat outs) in
-      Alcotest.check farray
-        (Printf.sprintf "%s/%s/n=%d" name pname (Array.length x))
-        expected got )
+      equal
+        ~msg:(Printf.sprintf "%s/%s/n=%d" name pname (Array.length x))
+        farray expected got )
     (partitions rng (Array.length x))
 
 let nx_tests =
-  [ Alcotest.test_case "nx gain>>lookahead" `Quick (fun () ->
+  [ test "nx gain>>lookahead" (fun () ->
         List.iter
           (fun x ->
             check_nx_law ~name:"nx"
               (Pipeline.( >> ) (Toys.nx_gain 2.0) (Toys.nx_lookahead 4))
               x )
           inputs )
-  ; Alcotest.test_case "push borrows: no aliasing of the caller's buffer" `Quick
-      (fun () ->
+  ; test "push borrows: no aliasing of the caller's buffer" (fun () ->
         (* the caller reuses one block buffer across pushes — the audio callback
            pattern; previously returned chunks must not change *)
         let s =
@@ -210,23 +207,22 @@ let nx_tests =
           | Some out ->
               out
           | None ->
-              Alcotest.fail "first push must emit"
+              fail "first push must emit"
         in
         let snap = Nx.to_array out1 in
         Nx.blit (Nx.create Nx.float32 [|6|] [|7.; 8.; 9.; 10.; 11.; 12.|]) buf ;
         let rest = Option.to_list (Pipeline.Stream.push s buf) in
         let tail = Pipeline.Stream.flush s in
-        Alcotest.check farray "returned chunk survives buffer reuse" snap
+        equal ~msg:"returned chunk survives buffer reuse" farray snap
           (Nx.to_array out1) ;
-        Alcotest.check farray "stream equals the logical signal"
+        equal ~msg:"stream equals the logical signal" farray
           (Array.init 12 (fun i -> float_of_int (i + 1)))
           (Nx.to_array (Toys.nx_concat ((out1 :: rest) @ tail))) ) ]
 
 (* {1 Reset: a reset plan replays the law from scratch} *)
 
 let reset_tests =
-  [ Alcotest.test_case "reset restores the freshly prepared state" `Quick
-      (fun () ->
+  [ test "reset restores the freshly prepared state" (fun () ->
         let p =
           Pipeline.(Toys.lookahead 3 >> Toys.decim4 () >> Toys.block_sum 2)
         in
@@ -242,23 +238,20 @@ let reset_tests =
           List.filter_map (Pipeline.Stream.push s) (split x [16; 16; 16; 13])
         in
         let outs = pushed @ Pipeline.Stream.flush s in
-        Alcotest.check farray "post-reset law" expected (Array.concat outs) )
-  ; Alcotest.test_case "flush drains: a second flush emits nothing" `Quick
-      (fun () ->
+        equal ~msg:"post-reset law" farray expected (Array.concat outs) )
+  ; test "flush drains: a second flush emits nothing" (fun () ->
         let q = Pipeline.( >> ) (Toys.lookahead 3) (Toys.block_sum 2) in
         let s = Pipeline.Stream.prepare q ~source:(source ()) ~max_chunk:8 in
         ignore (Pipeline.Stream.push s [|1.; 2.; 3.; 4.; 5.|]) ;
         ignore (Pipeline.Stream.flush s) ;
-        Alcotest.(check (list farray))
-          "second flush" [] (Pipeline.Stream.flush s) ;
+        equal ~msg:"second flush" (list farray) [] (Pipeline.Stream.flush s) ;
         let nx =
           Pipeline.Stream.prepare (Toys.nx_lookahead 3) ~source:(source ())
             ~max_chunk:8
         in
         ignore (Pipeline.Stream.push nx (Nx.create Nx.float32 [|2|] [|1.; 2.|])) ;
         ignore (Pipeline.Stream.flush nx) ;
-        Alcotest.(check int)
-          "second nx flush" 0
+        equal ~msg:"second nx flush" int 0
           (List.length (Pipeline.Stream.flush nx)) ) ]
 
 (* {1 Static queries: latency and rate fold exactly, as rationals} *)
@@ -266,36 +259,35 @@ let reset_tests =
 let r num den = {Pipeline.Rate.num; den}
 
 let static_tests =
-  [ Alcotest.test_case "latency folds through rate changes" `Quick (fun () ->
-        Alcotest.check rate_t "lookahead 3" (r 3 1)
+  [ test "latency folds through rate changes" (fun () ->
+        equal ~msg:"lookahead 3" rate_t (r 3 1)
           (Pipeline.latency (Toys.lookahead 3)) ;
-        Alcotest.check rate_t "gain" (r 0 1) (Pipeline.latency (Toys.gain 2.)) ;
-        Alcotest.check rate_t "lookahead 3 >> decim4" (r 3 1)
+        equal ~msg:"gain" rate_t (r 0 1) (Pipeline.latency (Toys.gain 2.)) ;
+        equal ~msg:"lookahead 3 >> decim4" rate_t (r 3 1)
           (Pipeline.latency
              (Pipeline.( >> ) (Toys.lookahead 3) (Toys.decim4 ())) ) ;
-        Alcotest.check rate_t "decim4 >> lookahead 3" (r 12 1)
+        equal ~msg:"decim4 >> lookahead 3" rate_t (r 12 1)
           (Pipeline.latency
              (Pipeline.( >> ) (Toys.decim4 ()) (Toys.lookahead 3)) ) ;
-        Alcotest.check rate_t "block_sum 3 >> lookahead 2" (r 6 1)
+        equal ~msg:"block_sum 3 >> lookahead 2" rate_t (r 6 1)
           (Pipeline.latency
              (Pipeline.( >> ) (Toys.block_sum 3) (Toys.lookahead 2)) ) ;
-        Alcotest.check rate_t "fanout latency is the max" (r 12 1)
+        equal ~msg:"fanout latency is the max" rate_t (r 12 1)
           (Pipeline.latency
              (Pipeline.fanout
                 (Pipeline.( >> ) (Toys.decim4 ()) (Toys.lookahead 3))
                 (Toys.lookahead 2) ) ) )
-  ; Alcotest.test_case "rate folds and normalises" `Quick (fun () ->
-        Alcotest.check rate_t "decim4 >> block_sum 2" (r 1 8)
+  ; test "rate folds and normalises" (fun () ->
+        equal ~msg:"decim4 >> block_sum 2" rate_t (r 1 8)
           (Pipeline.rate (Pipeline.( >> ) (Toys.decim4 ()) (Toys.block_sum 2))) ;
-        Alcotest.check rate_t "stateless is 1:1" (r 1 1)
+        equal ~msg:"stateless is 1:1" rate_t (r 1 1)
           (Pipeline.rate (Toys.gain 2.)) ;
-        Alcotest.check rate_t "Rate.( * ) normalises" (r 1 2)
+        equal ~msg:"Rate.( * ) normalises" rate_t (r 1 2)
           Pipeline.Rate.(r 2 4 * identity) )
-  ; Alcotest.test_case "stream latency equals pipeline latency" `Quick
-      (fun () ->
+  ; test "stream latency equals pipeline latency" (fun () ->
         let p = Pipeline.( >> ) (Toys.decim4 ()) (Toys.lookahead 3) in
         let s = Pipeline.Stream.prepare p ~source:(source ()) ~max_chunk:32 in
-        Alcotest.check rate_t "latency" (Pipeline.latency p)
+        equal ~msg:"latency" rate_t (Pipeline.latency p)
           (Pipeline.Stream.latency s) ) ]
 
 (* {1 Format threading: each stage sees its own input format} *)
@@ -307,41 +299,37 @@ let probe seen =
     ()
 
 let format_tests =
-  [ Alcotest.test_case "formats thread left to right at prepare" `Quick
-      (fun () ->
+  [ test "formats thread left to right at prepare" (fun () ->
         let seen = ref None in
         let p = Pipeline.(Toys.decim4 () >> Toys.lookahead 3 >> probe seen) in
         let s = Pipeline.Stream.prepare p ~source:(source ()) ~max_chunk:100 in
         ignore s ;
         match !seen with
         | None ->
-            Alcotest.fail "probe prepare did not run"
+            fail "probe prepare did not run"
         | Some fmt ->
-            Alcotest.check rate_t "items/s after 1:4 decimation" (r 250 1)
+            equal ~msg:"items/s after 1:4 decimation" rate_t (r 250 1)
               (Pipeline.Format.items_per_second fmt) ;
-            Alcotest.(check (option int))
-              "bound shrunk by the decimator" (Some 25)
+            equal ~msg:"bound shrunk by the decimator" (option int) (Some 25)
               (Pipeline.Format.max_items fmt) ;
-            Alcotest.(check int) "channels" 1 (Pipeline.Format.channels fmt) ;
-            Alcotest.check rate_t
-              "upstream latency in source samples (3 items at 250/s = 12)"
-              (r 12 1)
+            equal ~msg:"channels" int 1 (Pipeline.Format.channels fmt) ;
+            equal
+              ~msg:"upstream latency in source samples (3 items at 250/s = 12)"
+              rate_t (r 12 1)
               (Pipeline.Format.upstream_latency fmt) )
-  ; Alcotest.test_case "run threads formats too" `Quick (fun () ->
+  ; test "run threads formats too" (fun () ->
         let seen = ref None in
         let p = Pipeline.( >> ) (Toys.block_sum 5) (probe seen) in
         ignore (Pipeline.run ~source:(source ()) p (Array.make 10 1.)) ;
         match !seen with
         | None ->
-            Alcotest.fail "probe prepare did not run"
+            fail "probe prepare did not run"
         | Some fmt ->
-            Alcotest.check rate_t "items/s after 1:5 summing" (r 200 1)
+            equal ~msg:"items/s after 1:5 summing" rate_t (r 200 1)
               (Pipeline.Format.items_per_second fmt) ;
-            Alcotest.(check (option int))
-              "offline bound stays unbounded" None
+            equal ~msg:"offline bound stays unbounded" (option int) None
               (Pipeline.Format.max_items fmt) )
-  ; Alcotest.test_case "latency widens the threaded bound for drain" `Quick
-      (fun () ->
+  ; test "latency widens the threaded bound for drain" (fun () ->
         (* a latency-50 stage may flush its whole 50-item tail as one chunk: the
            stage downstream must be sized for it at prepare *)
         let seen = ref None in
@@ -349,40 +337,29 @@ let format_tests =
         ignore (Pipeline.Stream.prepare p ~source:(source ()) ~max_chunk:4) ;
         match !seen with
         | None ->
-            Alcotest.fail "probe prepare did not run"
+            fail "probe prepare did not run"
         | Some fmt ->
-            Alcotest.(check (option int))
-              "bound covers the drained tail" (Some 50)
+            equal ~msg:"bound covers the drained tail" (option int) (Some 50)
               (Pipeline.Format.max_items fmt) )
-  ; Alcotest.test_case "Format.equal and equal_dtype observe every field" `Quick
-      (fun () ->
+  ; test "Format.equal and equal_dtype observe every field" (fun () ->
         let f = source () in
         let open Pipeline.Format in
-        Alcotest.(check bool) "reflexive" true (equal f f) ;
-        Alcotest.(check bool)
-          "dtype differs" false
-          (equal f (with_dtype Nx.float64 f)) ;
-        Alcotest.(check bool)
-          "channels differ" false
-          (equal f (with_channels 2 f)) ;
-        Alcotest.(check bool)
-          "bound differs" false
-          (equal f (with_max_items (Some 8) f)) ;
-        Alcotest.(check bool)
-          "equal_dtype float32" true
+        is_true ~msg:"reflexive" (equal f f) ;
+        is_false ~msg:"dtype differs" (equal f (with_dtype Nx.float64 f)) ;
+        is_false ~msg:"channels differ" (equal f (with_channels 2 f)) ;
+        is_false ~msg:"bound differs" (equal f (with_max_items (Some 8) f)) ;
+        is_true ~msg:"equal_dtype float32"
           (equal_dtype (dtype f) (Dtype Nx.float32)) ;
-        Alcotest.(check bool)
-          "equal_dtype float64" false
+        is_false ~msg:"equal_dtype float64"
           (equal_dtype (dtype f) (Dtype Nx.float64)) ) ]
 
 (* {1 Prepare-time validation: Invalid_argument, never mid-stream} *)
 
 let expect_invalid_arg name f =
-  match f () with
-  | exception Invalid_argument _ ->
-      ()
-  | _ ->
-      Alcotest.fail (name ^ ": expected Invalid_argument")
+  raises_match
+    ~msg:(name ^ ": expected Invalid_argument")
+    (function Invalid_argument _ -> true | _ -> false)
+    (fun () -> ignore (f ()))
 
 (* a kernel whose [out_format] forgets to scale items/s: must be rejected
    wherever it sits — standalone, composed, or inside a fanout branch. The
@@ -399,20 +376,18 @@ let bad_rate_kernel stepped =
     ()
 
 let validation_tests =
-  [ Alcotest.test_case "stage validates its format at prepare" `Quick (fun () ->
+  [ test "stage validates its format at prepare" (fun () ->
         let stereo = source ~channels:2 () in
         expect_invalid_arg "stereo block_sum" (fun () ->
             Pipeline.Stream.prepare (Toys.block_sum 4) ~source:stereo
               ~max_chunk:8 ) ;
         expect_invalid_arg "stereo block_sum offline" (fun () ->
             Pipeline.run ~source:stereo (Toys.block_sum 4) [|1.; 2.|] ) )
-  ; Alcotest.test_case "out_format must agree with the declared rate" `Quick
-      (fun () ->
+  ; test "out_format must agree with the declared rate" (fun () ->
         let bad = bad_rate_kernel (ref false) in
         expect_invalid_arg "inconsistent out_format" (fun () ->
             Pipeline.Stream.prepare bad ~source:(source ()) ~max_chunk:8 ) )
-  ; Alcotest.test_case "fanout validates both branches at prepare" `Quick
-      (fun () ->
+  ; test "fanout validates both branches at prepare" (fun () ->
         let stepped = ref false in
         expect_invalid_arg "bad left branch" (fun () ->
             Pipeline.Stream.prepare
@@ -425,10 +400,8 @@ let validation_tests =
               (Pipeline.fanout (Toys.gain 1.)
                  (Pipeline.( >> ) (Toys.gain 1.) (bad_rate_kernel stepped)) )
               [|1.; 2.; 3.|] ) ;
-        Alcotest.(check bool)
-          "no data flowed through the bad stage" false !stepped )
-  ; Alcotest.test_case "out_format built from scratch is rejected" `Quick
-      (fun () ->
+        is_false ~msg:"no data flowed through the bad stage" !stepped )
+  ; test "out_format built from scratch is rejected" (fun () ->
         let fabricator =
           Pipeline.kernel
             ~out_format:(fun _ ->
@@ -442,7 +415,7 @@ let validation_tests =
             Pipeline.Stream.prepare fabricator ~source:(source ()) ~max_chunk:8 ) ;
         expect_invalid_arg "from-scratch out_format offline" (fun () ->
             Pipeline.run ~source:(source ()) fabricator [|1.|] ) )
-  ; Alcotest.test_case "constructor preconditions" `Quick (fun () ->
+  ; test "constructor preconditions" (fun () ->
         expect_invalid_arg "negative latency" (fun () ->
             Pipeline.kernel ~latency:(-1) ~concat:Array.concat
               ~prepare:(fun _ -> ())
@@ -466,25 +439,24 @@ let validation_tests =
 (* {1 Offline pipelines run; concat [] covers the empty tail} *)
 
 let offline_tests =
-  [ Alcotest.test_case "offline_only composes and runs" `Quick (fun () ->
+  [ test "offline_only composes and runs" (fun () ->
         let p = Pipeline.( >> ) (Toys.gain 2.0) (Toys.normalize ()) in
         let y = Pipeline.run ~source:(source ()) p [|1.; -4.; 2.|] in
-        Alcotest.check farray "peak-normalised" [|0.25; -1.; 0.5|] y ;
+        equal ~msg:"peak-normalised" farray [|0.25; -1.; 0.5|] y ;
         let q = Pipeline.( >> ) (Toys.normalize ()) (Toys.block_sum 2) in
         let z = Pipeline.run ~source:(source ()) q [|2.; 2.; -4.|] in
-        Alcotest.check farray "offline mid-chain" [|1.; -1.|] z )
-  ; Alcotest.test_case "input shorter than latency yields the concat [] chunk"
-      `Quick (fun () ->
+        equal ~msg:"offline mid-chain" farray [|1.; -1.|] z )
+  ; test "input shorter than latency yields the concat [] chunk" (fun () ->
         let p = Pipeline.( >> ) (Toys.lookahead 8) (Toys.block_sum 100) in
         let y = Pipeline.run ~source:(source ()) p [||] in
-        Alcotest.check farray "empty in, empty out" [||] y ) ]
+        equal ~msg:"empty in, empty out" farray [||] y ) ]
 
-let tests =
-  [ ("law", law_tests)
-  ; ("law-fanout", fanout_tests)
-  ; ("law-nx", nx_tests)
-  ; ("reset", reset_tests)
-  ; ("static", static_tests)
-  ; ("format-threading", format_tests)
-  ; ("validation", validation_tests)
-  ; ("offline", offline_tests) ]
+let suite =
+  [ group "law" law_tests
+  ; group "law-fanout" fanout_tests
+  ; group "law-nx" nx_tests
+  ; group "reset" reset_tests
+  ; group "static" static_tests
+  ; group "format-threading" format_tests
+  ; group "validation" validation_tests
+  ; group "offline" offline_tests ]

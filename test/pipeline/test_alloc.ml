@@ -19,12 +19,13 @@
    Two disjoint measurement windows are asserted so a per-push cost growing with
    history fails the gate. *)
 
+open Windtrap
 open Soundml
 
 let chunk_len = 256
 
 let alloc_case name ~minor_budget p mk_chunk summarize =
-  Alcotest.test_case name `Quick (fun () ->
+  test name (fun () ->
       let source =
         Pipeline.Format.audio Nx.float32 ~sample_rate:44100 ~channels:1
       in
@@ -55,11 +56,10 @@ let alloc_case name ~minor_budget p mk_chunk summarize =
       in
       let check window (minor_per_push, major_per_push) =
         if minor_per_push > minor_budget then
-          Alcotest.failf
-            "%s/%s: %.1f minor words/push exceeds the budget of %.1f words" name
-            window minor_per_push minor_budget ;
+          failf "%s/%s: %.1f minor words/push exceeds the budget of %.1f words"
+            name window minor_per_push minor_budget ;
         if major_per_push > minor_budget then
-          Alcotest.failf
+          failf
             "%s/%s: %.1f promoted words/push exceeds the budget of %.1f words"
             name window major_per_push minor_budget
       in
@@ -93,9 +93,9 @@ let sum_array = Array.fold_left ( +. ) 0.
    metadata and a custom block on the OCaml heap — the bigarray payloads are
    malloc'd outside the heap. *)
 
-let tests =
-  [ ( "alloc"
-    , [ alloc_case "gain>>decim4" ~minor_budget:4500.
+let suite =
+  [ group "alloc"
+      [ alloc_case "gain>>decim4" ~minor_budget:4500.
           (Pipeline.( >> ) (Toys.gain 2.0) (Toys.decim4 ()))
           (fun i -> float_chunks.(i land 7))
           sum_array
@@ -106,4 +106,4 @@ let tests =
       ; alloc_case "nx gain>>lookahead" ~minor_budget:4000.
           (Pipeline.( >> ) (Toys.nx_gain 2.0) (Toys.nx_lookahead 4))
           (fun i -> nx_chunks.(i land 7))
-          (fun t -> Nx.item [0] t) ] ) ]
+          (fun t -> Nx.item [0] t) ] ]

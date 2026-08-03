@@ -7,6 +7,7 @@
    either order. If ['k] did not generalise, the first instantiation below would
    pin it and the second would not typecheck. *)
 
+open Windtrap
 open Soundml
 
 let source () = Pipeline.Format.audio Nx.float32 ~sample_rate:1000 ~channels:1
@@ -28,22 +29,19 @@ let q_stream () = Pipeline.Stream.prepare q ~source:(source ()) ~max_chunk:16
 let q_offline : (float array, float array, Pipeline.offline) Pipeline.t = q
 
 (* run and Stream.prepare on one value, both orders, executed *)
-let tests =
-  [ ( "capability"
-    , [ Alcotest.test_case "one causal value drives run and Stream" `Quick
-          (fun () ->
+let suite =
+  [ group "capability"
+      [ test "one causal value drives run and Stream" (fun () ->
             let x = Array.init 10 float_of_int in
             let y_run = Pipeline.run ~source:(source ()) p x in
             let s = p_stream () in
             let pushed = Option.to_list (Pipeline.Stream.push s x) in
             let y_stream = Array.concat (pushed @ Pipeline.Stream.flush s) in
-            Alcotest.(check (array (float 0.)))
-              "same value, two modes" y_run y_stream ;
+            equal ~msg:"same value, two modes" (array (float 0.)) y_run y_stream ;
             let s = q_stream () in
             let pushed = Option.to_list (Pipeline.Stream.push s x) in
             let z_stream = Array.concat (pushed @ Pipeline.Stream.flush s) in
             let z_run = Pipeline.run ~source:(source ()) q x in
-            Alcotest.(check (array (float 0.)))
-              "prepare before run" z_run z_stream ;
+            equal ~msg:"prepare before run" (array (float 0.)) z_run z_stream ;
             ignore p_offline ;
-            ignore q_offline ) ] ) ]
+            ignore q_offline ) ] ]

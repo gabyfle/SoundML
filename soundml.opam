@@ -15,7 +15,8 @@ depends: [
   "dune" {>= "3.24"}
   "nx" {= "dev"}
   "odoc" {with-doc}
-  "alcotest" {with-test}
+  "windtrap" {with-test}
+  "thumper" {with-test}
   "yojson" {with-test}
 ]
 build: [

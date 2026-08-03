@@ -1,3 +1,4 @@
+open Windtrap
+
 let () =
-  Alcotest.run "pipeline"
-    (Test_law.tests @ Accept_causal_stream.tests @ Test_alloc.tests)
+  run "Pipeline" (Test_law.suite @ Accept_causal_stream.suite @ Test_alloc.suite)
