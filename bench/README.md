@@ -7,6 +7,8 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
 
 ## Suites
 
+- `window` — `Window.make` for every window spec at n = 2048, one row per
+  spec, mirroring the librosa rows of `bench_soundml.py` one to one.
 - `pipeline` — the cost of the `Pipeline` abstraction: `Pipeline.run` of a
   three-stage stateless toy chain (gain, bias, rectify) over a
   one-million-sample float32 tensor, next to the hand-written sequence of the
