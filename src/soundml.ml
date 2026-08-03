@@ -4,6 +4,7 @@ module Stft = Stft
 module Convert = Convert
 module Db = Db
 module Mel = Mel
+module Resample = Resample
 
 let check_fft_sizes fn stft_config mel_config =
   let stft_size = Stft.Config.fft_size stft_config in
@@ -90,6 +91,9 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
           cepstrum
     in
     Nx.cast dtype cepstrum
+
+let resample ?quality ~sample_rate ~target x =
+  Resample.(apply (Config.create ?quality ~sample_rate ~target ()) x)
 
 (* Spectral-shape features: flat delegations to the private [Spectral]
    module. *)

@@ -52,6 +52,11 @@ module Db = Db
     {!Mel.stage} consuming {!Stft.power_stage} output. *)
 module Mel = Mel
 
+(** Sample-rate conversion: one exact-rational polyphase resampler behind the
+    offline {!Resample.apply}, the incremental {!Resample.Kernel} and the
+    {!Resample.stage} pipeline stage — bit-identical on every partitioning. *)
+module Resample = Resample
+
 (** {1:features Flat features} *)
 
 val mel_spectrogram :
@@ -101,6 +106,16 @@ val mfcc :
     Raises [Invalid_argument] if the configurations disagree on [fft_size],
     if [n_mfcc] does not lie in [\[1, n_mels\]], if [lifter] is not finite
     and non-negative, or if [x] has rank zero. *)
+
+val resample :
+     ?quality:Resample.quality
+  -> sample_rate:int
+  -> target:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [resample ~sample_rate ~target x] is
+    [Resample.(apply (Config.create ~sample_rate ~target ()) x)]. For repeated
+    conversions at one ratio, build the config once. *)
 
 (** {2:features_spectral Spectral-shape features}
 
