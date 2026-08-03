@@ -151,6 +151,33 @@ val apply : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     Raises [Invalid_argument] if [x] has rank zero, or if the dtype of [x] is
     neither float32 nor float64. *)
 
+val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [apply_gemm c x] is the same conversion as {!apply} — same config-owned
+    filter, same exact output length, same group-delay compensation, same
+    zeros-outside-the-extent convention — computed as one dense tensor
+    expression: the input is cut into strided patches ([Nx.extract_patches])
+    and multiplied against the filter bank laid out as a single matrix
+    ([Nx.matmul]). Because it is built from Nx operations end to end, it is
+    differentiable and device-eligible wherever those operations are.
+
+    It is numerically {e distinct} from {!apply}: the matrix product sums each
+    output in a different order than the executor's fixed dot product, so the
+    two surfaces agree to within a few ULP of the signal peak — growing with
+    the reduced filter's length; measured worst case: under 10 ULP across
+    presets and dtypes at the common conversions (150-800-tap filters), under
+    30 ULP across the full standard-rate matrix (extreme pairs run 1 500+
+    taps) — and are {e never} bit-identical by contract. It is offline-only and carries no partitioning
+    law: it is not a {!Pipeline} stage, it has no streaming form, and it is
+    deliberately not a flag on {!apply} — a flag that changes bits would fork
+    the library's one resampler in place. When bit-stability across
+    partitionings matters, use {!apply} or {!Kernel}; when offline throughput
+    on wide-matmul hardware or differentiability matters, use this.
+
+    For the identity configuration it returns [x] itself, like {!apply}.
+
+    Raises [Invalid_argument] if [x] has rank zero, or if the dtype of [x] is
+    neither float32 nor float64. *)
+
 (** {1 Incremental kernel}
 
     The Mealy kernel behind every face. [step] consumes an arbitrary-length

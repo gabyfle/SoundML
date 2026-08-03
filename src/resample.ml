@@ -497,6 +497,91 @@ let apply c x =
           Nx.concatenate ~axis:(-1) many
     end
 
+(* {1 Offline, tensor formulation}
+
+   The GEMM surface: the same conversion as [apply], written as one dense tensor
+   expression over the same config-owned filter. Outputs are grouped into blocks
+   of [L] (one full phase cycle): block [b] holds outputs [b*L + r], [r] in
+   [0..L-1], and output [b*L + r] reads the input window starting at [b*M +
+   floor(r*M/L) - K]. One patch of [P = 2K + 1 + floor((L-1)*M/L)] samples per
+   block covers all [L] windows, so the whole conversion is patches [n_frames;
+   P] times a [P; L] arrangement of the bank — the strided formulation whose
+   arithmetic redundancy is [P / taps]. The matrix product sums in whatever
+   order the backend blocks it, which is exactly why this surface is documented
+   as numerically distinct and carries no partitioning law. *)
+
+(* [gemm_bank c] is the [P; L] matrix [G] with [G[q, r] = bank[(r*M) mod L, q -
+   floor(r*M/L)]] where in range and zero elsewhere: column [r] is the
+   phase-[(r*M) mod L] row of the polyphase bank, shifted down by the integer
+   input advance [floor(r*M/L)] of output [r] within the block. *)
+let gemm_bank c =
+  let taps = (2 * c.k) + 1 in
+  let p_len = taps + ((c.l - 1) * c.m / c.l) in
+  let bank = Nx.to_array c.bank in
+  let g = Array.make (p_len * c.l) 0. in
+  for r = 0 to c.l - 1 do
+    let d = r * c.m / c.l and ph = r * c.m mod c.l in
+    for s = 0 to taps - 1 do
+      g.(((d + s) * c.l) + r) <- bank.((ph * taps) + s)
+    done
+  done ;
+  Nx.create Nx.float64 [|p_len; c.l|] g
+
+let apply_gemm c x =
+  check_rank "apply_gemm" x ;
+  check_dtype "apply_gemm" (Nx.dtype x) ;
+  if is_identity c then x
+  else
+    let dtype = Nx.dtype x in
+    let n = last_dim x in
+    let lead = leading_shape x in
+    let total = Config.output_frames c ~n in
+    let channels = Array.fold_left ( * ) 1 lead in
+    if channels = 0 || n = 0 then Nx.zeros dtype (Array.append lead [|total|])
+    else begin
+      let taps = (2 * c.k) + 1 in
+      let p_len = taps + ((c.l - 1) * c.m / c.l) in
+      let frames = ceil_pos total c.l in
+      (* [K] zeros on the left (the delay-compensated window of output 0 starts
+         at input [-K]); on the right, exactly enough for the last block's
+         patch. The clamp only ever discards surplus signal, and the frame axis
+         is cut back to [frames] below either way. *)
+      let right = Stdlib.max 0 (((frames - 1) * c.m) + p_len - (c.k + n)) in
+      let pad_spec =
+        Array.init
+          (Array.length lead + 1)
+          (fun i -> if i = Array.length lead then (c.k, right) else (0, 0))
+      in
+      let padded = Nx.pad pad_spec 0. x in
+      let patches =
+        Nx.extract_patches ~kernel_size:[|p_len|] ~stride:[|c.m|] ~dilation:[|1|]
+          ~padding:[|(0, 0)|]
+          padded
+      in
+      (* [lead ++ [P; frames']] with [frames' >= frames]; keep [frames] *)
+      let rank = Nx.ndim patches in
+      let patches =
+        Nx.shrink
+          (Array.init rank (fun i ->
+               if i = rank - 1 then (0, frames) else (0, Nx.dim i patches) ) )
+          patches
+      in
+      let axes =
+        List.init rank (fun i ->
+            if i = rank - 2 then rank - 1
+            else if i = rank - 1 then rank - 2
+            else i )
+      in
+      let y =
+        Nx.matmul (Nx.transpose ~axes patches) (Nx.cast dtype (gemm_bank c))
+      in
+      let y = Nx.reshape (Array.append lead [|frames * c.l|]) y in
+      Nx.shrink
+        (Array.init (Nx.ndim y) (fun i ->
+             if i = Nx.ndim y - 1 then (0, total) else (0, Nx.dim i y) ) )
+        y
+    end
+
 (* {1 Pipeline stage} *)
 
 type 'a stage_state =
