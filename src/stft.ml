@@ -36,8 +36,6 @@
    component). Both behaviors are those of the pinned revision's C kernels and
    are pinned by the golden parity tests. *)
 
-let src = "Soundml.Stft"
-
 module Config = struct
   type t =
     { window: Window.t
@@ -74,7 +72,18 @@ module Config = struct
            hop ) ;
     let analysis_window =
       let coefficients =
-        Window.make Nx.float64 ~periodic:true window win_length
+        (* [Window.make] reports domain errors under its own entry point;
+           relabel them with this one, which the caller actually called. *)
+        try Window.make Nx.float64 ~periodic:true window win_length
+        with Invalid_argument message ->
+          let message =
+            match String.index_opt message ':' with
+            | Some i ->
+                "create" ^ String.sub message i (String.length message - i)
+            | None ->
+                "create: " ^ message
+          in
+          invalid_arg message
       in
       let padded =
         if win_length = fft_size then coefficients
@@ -232,6 +241,15 @@ let frequencies dtype c ~sample_rate =
 
 let last_dim t = Nx.dim (Nx.ndim t - 1) t
 
+let leading_shape t =
+  let shape = Nx.shape t in
+  Array.sub shape 0 (Array.length shape - 1)
+
+(* [zero_leading t] is [true] iff a leading axis of [t] has size zero: the
+   tensor holds no signals at all, and slicing machinery below cannot express
+   zero-size ranges. Requires rank >= 1. *)
+let zero_leading t = Array.exists (fun d -> d = 0) (leading_shape t)
+
 let shrink_last t start stop =
   let nd = Nx.ndim t in
   Nx.shrink
@@ -270,8 +288,10 @@ let take_last t indices =
   Nx.take ~axis:(-1) ~indices t
 
 (* [pad_signal c x] is [x] extended by the configured boundary mode: [left_width
-   c] positions before the signal and [right_width c] after, the general
-   (multi-reflection) form valid for any signal length >= 1. *)
+   c] positions before the signal and [right_width c] after. Only the borders
+   are gathered — index arrays never exceed the border widths, and the signal
+   body passes through as-is — with the general (multi-reflection) index
+   formula, valid for any signal length >= 1. *)
 let pad_signal (c : Config.t) x =
   let left = left_width c and right = right_width c in
   if left = 0 && right = 0 then x
@@ -288,7 +308,11 @@ let pad_signal (c : Config.t) x =
           | `Edge ->
               Stdlib.min (n - 1) (Stdlib.max 0 q)
         in
-        take_last x (Array.init (left + n + right) (fun j -> index (j - left)))
+        let border width offset =
+          if width = 0 then []
+          else [take_last x (Array.init width (fun j -> index (offset + j)))]
+        in
+        concat_last (border left (-left) @ (x :: border right n))
 
 (* {1 The batched frame computation} *)
 
@@ -480,7 +504,15 @@ let right_pad s =
       take_last tail (Array.make s.right (tl - 1))
 
 let state_step s cdtype chunk =
+  if s.drained then
+    invalid_arg
+      "step: cannot feed a drained kernel (flush consumed the tail; reset \
+       before reusing)" ;
   let m = last_dim chunk in
+  if zero_leading chunk then
+    invalid_arg
+      "step: cannot analyse a chunk with a zero-size leading axis (channels \
+       must be at least 1)" ;
   if m = 0 then None
   else begin
     s.received <- s.received + m ;
@@ -576,31 +608,31 @@ end
 
 (* {1 Offline entry points} *)
 
-let leading_shape t =
-  let shape = Nx.shape t in
-  Array.sub shape 0 (Array.length shape - 1)
-
-let empty_spectrum cdtype (c : Config.t) x =
-  Nx.zeros cdtype (Array.append (leading_shape x) [|Config.bins c; 0|])
+(* [frameless_spectrum cdtype c x count] is the [count]-frame all-zero spectrum
+   of [x]'s leading shape: the result for the cases that evaluate no frame — an
+   empty frame range, or a zero-size leading axis (no signals at all). *)
+let frameless_spectrum cdtype (c : Config.t) x count =
+  Nx.zeros cdtype (Array.append (leading_shape x) [|Config.bins c; count|])
 
 let transform cdtype c x =
   check_rank "transform" x ;
   let n = last_dim x in
-  let channels = Array.fold_left (fun acc d -> acc * d) 1 (leading_shape x) in
-  let k =
-    Kernel.prepare cdtype c (Nx.dtype x) ~channels:(Stdlib.max 1 channels)
-      ~max_block:(Stdlib.max 1 n)
-  in
-  (* [@] evaluates its right operand first: sequence step before flush *)
-  let stepped = Kernel.step k x in
-  let drained = Kernel.flush k in
-  match Option.to_list stepped @ Option.to_list drained with
-  | [] ->
-      empty_spectrum cdtype c x
-  | [one] ->
-      one
-  | many ->
-      concat_last many
+  if zero_leading x then frameless_spectrum cdtype c x (frames c ~n)
+  else
+    let channels = Array.fold_left (fun acc d -> acc * d) 1 (leading_shape x) in
+    let k =
+      Kernel.prepare cdtype c (Nx.dtype x) ~channels ~max_block:(Stdlib.max 1 n)
+    in
+    (* [@] evaluates its right operand first: sequence step before flush *)
+    let stepped = Kernel.step k x in
+    let drained = Kernel.flush k in
+    match Option.to_list stepped @ Option.to_list drained with
+    | [] ->
+        frameless_spectrum cdtype c x 0
+    | [one] ->
+        one
+    | many ->
+        concat_last many
 
 let transform_range cdtype c ~p0 ~p1 x =
   check_rank "transform_range" x ;
@@ -611,7 +643,7 @@ let transform_range cdtype c ~p0 ~p1 x =
          "transform_range: cannot take frames [%d, %d) of a %d-frame transform \
           (the range must satisfy 0 <= p0 <= p1 <= frames)"
          p0 p1 total ) ;
-  if p0 = p1 then empty_spectrum cdtype c x
+  if p0 = p1 || zero_leading x then frameless_spectrum cdtype c x (p1 - p0)
   else
     let padded = pad_signal c x in
     let hop = Config.hop c and fft = Config.fft_size c in
@@ -731,9 +763,8 @@ let power_stage ?(power = 2.) c =
             Nx.zeros dtype [|bins; 0|]
         | None ->
             invalid_arg
-              ( src
-              ^ ".power_stage: cannot concatenate zero chunks before any chunk \
-                 fixed the element dtype" ) )
+              "power_stage: cannot concatenate zero chunks before any chunk \
+               fixed the element dtype" )
       | parts ->
           concat_last parts )
     ~prepare:(fun fmt -> {state= state_create c; bound= threaded_bound c fmt})

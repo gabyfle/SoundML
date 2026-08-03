@@ -30,13 +30,17 @@
     Complex-valued entry points take the spectrum dtype as an explicit
     dtype-first witness ([transform Nx.complex64 c x] maps float32 audio to a
     complex64 spectrum); OCaml has no implicit type-level mapping from float
-    dtypes to complex ones, so the pairing is the caller's choice. The
-    real-valued conveniences ({!power_spectrum}, {!power_stage}) are
-    dtype-preserving and never expose a complex dtype.
+    dtypes to complex ones, so the pairing is the caller's choice. Whatever
+    the witness, values are computed in double precision and rounded to the
+    requested dtype once, at the boundary. The real-valued conveniences
+    ({!power_spectrum}, {!power_stage}) are dtype-preserving and never expose
+    a complex dtype.
 
-    Numerical defaults follow librosa 0.11: Hann window, [hop = fft_size / 4],
-    centered frames over reflect padding. Parity is enforced against committed
-    golden vectors in the test suite. *)
+    Defaults are the Hann window, [hop = fft_size / 4] and centered frames
+    over reflect padding; numerical parity with librosa 0.11 is enforced
+    against committed golden vectors in the test suite. librosa 0.11 itself
+    pads with zeros by default — pass [~pad:(`Constant 0.)] to reproduce its
+    defaults exactly. *)
 
 (** {1 Configuration} *)
 
@@ -62,7 +66,7 @@ module Config : sig
       form at [win_length] points; [win_length] defaults to [fft_size] and a
       shorter window is centered inside the FFT frame with zeros on both
       sides. [hop] is the frame advance in samples and defaults to
-      [fft_size / 4].
+      [fft_size / 4] or [1], whichever is larger.
 
       [alignment] places the analysis window relative to each frame's grid
       position [p * hop] and defaults to [`Centered]:
@@ -72,14 +76,15 @@ module Config : sig
       - [`Left] — the window starts at the grid position; no padding (librosa
         [center=false]).
       - [`Right] — the window ends at the grid position; the signal is padded
-        by [fft_size - 1] samples on the left, so every frame reads only
-        samples at or before its grid position.
+        by [fft_size - 1] samples on the left. Whether frames stay strictly
+        causal depends on [pad], below.
 
       [pad] selects the boundary extension used wherever the alignment pads
       and defaults to [`Reflect] (mirror without repeating the edge sample,
-      librosa's default); [`Constant v] extends with [v] and [`Edge] repeats
-      the boundary sample. With [`Right] alignment, [`Constant] and [`Edge]
-      keep frames strictly causal, while [`Reflect] mirrors early samples
+      numpy's [reflect] mode); [`Constant v] extends with [v] and [`Edge]
+      repeats the boundary sample. With [`Right] alignment, [`Constant] and
+      [`Edge] keep frames strictly causal — every frame reads only samples at
+      or before its grid position — while [`Reflect] mirrors early samples
       into the left border.
 
       [scale] normalises the analysis window and defaults to [`None]:
@@ -258,7 +263,11 @@ module Kernel : sig
       shaped [[...; bins; frames]]. [chunk] is borrowed: the kernel copies
       what it must retain, and the returned tensor aliases neither [chunk]
       nor kernel state. Framing and FFT run batched over the chunk's whole
-      time axis. *)
+      time axis.
+
+      Raises [Invalid_argument] if [k] was drained by {!flush} — {!reset} it
+      before feeding a new signal — or if a leading axis of [chunk] has size
+      zero. *)
 
   val flush : ('a, 'c) t -> (Complex.t, 'c) Nx.t option
   (** [flush k] drains the kernel: it installs the right boundary extension
@@ -292,5 +301,7 @@ val power_stage :
   -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
 (** [power_stage c] is {!power_spectrum} as a pipeline stage — real audio in,
     real spectra out, dtype-preserving, with the latency and rate of
-    {!stage}. [power] defaults to [2.]. Compose it downstream of causal
-    stages without ever naming a complex dtype. *)
+    {!stage}. [power] defaults to [2.]. Chunks are joined like {!stage}'s:
+    joining zero chunks yields an empty single-channel spectrum [[bins; 0]].
+    Compose it downstream of causal stages without ever naming a complex
+    dtype. *)
