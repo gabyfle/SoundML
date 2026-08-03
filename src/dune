@@ -9,8 +9,12 @@
   convert
   db
   mel
+  resample
   spectral
   energy
   contrast
   onset)
- (libraries nx))
+ (foreign_stubs
+  (language c)
+  (names resample_stubs))
+ (libraries nx nx.buffer))
