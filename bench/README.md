@@ -19,6 +19,32 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   mirroring the librosa rows one to one.
 - `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
   one row per dtype, mirroring the librosa rows one to one.
+- `resample` — every face of `Resample` on one-second mono clips: `apply`
+  across presets, rate pairs and dtypes; the GEMM surface next to the
+  executor; the streaming kernel across chunk sizes (the 1024 row keeps the
+  per-chunk dispatch overhead honest); the resample-then-STFT stage next to
+  the same computation hand-written; the identity-rate passthrough; and
+  `Config.create`, priced because filter design costs about twice a
+  one-second conversion and the documented contract is to build once and
+  reuse. The Python twin has the fair-fight rows: librosa `soxr_hq` (the
+  spec the default preset is designed to) and torchaudio at its published
+  `kaiser_best` triple and its defaults.
+
+  The measured position, both sides on the maintainer machine in one quiet
+  session (arm64, min-of-N): librosa `soxr_hq` converts the same one-second
+  clips about 2.5-3x faster at equal spec — libsoxr runs a SIMD-vectorized
+  convolution engine that this direct polyphase executor does not attempt —
+  while SoundML runs 1.2-3x faster than torchaudio at its published
+  `kaiser_best` settings and behind torchaudio's faster, lower-spec
+  defaults. None of the references carries the bit-exact
+  partition-invariance law that is this resampler's defining contract, and
+  none exposes an incremental kernel with exact rational latency
+  accounting.
+
+`bench/soxr_reference.py` is not a benchmark: it is the dev-time SoXR oracle
+that regenerates the committed quality-harness vectors under
+`test/vectors/resample/` (its header documents the pinned invocation). It is
+SoXR's only appearance in the repository.
 
 ## Running the benchmarks
 
@@ -43,6 +69,9 @@ dune exec bench/bench_soundml.exe
 uv run --python 3.12 --with 'numpy<2.3' --with 'librosa==0.11.0' \
   python bench/bench_soundml.py
 ```
+
+Add `--with torch --with torchaudio` for the torchaudio resample rows; they
+are skipped (with a note) when torch is not installed.
 
 (or plain `python bench/bench_soundml.py` in any environment with `numpy` and
 `librosa` — the versions CI installs are in `.github/workflows/test.yml`;
