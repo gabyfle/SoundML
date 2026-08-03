@@ -51,7 +51,10 @@ module Rate : sig
   type t = {num: int; den: int}
 
   val ( * ) : t -> t -> t
-  (** [a * b] is the product of [a] and [b], normalised. *)
+  (** [a * b] is the product of [a] and [b], normalised. Arithmetic is exact:
+      operands are reduced across the fraction bar before multiplying.
+
+      Raises [Invalid_argument] if a reduced intermediate overflows [int]. *)
 
   val identity : t
   (** [identity] is the neutral rate [1/1]. *)
@@ -80,9 +83,8 @@ module Format : sig
       [Invalid_argument] at [prepare] time on mismatch — never mid-stream. *)
   type t
 
-  type dtype =
-    | Dtype : (float, 'd) Nx.dtype -> dtype
-        (** The type for element dtypes, existentially packed. *)
+  (** The type for element dtypes, existentially packed. *)
+  type dtype = Dtype : (float, 'd) Nx.dtype -> dtype
 
   val audio : (float, 'a) Nx.dtype -> sample_rate:int -> channels:int -> t
   (** [audio dt ~sample_rate ~channels] is the source description for PCM
@@ -105,7 +107,9 @@ module Format : sig
   (** [max_items f] is the upper bound on items per chunk, or [None] when
       chunks are unbounded (the offline case). {!Stream.prepare} sets it to
       [max_chunk] on the source format; stages derive their own output bound
-      through [out_format]. *)
+      through [out_format], and the library widens each stage's threaded
+      bound to cover the stage's declared latency (scaled by its rate), so
+      the bound holds for drained tails as well as steady pushes. *)
 
   val upstream_latency : t -> Rate.t
   (** [upstream_latency f] is the cumulative involuntary lookahead of every
@@ -134,6 +138,16 @@ module Format : sig
       unbounded when [bound] is [None].
 
       Raises [Invalid_argument] if [bound] is negative. *)
+
+  val equal_dtype : dtype -> dtype -> bool
+  (** [equal_dtype a b] is [true] iff [a] and [b] pack the same dtype — the
+      check a kernel's [prepare] uses to validate its element type against
+      the incoming format. *)
+
+  val equal : t -> t -> bool
+  (** [equal a b] is [true] iff [a] and [b] agree on every observable field:
+      dtype, items per second, channels, per-chunk bound and upstream
+      latency. *)
 
   val pp : Stdlib.Format.formatter -> t -> unit
   (** [pp ppf f] formats [f] for inspection. *)
@@ -170,11 +184,19 @@ val kernel :
     [step] consumes one chunk and emits at most one chunk. Rate-changing
     stages grow the per-chunk {e bound} in [out_format] instead of emitting
     multiple chunks, so downstream allocation is sized correctly at prepare.
+    Chunks are borrowed, not owned: [step] may read its input only for the
+    duration of the call and must not retain references into it — callers
+    reuse their buffers. Emitted chunks become caller-owned and must not
+    alias the kernel's state or the input chunk.
 
     [flush] drains the buffered tail and may emit several chunks; it defaults
-    to an empty drain. [reset] restores the freshly prepared state and
-    defaults to a no-op, which is correct only for state that never needs
-    rewinding — stateful kernels should supply it.
+    to an empty drain. [flush] must consume what it emits — a second [flush]
+    finds an empty tail — and each of its chunks must fit the stage's
+    threaded output bound, which the library widens to cover [latency] input
+    items' worth of output, so the withheld tail always fits. [reset]
+    restores the freshly prepared state and defaults to a no-op, which is
+    correct only for state that never needs rewinding — stateful kernels
+    should supply it.
 
     [concat] is the chunk monoid joining the stage's outputs in {!run}.
     [concat []] must be well-defined and produce an empty chunk — capture
@@ -215,13 +237,15 @@ val ( >> ) : ('a, 'b, 'k) t -> ('b, 'c, 'k) t -> ('a, 'c, 'k) t
 
 val fanout :
   ('a, 'b, 'k) t -> ('a, 'c, 'k) t -> ('a, 'b option * 'c option, 'k) t
-(** [fanout f g] runs the shared input once through both branches; the
-    branches may differ in rate {e and} latency. Each push yields whatever
-    each branch yields — pairing and alignment are explicitly {e not}
-    promised per-push; consumers align on positions. The reported latency is
-    the larger branch latency; the reported rate is {!Rate.identity} (pairs
-    flow at push granularity); the downstream format is the shared input
-    format with the larger branch latency absorbed. *)
+(** [fanout f g] is the stage running the shared input once through both
+    branches; the branches may differ in rate {e and} latency. Each push
+    yields whatever each branch yields — pairing and alignment are explicitly
+    {e not} promised per-push; consumers align on positions. The reported
+    latency is the larger branch latency; the reported rate is
+    {!Rate.identity} (pairs flow at push granularity); the downstream format
+    is the shared input format with the larger branch latency absorbed and
+    the per-chunk bound widened to the larger branch bound. Threading the
+    formats validates both branches, exactly as composition would. *)
 
 val map : ('b -> 'c) -> ('a, 'b, 'k) t -> ('a, 'c, 'k) t
 (** [map f p] is [p >> stateless f]. *)
@@ -259,22 +283,29 @@ module Stream : sig
 
   val prepare :
     ('a, 'b, causal) pipeline -> source:Format.t -> max_chunk:int -> ('a, 'b) t
-  (** [prepare p ~source ~max_chunk] instantiates [p] for chunks of at most
-      [max_chunk] items described by [source]. Every buffer is allocated
-      here; per-stage output bounds derive from [max_chunk] through each
-      stage's [out_format] — there is no divisibility precondition on
-      [max_chunk].
+  (** [prepare p ~source ~max_chunk] is the prepared plan running [p] over
+      chunks of at most [max_chunk] items described by [source]. Every
+      buffer is allocated here; per-stage output bounds derive from
+      [max_chunk] through each stage's [out_format] — there is no
+      divisibility precondition on [max_chunk].
 
       Raises [Invalid_argument] if [max_chunk < 1] or if any stage rejects
       its incoming format. *)
 
   val push : ('a, 'b) t -> 'a -> 'b option
   (** [push s a] feeds the chunk [a] — at most [max_chunk] items — and is
-      the pipeline's output chunk, if any. *)
+      the pipeline's output chunk, if any. The bound is the caller's
+      obligation: an opaque ['a] cannot be measured, so it is not checked,
+      and exceeding it is undefined behaviour for kernels sized to the
+      bound. [push] borrows [a] for the duration of the call; the returned
+      chunk is caller-owned and aliases neither [a] nor kernel state. *)
 
   val flush : ('a, 'b) t -> 'b list
   (** [flush s] drains every stage front-to-back and is the tail chunks, in
-      order. *)
+      order — each at most the pipeline's threaded output bound, which can
+      exceed [max_chunk] scaled by {!rate} when a stage's latency exceeds
+      [max_chunk]. Draining consumes the tail: a second [flush] emits
+      nothing. {!reset} the stream before reusing it on a new signal. *)
 
   val reset : ('a, 'b) t -> unit
   (** [reset s] restores [s] to its freshly prepared state. *)

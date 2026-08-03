@@ -14,7 +14,31 @@ module Rate = struct
     let g = gcd (abs num) den in
     if g = 0 then {num= 0; den= 1} else {num= num / g; den= den / g}
 
-  let mul a b = normalize {num= a.num * b.num; den= a.den * b.den}
+  (* Arithmetic is exact and loud: operands are reduced across the fraction bar
+     before multiplying so intermediates stay small, and any product or sum that
+     still overflows raises instead of wrapping silently. *)
+  let checked_mul x y =
+    if x = 0 || y = 0 then 0
+    else
+      let p = x * y in
+      if p / y <> x then
+        invalid_arg "Soundml.Pipeline.Rate: arithmetic overflow"
+      else p
+
+  let checked_add x y =
+    let s = x + y in
+    if (x >= 0 && y >= 0 && s < 0) || (x < 0 && y < 0 && s >= 0) then
+      invalid_arg "Soundml.Pipeline.Rate: arithmetic overflow"
+    else s
+
+  let mul a b =
+    let g1 = gcd (abs a.num) (abs b.den) in
+    let g1 = if g1 = 0 then 1 else g1 in
+    let g2 = gcd (abs b.num) (abs a.den) in
+    let g2 = if g2 = 0 then 1 else g2 in
+    normalize
+      { num= checked_mul (a.num / g1) (b.num / g2)
+      ; den= checked_mul (a.den / g2) (b.den / g1) }
 
   let identity = {num= 1; den= 1}
 
@@ -23,16 +47,27 @@ module Rate = struct
   let of_int n = {num= n; den= 1}
 
   let add a b =
-    normalize {num= (a.num * b.den) + (b.num * a.den); den= a.den * b.den}
+    let g = gcd (abs a.den) (abs b.den) in
+    let g = if g = 0 then 1 else g in
+    normalize
+      { num=
+          checked_add
+            (checked_mul a.num (b.den / g))
+            (checked_mul b.num (a.den / g))
+      ; den= checked_mul (a.den / g) b.den }
 
   let inv {num; den} =
     if num = 0 then
       invalid_arg "Soundml.Pipeline.Rate: zero rate has no inverse"
     else normalize {num= den; den= num}
 
-  let equal a b = a.num * b.den = b.num * a.den
+  let equal a b =
+    let a = normalize a and b = normalize b in
+    a.num = b.num && a.den = b.den
 
-  let max a b = if a.num * b.den >= b.num * a.den then a else b
+  let max a b =
+    let na = normalize a and nb = normalize b in
+    if na.num * nb.den >= nb.num * na.den then a else b
 
   let is_positive {num; den} = (num >= 1 && den >= 1) || (num <= -1 && den <= -1)
 
@@ -52,7 +87,11 @@ module Format = struct
     ; chans: int
     ; bound: int option
     ; lat: Rate.t (* upstream latency, source-rate samples *)
-    ; src_ips: Rate.t (* the source's items per second, for conversions *) }
+    ; src_ips: Rate.t (* the source's items per second, for conversions *)
+    ; token: unit ref
+          (* lineage witness: minted by [audio], preserved by the [with_]
+             builders and the library's own bookkeeping, compared physically by
+             [same_lineage] *) }
 
   let audio dt ~sample_rate ~channels =
     if sample_rate < 1 then
@@ -65,7 +104,8 @@ module Format = struct
     ; chans= channels
     ; bound= None
     ; lat= Rate.zero
-    ; src_ips= ips }
+    ; src_ips= ips
+    ; token= ref () }
 
   let dtype t = t.fdtype
 
@@ -100,10 +140,31 @@ module Format = struct
         () ) ;
     {t with bound}
 
+  let equal_dtype (Dtype a) (Dtype b) =
+    match (a, b) with
+    | Nx.Float16, Nx.Float16
+    | Nx.Float32, Nx.Float32
+    | Nx.Float64, Nx.Float64
+    | Nx.BFloat16, Nx.BFloat16
+    | Nx.Float8_e4m3, Nx.Float8_e4m3
+    | Nx.Float8_e5m2, Nx.Float8_e5m2 ->
+        true
+    | _ ->
+        false
+
+  let equal a b =
+    equal_dtype a.fdtype b.fdtype
+    && Rate.equal a.ips b.ips && a.chans = b.chans && a.bound = b.bound
+    && Rate.equal a.lat b.lat
+
   (* Internal: [true] iff [b] was derived from [a] with the [with_] builders,
-     which cannot touch the library-owned bookkeeping fields. *)
+     which cannot touch the library-owned bookkeeping fields. The token pins the
+     lineage (a from-scratch [audio] mints a fresh one); the latency check pins
+     the derivation to [a] itself rather than an earlier chain point. *)
   let same_lineage a b =
-    Rate.equal a.src_ips b.src_ips && Rate.equal a.lat b.lat
+    a.token == b.token
+    && Rate.equal a.src_ips b.src_ips
+    && Rate.equal a.lat b.lat
 
   (* Internal: [items] at [at]'s own rate, converted to source-rate samples. *)
   let latency_to_samples items at = Rate.(items * at.src_ips * inv at.ips)
@@ -172,6 +233,16 @@ let stage_thread ~latency ~rate ~out_format fmt =
           in
           Format.with_max_items bound (Format.with_items_per_second ips fmt)
   in
+  (* the drained tail of a latency-[d] stage may arrive as one chunk of up to
+     [d] input items' worth of output: widen the threaded bound so downstream
+     stages sized to their incoming bound accommodate drain, not only pushes *)
+  let out =
+    match Format.max_items out with
+    | Some n when latency > 0 ->
+        Format.with_max_items (Some (max n (ceil_scale latency rate))) out
+    | _ ->
+        out
+  in
   Format.add_latency (Format.latency_to_samples (Rate.of_int latency) fmt) out
 
 let kernel ?(latency = 0) ?(rate = Rate.identity) ?out_format
@@ -226,7 +297,13 @@ let ( >> ) f g =
               let through = List.filter_map pg.feed (pf.drain ()) in
               through @ pg.drain () )
         ; restart= (fun () -> pf.restart () ; pg.restart ()) } )
-  ; run1= (fun fmt a -> g.run1 (f.thread fmt) (f.run1 fmt a))
+  ; run1=
+      (fun fmt a ->
+        (* bind the threaded format first: validation of [f]'s stages must
+           precede any data flowing through them, and OCaml's unspecified
+           argument order must not be able to reorder the two *)
+        let mid = f.thread fmt in
+        g.run1 mid (f.run1 fmt a) )
   ; thread= (fun fmt -> g.thread (f.thread fmt))
   ; lat= Rate.add f.lat Rate.(g.lat * inv f.rt)
   ; rt= Rate.(f.rt * g.rt) }
@@ -257,7 +334,24 @@ let fanout f g =
         ; restart= (fun () -> pf.restart () ; pg.restart ()) } )
   ; run1= (fun fmt a -> (Some (f.run1 fmt a), Some (g.run1 fmt a)))
   ; thread=
-      (fun fmt -> Format.add_latency (Format.latency_to_samples lat fmt) fmt)
+      (fun fmt ->
+        (* thread both branches: their stages validate exactly as composition
+           would, at prepare, never mid-stream *)
+        let fo = f.thread fmt in
+        let go = g.thread fmt in
+        let bound =
+          match Format.max_items fmt with
+          | None ->
+              None
+          | Some _ -> (
+            match (Format.max_items fo, Format.max_items go) with
+            | Some x, Some y ->
+                Some (max x y)
+            | _ ->
+                None )
+        in
+        Format.with_max_items bound
+          (Format.add_latency (Format.latency_to_samples lat fmt) fmt) )
   ; lat
   ; rt= Rate.identity }
 
