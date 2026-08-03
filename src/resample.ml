@@ -481,8 +481,9 @@ module Kernel = struct
       invalid_arg
         (Printf.sprintf
            "step: cannot feed %d-channel chunks (the kernel was prepared for \
-            %d channels)"
-           channels k.channels ) ;
+            %d %s)"
+           channels k.channels
+           (if k.channels = 1 then "channel" else "channels") ) ;
     k.leading <- lead ;
     if n = 0 then None
     else begin

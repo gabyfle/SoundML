@@ -311,7 +311,7 @@ let error_tests =
             ignore (Resample.Kernel.step k (signal Nx.float64 17)) ) ;
         raises_invalid_arg ~msg:"channel mismatch"
           "step: cannot feed 2-channel chunks (the kernel was prepared for 1 \
-           channels)" (fun () ->
+           channel)" (fun () ->
             ignore (Resample.Kernel.step k (Nx.zeros Nx.float64 [|2; 8|])) ) ;
         raises_invalid_arg ~msg:"rank zero"
           "step: cannot resample a rank-zero tensor (the time axis must exist)"
