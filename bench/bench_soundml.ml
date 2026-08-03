@@ -19,8 +19,18 @@
    dtypes; the GEMM surface next to the executor at [`High]; the streaming
    kernel at [`High] float32 across chunk sizes (the 1024 row keeps the
    per-chunk dispatch overhead honest); the stage inside a resample-then-STFT
-   front next to the same computation hand-written; and the identity-rate
-   passthrough. *)
+   front next to the same computation hand-written; the identity-rate
+   passthrough; and [Config.create] itself, priced separately because filter
+   design costs more than converting the clip it configures — reuse is the
+   documented contract, and this row keeps the design cost visible.
+
+   The committed baseline gates drift (the suite budgets below), not absolute
+   throughput: the resample rows record what the executor delivers on the
+   reference machine — the dot-product kernel measured standalone runs within a
+   few percent of these numbers, so they are the compute ceiling of this
+   formulation there, not a tuning shortfall. The Python twin [bench_soundml.py]
+   carries the cross-library rows; the honest comparative position is recorded
+   in bench/README.md. *)
 
 let n_window = 2048
 
@@ -162,6 +172,12 @@ let resample_stream_benchmarks () =
           ignore (Soundml.Resample.Kernel.flush kernel) ) )
     [1024; 4096; 16384]
 
+let resample_config_benchmarks () =
+  [ Thumper.bench "config create high 44k1-48k" (fun () ->
+        Soundml.Resample.Config.create ~sample_rate:44100 ~target:48000 () )
+  ; Thumper.bench "config create high 44k1-16k" (fun () ->
+        Soundml.Resample.Config.create ~sample_rate:44100 ~target:16000 () ) ]
+
 let resample_stage_benchmarks () =
   let sample_rate = 44100 in
   let clip = Nx.rand Nx.float32 [|sample_rate|] in
@@ -201,4 +217,5 @@ let () =
         ( resample_apply_benchmarks ()
         @ resample_gemm_benchmarks ()
         @ resample_stream_benchmarks ()
-        @ resample_stage_benchmarks () ) ]
+        @ resample_stage_benchmarks ()
+        @ resample_config_benchmarks () ) ]

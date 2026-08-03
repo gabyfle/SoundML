@@ -23,10 +23,23 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   across presets, rate pairs and dtypes; the GEMM surface next to the
   executor; the streaming kernel across chunk sizes (the 1024 row keeps the
   per-chunk dispatch overhead honest); the resample-then-STFT stage next to
-  the same computation hand-written; and the identity-rate passthrough. The
-  Python twin has the fair-fight rows: librosa `soxr_hq` (the spec the
-  default preset is designed to) and torchaudio at its published
+  the same computation hand-written; the identity-rate passthrough; and
+  `Config.create`, priced because filter design costs about twice a
+  one-second conversion and the documented contract is to build once and
+  reuse. The Python twin has the fair-fight rows: librosa `soxr_hq` (the
+  spec the default preset is designed to) and torchaudio at its published
   `kaiser_best` triple and its defaults.
+
+  The measured position, both sides on the maintainer machine in one quiet
+  session (arm64, min-of-N): librosa `soxr_hq` converts the same one-second
+  clips about 2.5-3x faster at equal spec — libsoxr runs a SIMD-vectorized
+  convolution engine that this direct polyphase executor does not attempt —
+  while SoundML runs 1.2-3x faster than torchaudio at its published
+  `kaiser_best` settings and behind torchaudio's faster, lower-spec
+  defaults. None of the references carries the bit-exact
+  partition-invariance law that is this resampler's defining contract, and
+  none exposes an incremental kernel with exact rational latency
+  accounting.
 
 `bench/soxr_reference.py` is not a benchmark: it is the dev-time SoXR oracle
 that regenerates the committed quality-harness vectors under
