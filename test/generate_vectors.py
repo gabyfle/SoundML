@@ -3,181 +3,189 @@ This file is part of SoundML.
 
 Copyright (C) 2025 Gabriel Santamaria
 
-This script is used to generate test vectors for SoundML.
-The reference implementation choosen is librosa.
-It's supposed to be ran only once. Then the generated vectors
-haved to be used for the actual testing.
+This script generates the golden test vectors committed under test/vectors/.
+The reference implementation is librosa 0.11 (which delegates window
+computation to scipy.signal); every generated file records the exact
+versions it was produced with.
+
+The vectors are committed to the repository: CI never runs this script and
+never needs Python. Rerun it only to regenerate the goldens, from an
+environment with the pinned reference versions:
+
+    python3 -m venv .venv
+    .venv/bin/pip install librosa==0.11.0
+    .venv/bin/python generate_vectors.py
+
+Each suite writes small JSON files under test/vectors/<suite>/. A file is
+
+    {
+      "schema": 1,
+      "suite": "<suite name>",
+      "generator": {"python": ..., "numpy": ..., "scipy": ..., "librosa": ...},
+      "cases": [
+        {"name": ..., "params": {...}, "shape": [...], "values": [...]},
+        ...
+      ]
+    }
+
+with "values" the expected float64 result flattened in C order ("shape"
+gives its shape back). JSON floats round-trip float64 exactly. The OCaml
+side of the harness is test/support/tutils.ml; new suites (mel, stft, ...)
+add a generator class here and load their files through the same module.
 """
 
-from typing import Any, Tuple, Dict, List
-import os
 import json
-import numpy as np
+import os
+import platform
+
 import librosa
+import numpy as np
+import scipy
+import scipy.signal
 
-AUDIO_DIRECTORY = "audio/"
-VECTOR_DIRECTORY = "vectors/"
+VECTOR_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors")
+
+GENERATOR_VERSIONS = {
+    "python": platform.python_version(),
+    "numpy": np.__version__,
+    "scipy": scipy.__version__,
+    "librosa": librosa.__version__,
+}
+
+assert librosa.__version__.startswith(
+    "0.11."
+), f"librosa 0.11 is the pinned reference, found {librosa.__version__}"
 
 
-class Parameters:
+def write_suite(suite: str, filename: str, cases: list):
+    """Write one golden file for `suite`, pretty-printed with the values of
+    each case kept on a single line."""
+    directory = os.path.join(VECTOR_DIRECTORY, suite)
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f"{filename}.json")
+    rendered = []
+    for case in cases:
+        fields = [f'"{key}": {json.dumps(value)}' for key, value in case.items()]
+        rendered.append("  {" + ", ".join(fields) + "}")
+    body = ",\n".join(rendered)
+    generator = json.dumps(GENERATOR_VERSIONS)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(
+            f'{{\n"schema": 1,\n"suite": "{suite}",\n'
+            f'"generator": {generator},\n'
+            f'"cases": [\n{body}\n]\n}}\n'
+        )
+    print(f"wrote {path} ({len(cases)} cases)")
+
+
+class WindowVectorGenerator:
+    """Golden vectors for Soundml.Window.
+
+    Covers every window family x {periodic, symmetric} x lengths (odd and
+    even, including the n = 1, 2, 3 edge cases), cross-checking that
+    librosa.filters.get_window and scipy.signal.get_window agree exactly
+    before emitting, plus scipy.signal.check_COLA truths for Window.cola.
     """
-    Class representing parameters used to generate a vector
-    """
 
-    parameters: Dict[str, Any]
+    SUITE = "windows"
 
-    def __init__(self, parameters: Dict[str, Any]):
-        self.parameters = parameters
+    LENGTHS = [1, 2, 3, 8, 15, 16, 17, 64, 128]
 
-    def write(self, filename: str):
-        """
-        Write the parameters to a JSON file
-        """
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(self.parameters, f, indent=4)
+    # family -> list of (case key, scipy window spec, extra JSON params)
+    FAMILIES = {
+        "hann": [("hann", "hann", {})],
+        "hamming": [("hamming", "hamming", {})],
+        "blackman": [("blackman", "blackman", {})],
+        "blackman_harris": [("blackman_harris", "blackmanharris", {})],
+        "nuttall": [("nuttall", "nuttall", {})],
+        "bartlett": [("bartlett", "bartlett", {})],
+        "flat_top": [("flat_top", "flattop", {})],
+        "rectangular": [("rectangular", "boxcar", {})],
+        "kaiser": [
+            (f"kaiser_b{beta:g}", ("kaiser", beta), {"beta": beta})
+            for beta in (5.0, 8.6, 14.0)
+        ],
+        "gaussian": [
+            (f"gaussian_s{std:g}", ("gaussian", std), {"std": std})
+            for std in (2.5, 7.0)
+        ],
+        "tukey": [
+            (f"tukey_a{taper:g}", ("tukey", taper), {"taper": taper})
+            for taper in (0.0, 0.25, 0.5, 1.0)
+        ],
+    }
 
-
-class VectorGenerator:
-    """
-    Abstract class representing an audio vector generators
-    """
-
-    BASE_IDENTIFIER: str
-
-    audio_paths: list[str]
-    output_dir: str
-
-    counter: int = 0
-
-    def __init__(self, audio_paths: list[str], output_dir: str):
-        self.audio_paths = audio_paths
-        self.output_dir = os.path.join(output_dir, f"{self.BASE_IDENTIFIER}/")
-
-    def normalize_name(self, name: str) -> str:
-        """
-        Normalize the name of the audio file
-        """
-        return name.replace(" ", "_").replace("-", "_").lower()
-
-    def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
-        """
-        Generate the vector for the given audio file
-        """
-        raise NotImplementedError("Subclasses should implement this method")
+    # (window family, spec index into FAMILIES[family], length, hop)
+    COLA_CASES = [
+        ("hann", 0, 1024, 512),
+        ("hann", 0, 1024, 256),
+        ("hann", 0, 1024, 341),
+        ("hann", 0, 1023, 341),
+        ("hamming", 0, 1024, 512),
+        ("blackman", 0, 1024, 512),
+        ("blackman", 0, 1024, 256),
+        ("blackman_harris", 0, 1024, 512),
+        ("blackman_harris", 0, 1024, 256),
+        ("nuttall", 0, 1024, 256),
+        ("flat_top", 0, 1024, 512),
+        ("flat_top", 0, 1024, 128),
+        ("bartlett", 0, 1024, 512),
+        ("rectangular", 0, 1024, 1024),
+        ("rectangular", 0, 1024, 512),
+        ("rectangular", 0, 100, 30),
+        ("kaiser", 1, 1024, 512),
+        ("gaussian", 0, 1024, 256),
+        ("tukey", 2, 1024, 512),
+    ]
 
     def generate(self):
-        """
-        Generate the audio vectors
-        """
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir, exist_ok=True)
+        for family, specs in self.FAMILIES.items():
+            cases = []
+            for key, window, extra in specs:
+                for periodic in (True, False):
+                    mode = "periodic" if periodic else "symmetric"
+                    for n in self.LENGTHS:
+                        expected = scipy.signal.get_window(window, n, fftbins=periodic)
+                        cross = librosa.filters.get_window(window, n, fftbins=periodic)
+                        assert np.array_equal(expected, cross), (window, n, periodic)
+                        expected = np.asarray(expected, dtype=np.float64)
+                        params = {
+                            "window": family,
+                            **extra,
+                            "periodic": periodic,
+                            "n": n,
+                        }
+                        cases.append(
+                            {
+                                "name": f"{key}_{mode}_{n}",
+                                "params": params,
+                                "shape": list(expected.shape),
+                                "values": expected.tolist(),
+                            }
+                        )
+            write_suite(self.SUITE, family, cases)
+        self.generate_cola()
 
-        for audio_path in self.audio_paths:
-            identifier = os.path.splitext(os.path.basename(audio_path))[0]
-            try:
-                data: Tuple[np.ndarray, Parameters] = self.vector(audio_path)
-
-                self.counter += 1
-
-                y: np.ndarray = data[0]
-                params = data[1]
-                filename: str = self.normalize_name(
-                    f"{self.BASE_IDENTIFIER}_{identifier}"
-                )
-                output_filename: str = os.path.join(self.output_dir, f"{filename}.npy")
-                params_filename: str = os.path.join(self.output_dir, f"{filename}.json")
-                np.save(output_filename, y)
-                params.write(params_filename)
-            except Exception as e:
-                print(f"ERROR generating for {identifier}: {e}")
-
-
-class TimeSeriesVectorGenerator(VectorGenerator):
-    """
-    Reads an audio file and creates a time-series vector representation of it
-    """
-
-    BASE_IDENTIFIER: str = "timeseries"
-
-    resamplers: List[str] = ["soxr_vhq", "soxr_hq", "soxr_mq", "soxr_lq"]
-    srs = [None, 8000, 16000, 22050]
-
-    def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
-        """
-        Generate the time-series vector for the given file
-        """
-        params = {}
-        mono = False if self.counter % 2 == 0 or self.counter % 3 == 0 else False
-        sr = self.srs[self.counter % len(self.srs)]
-        res_type = self.resamplers[self.counter % len(self.resamplers)]
-        params["mono"] = mono
-        if sr is not None:
-            params["res_type"] = res_type
-        y, sr = librosa.load(
-            audio_path, mono=mono, sr=sr, res_type=res_type, dtype=np.float64
-        )
-        params["sr"] = sr
-        y = np.ascontiguousarray(y, dtype=np.float64)
-
-        return (y, Parameters(params))
+    def generate_cola(self):
+        cases = []
+        for family, index, length, hop in self.COLA_CASES:
+            key, window, extra = self.FAMILIES[family][index]
+            analysis = scipy.signal.get_window(window, length, fftbins=True)
+            expected = bool(
+                scipy.signal.check_COLA(analysis, length, length - hop, tol=1e-10)
+            )
+            cases.append(
+                {
+                    "name": f"{key}_{length}_{hop}",
+                    "params": {"window": family, **extra, "length": length, "hop": hop},
+                    "expected": expected,
+                }
+            )
+        write_suite(self.SUITE, "cola", cases)
 
 
-class STFTVectorGenerator(VectorGenerator):
-    """
-    Reads an audio file and creates a STFT vector representation of it
-    """
-
-    BASE_IDENTIFIER: str = "stft"
-
-    nffts = [512, 1024, 2048, 4096]
-    window_lengths = [64, 128, 256, 512]
-    hop_sizes = [128, 256, 512]
-    centers = [False, False, False]
-    window_types = ["hann", "hamming", "blackman", "boxcar"]
-
-    def vector(self, audio_path: str) -> Tuple[np.ndarray, Parameters]:
-        """
-        Generate the STFT vector for the given file
-        """
-        params = {}
-        n_fft = self.nffts[self.counter % len(self.nffts)]
-        hop_size = self.hop_sizes[self.counter % len(self.hop_sizes)]
-        window_type = self.window_types[self.counter % len(self.window_types)]
-        window_length = self.window_lengths[self.counter % len(self.window_lengths)]
-        center = self.centers[self.counter % len(self.centers)]
-        params["window_length"] = window_length
-        params["n_fft"] = n_fft
-        params["hop_size"] = hop_size
-        params["window_type"] = window_type
-        params["center"] = center
-        params["res_type"] = "soxr_hq"
-
-        y, sr = librosa.load(audio_path)
-        y = y.astype(np.float64)
-        stft = librosa.stft(
-            y,
-            n_fft=n_fft,
-            hop_length=hop_size,
-            win_length=window_length,
-            window=window_type,
-            dtype=np.complex64,
-            center=center,
-        )
-        stft = np.ascontiguousarray(stft, dtype=np.cdouble)
-        params = Parameters(params)
-
-        return (stft, params)
-
-
-generators: list[VectorGenerator] = [TimeSeriesVectorGenerator, STFTVectorGenerator]
+GENERATORS = [WindowVectorGenerator]
 
 if __name__ == "__main__":
-    audio_files = [
-        os.path.join(AUDIO_DIRECTORY, f) for f in os.listdir(AUDIO_DIRECTORY)
-    ]
-    if not os.path.exists(VECTOR_DIRECTORY):
-        os.makedirs(VECTOR_DIRECTORY)
-
-    for generator in generators:
-        generator: VectorGenerator = generator(audio_files, VECTOR_DIRECTORY)
-        generator.generate()
+    for generator in GENERATORS:
+        generator().generate()
