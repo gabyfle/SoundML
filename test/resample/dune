@@ -1,0 +1,5 @@
+(test
+ (name test_resample)
+ (package soundml)
+ (modules resample_config resample_kernel resample_law test_resample)
+ (libraries nx soundml windtrap))
