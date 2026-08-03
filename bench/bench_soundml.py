@@ -20,6 +20,15 @@ import numpy as np
 
 N_WINDOW = 2048
 
+# The stft/mel cases: 30 s of mono audio at librosa's default rate, analysed
+# at fft 2048 and hop 512 with 128 mel bands; keep in sync with the OCaml
+# suite.
+SAMPLE_RATE = 22050
+N_AUDIO = 30 * SAMPLE_RATE
+N_FFT = 2048
+HOP = 512
+N_MELS = 128
+
 # The SoundML window specs and their librosa/scipy spellings. Parametrised
 # specs use representative parameters; keep them in sync with the OCaml suite.
 WINDOW_SPECS: List[Tuple[str, Any]] = [
@@ -53,6 +62,40 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
             return run
 
         benches.append(bench(f"window/{name} {N_WINDOW} (librosa)", make(spec)))
+
+    rng = np.random.default_rng(42)
+    y32 = rng.random(N_AUDIO, dtype=np.float32) * 2.0 - 1.0
+    y64 = y32.astype(np.float64)
+
+    def power_spectrum(y: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            s = librosa.stft(y, n_fft=N_FFT, hop_length=HOP)
+            np.square(np.abs(s))
+
+        return run
+
+    def mel_spectrogram(y: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.feature.melspectrogram(
+                y=y, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP, power=2.0
+            )
+
+        return run
+
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(
+                f"stft/power_spectrum 30s {tag} fft{N_FFT} hop{HOP} (librosa)",
+                power_spectrum(y),
+            )
+        )
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(
+                f"mel/mel_spectrogram 30s {tag} fft{N_FFT} hop{HOP} (librosa)",
+                mel_spectrogram(y),
+            )
+        )
 
     return benches
 

@@ -31,10 +31,11 @@
     dtype-first witness ([transform Nx.complex64 c x] maps float32 audio to a
     complex64 spectrum); OCaml has no implicit type-level mapping from float
     dtypes to complex ones, so the pairing is the caller's choice. Whatever
-    the witness, values are computed in double precision and rounded to the
-    requested dtype once, at the boundary. The real-valued conveniences
-    ({!power_spectrum}, {!power_stage}) are dtype-preserving and never expose
-    a complex dtype.
+    the witness, values are computed in double precision and rounded once
+    into the requested storage, exactly as librosa rounds its double interior
+    into the complex dtype it pairs with the input. The real-valued
+    conveniences ({!power_spectrum}, {!power_stage}) are dtype-preserving and
+    never expose a complex dtype.
 
     Defaults are the Hann window, [hop = fft_size / 4] and centered frames
     over reflect padding; numerical parity with librosa 0.11 is enforced
@@ -198,9 +199,8 @@ val transform :
     of clips is one call.
 
     [transform] is the one-chunk instance of {!Kernel}: one [step] on the
-    whole signal plus the drain. Framing is blocked internally, so peak
-    memory is the output plus a bounded block of framed scratch, never the
-    whole framed signal.
+    whole signal plus the drain. Framing is a zero-copy strided view, so peak
+    memory is the output plus one windowed copy of the framed signal.
 
     Raises [Invalid_argument] if [x] has rank zero. *)
 
@@ -225,8 +225,8 @@ val power_spectrum :
 (** [power_spectrum c x] is [|transform c x| ^ power], shaped
     [[...; bins; frames]], in the dtype of [x]. [power] defaults to [2.] (the
     power spectrum; [1.] is the magnitude spectrum). The complex intermediate
-    never escapes: magnitudes are computed in double precision and cast back
-    once.
+    never escapes: it is stored at the component width matching the dtype of
+    [x], and magnitudes land directly in that dtype.
 
     Raises [Invalid_argument] if [x] has rank zero. *)
 

@@ -14,6 +14,11 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   one-million-sample float32 tensor, next to the hand-written sequence of the
   same three Nx calls. The two rows must stay within a few percent of each
   other; the baseline pins both so either drifting fails the build.
+- `stft` — `Stft.power_spectrum` offline over 30 s of mono audio at
+  22.05 kHz, fft 2048 and hop 512, one row per dtype (float32, float64),
+  mirroring the librosa rows one to one.
+- `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
+  one row per dtype, mirroring the librosa rows one to one.
 
 ## Running the benchmarks
 

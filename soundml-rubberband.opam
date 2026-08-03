@@ -41,6 +41,6 @@ x-maintenance-intent: ["(latest)"]
 pin-depends: [
   [
     "nx.dev"
-    "git+https://github.com/raven-ml/raven.git#d9facbc227ddc80d644bdeff0d94cf76d6a0c07b"
+    "git+https://github.com/gabyfle/raven.git#69aa608f93ae6583a4d9f8d69c233c9f66bc0920"
   ]
 ]
