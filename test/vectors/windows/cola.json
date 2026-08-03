@@ -1,0 +1,26 @@
+{
+"schema": 1,
+"suite": "windows",
+"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"cases": [
+  {"name": "hann_1024_512", "params": {"window": "hann", "length": 1024, "hop": 512}, "expected": true},
+  {"name": "hann_1024_256", "params": {"window": "hann", "length": 1024, "hop": 256}, "expected": true},
+  {"name": "hann_1024_341", "params": {"window": "hann", "length": 1024, "hop": 341}, "expected": false},
+  {"name": "hann_1023_341", "params": {"window": "hann", "length": 1023, "hop": 341}, "expected": true},
+  {"name": "hamming_1024_512", "params": {"window": "hamming", "length": 1024, "hop": 512}, "expected": true},
+  {"name": "blackman_1024_512", "params": {"window": "blackman", "length": 1024, "hop": 512}, "expected": false},
+  {"name": "blackman_1024_256", "params": {"window": "blackman", "length": 1024, "hop": 256}, "expected": true},
+  {"name": "blackman_harris_1024_512", "params": {"window": "blackman_harris", "length": 1024, "hop": 512}, "expected": false},
+  {"name": "blackman_harris_1024_256", "params": {"window": "blackman_harris", "length": 1024, "hop": 256}, "expected": true},
+  {"name": "nuttall_1024_256", "params": {"window": "nuttall", "length": 1024, "hop": 256}, "expected": true},
+  {"name": "flat_top_1024_512", "params": {"window": "flat_top", "length": 1024, "hop": 512}, "expected": false},
+  {"name": "flat_top_1024_128", "params": {"window": "flat_top", "length": 1024, "hop": 128}, "expected": true},
+  {"name": "bartlett_1024_512", "params": {"window": "bartlett", "length": 1024, "hop": 512}, "expected": true},
+  {"name": "rectangular_1024_1024", "params": {"window": "rectangular", "length": 1024, "hop": 1024}, "expected": true},
+  {"name": "rectangular_1024_512", "params": {"window": "rectangular", "length": 1024, "hop": 512}, "expected": true},
+  {"name": "rectangular_100_30", "params": {"window": "rectangular", "length": 100, "hop": 30}, "expected": false},
+  {"name": "kaiser_b8.6_1024_512", "params": {"window": "kaiser", "beta": 8.6, "length": 1024, "hop": 512}, "expected": false},
+  {"name": "gaussian_s2.5_1024_256", "params": {"window": "gaussian", "std": 2.5, "length": 1024, "hop": 256}, "expected": false},
+  {"name": "tukey_a0.5_1024_512", "params": {"window": "tukey", "taper": 0.5, "length": 1024, "hop": 512}, "expected": false}
+]
+}

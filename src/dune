@@ -1,5 +1,5 @@
 (library
  (name soundml)
  (public_name soundml)
- (modules soundml pipeline)
+ (modules soundml pipeline window)
  (libraries nx))
