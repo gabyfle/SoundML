@@ -66,9 +66,12 @@ module Config : sig
   (** The type for validated, immutable resampling configurations. Creation
       reduces the ratio, designs the prototype filter (float64) and lays the
       polyphase bank out phase-major; configs are cheap to share, and one
-      config serves any number of {!apply} calls and prepared kernels —
-      construction is a noticeable fraction of resampling a short clip, so
-      corpus jobs must reuse it. *)
+      config serves any number of {!apply} calls and prepared kernels.
+      Construction is {e not} cheap: the prototype runs tens of thousands of
+      taps (measured, [`High] 44.1 → 48 kHz: about 1 ms, roughly twice the
+      cost of resampling one second of float32 audio), so corpus jobs must
+      build the config once and reuse it — the flat [Soundml.resample]
+      convenience rebuilds it on every call. *)
   type t
 
   val create : ?quality:quality -> sample_rate:int -> target:int -> unit -> t
@@ -162,16 +165,22 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 
     It is numerically {e distinct} from {!apply}: the matrix product sums each
     output in a different order than the executor's fixed dot product, so the
-    two surfaces agree to within a few ULP of the signal peak — growing with
-    the reduced filter's length; measured worst case: under 10 ULP across
-    presets and dtypes at the common conversions (150-800-tap filters), under
-    30 ULP across the full standard-rate matrix (extreme pairs run 1 500+
-    taps) — and are {e never} bit-identical by contract. It is offline-only and carries no partitioning
-    law: it is not a {!Pipeline} stage, it has no streaming form, and it is
-    deliberately not a flag on {!apply} — a flag that changes bits would fork
-    the library's one resampler in place. When bit-stability across
-    partitionings matters, use {!apply} or {!Kernel}; when offline throughput
-    on wide-matmul hardware or differentiability matters, use this.
+    two surfaces agree only to within a small multiple of [peak * 2{^-52}]
+    (float64; [peak * 2{^-23}] at float32, [peak] the largest output
+    magnitude) — a divergence that grows with the reduced filter's length and
+    is {e never} zero by contract. The tested bound is 16 such units across
+    presets and dtypes at the common conversions (150-800-tap filters) and 32
+    across the full standard-rate matrix (extreme pairs run 1 500+ taps):
+    around −290 dBFS at float64, far below every quality threshold. It is
+    offline-only and carries no partitioning law: it is not a {!Pipeline}
+    stage, it has no streaming form, and it is deliberately not a flag on
+    {!apply} — a flag that changes bits would fork the library's one resampler
+    in place. When bit-stability across
+    partitionings matters, use {!apply} or {!Kernel}; when differentiability,
+    device eligibility, or offline float64 throughput matters, use this — the
+    dense form rides the platform GEMM, which multiplies wide float64 far
+    faster than the executor's scalar-width lanes (measured: 2.5-3x on
+    one-second clips), and runs level with the executor at float32.
 
     For the identity configuration it returns [x] itself, like {!apply}.
 
@@ -185,7 +194,13 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     and no divisibility requirement) and emits every output sample that became
     computable; [flush] extends the signal with virtual silence, emits the
     remaining [ceil] tail, and truncates to the exact total. Output chunk
-    lengths vary call to call; that is normal operation. *)
+    lengths vary call to call; that is normal operation.
+
+    Every [step] carries a fixed dispatch cost (tensor bookkeeping and the C
+    call, on the order of a microsecond) on top of the convolution itself:
+    chunks of a few thousand samples amortise it completely, while one-sample
+    steps are dominated by it. Any chunk size is {e correct} — the partition
+    law guarantees identical bits — this is throughput advice only. *)
 
 module Kernel : sig
   (** The type for prepared kernel states. Mutable; single-owner; not

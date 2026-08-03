@@ -3,12 +3,14 @@
    [apply_gemm] promises the same geometry as [apply] — exact output length,
    group-delay compensation, zeros outside the extent — with different bits: the
    matrix product reassociates each output's dot product. The binding contract
-   is a tolerance in ULP of the signal peak, measured here across a seeded
-   corpus of rates, presets and dtypes; the mli documents the measured class
-   ("under 10 ULP of peak"), and this suite enforces it with no slack beyond the
-   next power of two. Geometry, by contrast, is asserted exactly: lengths, batch
-   broadcasting, the identity passthrough, and the error matrix are the same
-   statements the C path already passes. *)
+   is a tolerance in ULP of the signal peak — one unit is [peak * 2^-52]
+   (float64) or [peak * 2^-23] (float32) — measured here across a seeded corpus
+   of rates, presets and dtypes; the mli documents exactly the bound this suite
+   gates (16 units at the common conversions, 32 across the standard-rate matrix
+   in the quality suite), so the documentation and the gate cannot drift apart.
+   Geometry, by contrast, is asserted exactly: lengths, batch broadcasting, the
+   identity passthrough, and the error matrix are the same statements the C path
+   already passes. *)
 
 open Windtrap
 open Soundml
@@ -74,11 +76,11 @@ let rates =
 
 let qualities = [("fast", `Fast); ("high", `High); ("best", `Best)]
 
-(* The binding tolerance: the measured worst case across this corpus is 9.3 ULP
-   of peak (float32, [`Best] — the longest dot products diverge most under the
-   matmul's blocking), recorded in the mli as "under 10 ULP of peak"; the gate
-   is the next power of two so a numerics regression fails before the
-   documentation lies. *)
+(* The binding tolerance, which the mli documents verbatim. The measured worst
+   case across this corpus is 9.3 ULP of peak (float32, [`Best] — the longest
+   dot products diverge most under the matmul's blocking); the gate is the next
+   power of two, leaving margin for backend blocking changes while still failing
+   well before the divergence could matter (~ -290 dBFS at float64). *)
 let tolerance_ulp = 16.
 
 let cross_case name dtype ~ns () =
