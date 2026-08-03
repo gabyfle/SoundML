@@ -33,6 +33,11 @@ module Pipeline = Pipeline
 (** Window-function specifications and their instantiation. *)
 module Window = Window
 
+(** The short-time Fourier transform: offline {!Stft.transform}, the
+    incremental {!Stft.Kernel} and the {!Stft.stage}/{!Stft.power_stage}
+    pipeline stages, all driving one frame grid. *)
+module Stft = Stft
+
 (** Unit and scale conversions: decibels, the mel and MIDI frequency scales,
     and the frame grid. *)
 module Convert = Convert
