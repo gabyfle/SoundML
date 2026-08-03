@@ -9,14 +9,14 @@
 
    Budget rationale, chunk_len = 512, fft_size = 64, hop = 16 (32 frames per
    push): one push runs one boundary-carry copy, one concatenation, one
-   [extract_patches] gather, one cast to double, one window multiply, one
-   batched rfft, one complex [abs], one cast, one square and one cast back —
-   each allocating a tensor record, shape metadata and a custom block on the
-   OCaml heap (the bigarray payloads are malloc'd outside it) — plus closures,
-   options and small slice copies. Measured on OCaml 5.5: ~3.1k minor words/push
-   and ~6 promoted words/push, identical across windows; the budget is ~2x the
-   minor figure, absorbing runtime variation across hosts while still failing
-   any O(history) regression. *)
+   sliding-window view, one window cast and multiply, one batched rfft, one
+   dtype-first complex [abs] and one square — each allocating a tensor record,
+   shape metadata and a custom block on the OCaml heap (the bigarray payloads
+   are malloc'd outside it) — plus closures, options and small slice copies.
+   Measured on OCaml 5.5: ~3.1k minor words/push and ~6 promoted words/push,
+   identical across windows; the budget is ~2x the minor figure, absorbing
+   runtime variation across hosts while still failing any O(history)
+   regression. *)
 
 open Windtrap
 open Soundml
