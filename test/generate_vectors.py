@@ -184,7 +184,98 @@ class WindowVectorGenerator:
         write_suite(self.SUITE, "cola", cases)
 
 
-GENERATORS = [WindowVectorGenerator]
+class DbConversionsVectorGenerator:
+    """Golden vectors for Soundml.Convert's decibel conversions.
+
+    power_to_db and amplitude_to_db against librosa, over synthetic seeded
+    inputs: fixed references, the amin floor (values below it), top_db
+    clamping (including a rank-two input whose threshold is global across
+    rows), negative entries (powers are floored signed, amplitudes are
+    magnitudes), and both element dtypes. Each case stores its input in the
+    params (flattened in C order, exactly representable in the case dtype)
+    and the librosa output in the values.
+    """
+
+    SUITE = "db"
+
+    SEED = 0x5EED
+
+    DTYPES = [np.float32, np.float64]
+
+    def specs(self, rng):
+        def spread(low: float, high: float, size):
+            return np.exp(rng.uniform(np.log(low), np.log(high), size=size))
+
+        return [
+            # values well below the 1e-10 floor: the amin clamp must hit
+            ("power_basic", "power_to_db", 1.0, 1e-10, None, spread(1e-14, 1e3, 64)),
+            ("power_reference", "power_to_db", 2.5, 1e-8, None, spread(1e-12, 1e2, 64)),
+            # librosa floors real powers signed: negative entries pin that
+            (
+                "power_negative",
+                "power_to_db",
+                1.0,
+                1e-10,
+                None,
+                spread(1e-6, 1e2, 32) * rng.choice([-1.0, 1.0], 32),
+            ),
+            ("power_top80", "power_to_db", 1.0, 1e-10, 80.0, spread(1e-12, 1e2, 64)),
+            ("power_top30", "power_to_db", 1.0, 1e-10, 30.0, spread(1e-12, 1e2, 64)),
+            # the clamp threshold is global across both rows
+            (
+                "power_matrix_top20",
+                "power_to_db",
+                1.0,
+                1e-10,
+                20.0,
+                spread(1e-9, 1e3, (2, 32)),
+            ),
+            # values below the 1e-5 amplitude floor, and negative ones
+            (
+                "amplitude_basic",
+                "amplitude_to_db",
+                1.0,
+                1e-5,
+                None,
+                spread(1e-9, 1e2, 64) * rng.choice([-1.0, 1.0], 64),
+            ),
+            ("amplitude_reference", "amplitude_to_db", 0.5, 2e-5, None, spread(1e-7, 1e2, 64)),
+            ("amplitude_top80", "amplitude_to_db", 1.0, 1e-5, 80.0, spread(1e-9, 1e2, 64)),
+        ]
+
+    def generate(self):
+        functions = {
+            "power_to_db": librosa.power_to_db,
+            "amplitude_to_db": librosa.amplitude_to_db,
+        }
+        suites = {name: [] for name in functions}
+        rng = np.random.default_rng(self.SEED)
+        for name, function, reference, amin, top_db, values in self.specs(rng):
+            for dtype in self.DTYPES:
+                x = np.ascontiguousarray(values, dtype=dtype)
+                y = functions[function](x, ref=reference, amin=amin, top_db=top_db)
+                assert y.dtype == x.dtype, (name, x.dtype, y.dtype)
+                suites[function].append(
+                    {
+                        "name": f"{name}_{np.dtype(dtype).name}",
+                        "params": {
+                            "function": function,
+                            "dtype": np.dtype(dtype).name,
+                            "reference": reference,
+                            "amin": amin,
+                            "top_db": top_db,
+                            "input": x.astype(np.float64).flatten().tolist(),
+                        },
+                        "shape": list(y.shape),
+                        "values": y.astype(np.float64).flatten().tolist(),
+                    }
+                )
+        for function, cases in suites.items():
+            write_suite(self.SUITE, function, cases)
+
+
+GENERATORS = [WindowVectorGenerator, DbConversionsVectorGenerator]
+
 
 if __name__ == "__main__":
     for generator in GENERATORS:
