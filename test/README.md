@@ -26,6 +26,12 @@ Current suites:
 - `windows` — every `Soundml.Window` type, periodic and symmetric, at odd
   and even lengths including the 1/2/3-point edge cases, plus
   `scipy.signal.check_COLA` truths for `Window.cola` (`cola.json`).
+- `stft` — `librosa.stft` magnitude and power spectra over a deterministic
+  LCG signal (reproduced bit-exactly on the OCaml side), covering
+  `(fft_size, hop)` combos x centered/left alignment x odd/even lengths x
+  float64/float32, plus `librosa.fft_frequencies` and
+  `librosa.frames_to_time` truths for `Stft.frequencies` and `Stft.times`
+  (`coordinates.json`).
 - `db` — the `Soundml.Convert` decibel conversions (`power_to_db`,
   `amplitude_to_db`) over synthetic seeded inputs: fixed references, the
   `amin` floor, `top_db` clamping (global across a rank-two input),

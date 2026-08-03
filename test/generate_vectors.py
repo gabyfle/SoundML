@@ -184,6 +184,142 @@ class WindowVectorGenerator:
         write_suite(self.SUITE, "cola", cases)
 
 
+class StftVectorGenerator:
+    """Golden vectors for Soundml.Stft.
+
+    Magnitude and power spectra from librosa.stft over a deterministic LCG
+    signal (reproducible bit-exactly in OCaml through integer arithmetic),
+    covering (fft_size, hop) combos x alignment (centered = center=True with
+    reflect padding, left = center=False) x odd/even signal lengths x both
+    float dtypes. The float32 cases quantize the signal to float32 and
+    compute in float64, so the reference isolates input rounding from
+    implementation precision. Also emits librosa.fft_frequencies and
+    librosa.frames_to_time truths for Stft.frequencies and Stft.times.
+    """
+
+    SUITE = "stft"
+
+    SR = 22050
+
+    # (case key, fft_size, hop, win_length or None)
+    COMBOS = [
+        ("fft16_hop4", 16, 4, None),
+        ("fft32_hop7", 32, 7, None),
+        ("fft64_hop16", 64, 16, None),
+        ("fft32_hop8_win20", 32, 8, 20),
+    ]
+
+    LENGTHS = [127, 128]
+
+    @staticmethod
+    def lcg_signal(n, seed=20250803):
+        """A length-n float64 signal from a 31-bit LCG: every operation is
+        integer arithmetic plus one exact float64 division, so OCaml
+        reproduces the values bit-for-bit."""
+        values = []
+        state = seed
+        for _ in range(n):
+            state = (1103515245 * state + 12345) % (1 << 31)
+            values.append(state / float(1 << 30) - 1.0)
+        return np.asarray(values, dtype=np.float64)
+
+    def spectra_cases(self, fft_size, hop, win_length):
+        cases = []
+        wl = win_length if win_length is not None else fft_size
+        for length in self.LENGTHS:
+            base = self.lcg_signal(length)
+            for dtype, y in (
+                ("float64", base),
+                ("float32", base.astype(np.float32).astype(np.float64)),
+            ):
+                for alignment, center in (("centered", True), ("left", False)):
+                    spectrum = librosa.stft(
+                        y,
+                        n_fft=fft_size,
+                        hop_length=hop,
+                        win_length=wl,
+                        window="hann",
+                        center=center,
+                        pad_mode="reflect",
+                        dtype=np.complex128,
+                    )
+                    for kind, expected in (
+                        ("magnitude", np.abs(spectrum)),
+                        ("power", np.abs(spectrum) ** 2),
+                    ):
+                        params = {
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "win_length": wl,
+                            "alignment": alignment,
+                            "length": length,
+                            "dtype": dtype,
+                            "kind": kind,
+                        }
+                        cases.append(
+                            {
+                                "name": (
+                                    f"{kind}_{alignment}_{dtype}_n{length}"
+                                ),
+                                "params": params,
+                                "shape": list(expected.shape),
+                                "values": expected.flatten().tolist(),
+                            }
+                        )
+        return cases
+
+    def coordinate_cases(self):
+        cases = []
+        for key, fft_size, hop, _ in self.COMBOS:
+            frequencies = librosa.fft_frequencies(sr=self.SR, n_fft=fft_size)
+            cases.append(
+                {
+                    "name": f"frequencies_{key}",
+                    "params": {
+                        "fft_size": fft_size,
+                        "hop": hop,
+                        "sample_rate": self.SR,
+                        "kind": "frequencies",
+                    },
+                    "shape": list(frequencies.shape),
+                    "values": frequencies.tolist(),
+                }
+            )
+            for alignment, center in (("centered", True), ("left", False)):
+                for length in self.LENGTHS:
+                    if center:
+                        count = 1 + (length + 2 * (fft_size // 2) - fft_size) // hop
+                    else:
+                        count = 1 + (length - fft_size) // hop
+                    times = librosa.frames_to_time(
+                        np.arange(count), sr=self.SR, hop_length=hop
+                    )
+                    cases.append(
+                        {
+                            "name": f"times_{key}_{alignment}_n{length}",
+                            "params": {
+                                "fft_size": fft_size,
+                                "hop": hop,
+                                "sample_rate": self.SR,
+                                "alignment": alignment,
+                                "length": length,
+                                "kind": "times",
+                            },
+                            "shape": list(times.shape),
+                            "values": times.tolist(),
+                        }
+                    )
+        return cases
+
+    def generate(self):
+        for key, fft_size, hop, win_length in self.COMBOS:
+            write_suite(
+                self.SUITE, key, self.spectra_cases(fft_size, hop, win_length)
+            )
+        write_suite(self.SUITE, "coordinates", self.coordinate_cases())
+
+
+
 class DbConversionsVectorGenerator:
     """Golden vectors for Soundml.Convert's decibel conversions.
 
@@ -274,8 +410,12 @@ class DbConversionsVectorGenerator:
             write_suite(self.SUITE, function, cases)
 
 
-GENERATORS = [WindowVectorGenerator, DbConversionsVectorGenerator]
 
+GENERATORS = [
+    WindowVectorGenerator,
+    StftVectorGenerator,
+    DbConversionsVectorGenerator,
+]
 
 if __name__ == "__main__":
     for generator in GENERATORS:
