@@ -2,4 +2,4 @@
  (name test_pipeline)
  (package soundml)
  (modules toys test_law test_alloc accept_causal_stream test_pipeline)
- (libraries soundml nx alcotest))
+ (libraries soundml nx windtrap))

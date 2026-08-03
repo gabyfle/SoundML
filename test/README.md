@@ -19,7 +19,7 @@ elementwise parity with per-dtype tolerances — float64 near-exact
 (`1e-12` relative), float32 at `1e-6` relative. New modules (mel, STFT,
 ...) plug into the same pattern: add a generator class to
 `generate_vectors.py`, commit the vectors it writes, and load them through
-`Tutils.Golden` from an Alcotest suite.
+`Tutils.Golden` from a Windtrap suite.
 
 Current suites:
 

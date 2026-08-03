@@ -23,6 +23,15 @@
  (package
   (name nx)))
 
+; thumper is not published to the opam repository yet: pin it the way nx is
+; pinned, to a fixed commit so the lock is reproducible.
+
+(pin
+ (url
+  "git+https://github.com/invariant-hq/thumper.git#0d42dc6964e30525b0595b6d5be04a1eda76c90e")
+ (package
+  (name thumper)))
+
 (package
  (name soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
@@ -35,7 +44,8 @@
   (nx
    (= dev))
   (odoc :with-doc)
-  (alcotest :with-test)
+  (windtrap :with-test)
+  (thumper :with-test)
   (yojson :with-test))
  (tags
   (sound spectrogram fourier digital-filters)))
@@ -60,7 +70,7 @@
   (conf-samplerate :build)
   (dune-configurator :build)
   (odoc :with-doc)
-  (alcotest :with-test))
+  (windtrap :with-test))
  (tags
   (sound audio file-io resampling)))
 
@@ -83,6 +93,6 @@
   (conf-rubberband :build)
   (dune-configurator :build)
   (odoc :with-doc)
-  (alcotest :with-test))
+  (windtrap :with-test))
  (tags
   (sound audio time-stretching pitch-shifting)))
