@@ -1,0 +1,42 @@
+; Must-not-compile gate: [Stream.prepare] applied to an offline pipeline is
+; rejected by the compiler with an error naming the capability types. The
+; companion must-compile test (a causal value used by both drivers) is
+; [../accept_causal_stream.ml], part of the test executable.
+
+(rule
+ (copy %{lib:soundml:soundml.cmi} soundml.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__.cmi} soundml__.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__Pipeline.cmi} soundml__Pipeline.cmi))
+
+; OCAMLLIB points %{ocamlc} at its standard library explicitly: the compiler
+; resolves it relative to its own path, which a sandboxed run breaks.
+
+(rule
+ (targets reject_offline_stream.err)
+ (deps
+  soundml.cmi
+  soundml__.cmi
+  soundml__Pipeline.cmi
+  (:src reject_offline_stream.ml))
+ (action
+  (setenv
+   OCAMLLIB
+   %{ocaml_where}
+   (with-accepted-exit-codes
+    2
+    (with-stderr-to
+     %{targets}
+     (run %{ocamlc} -color never -I . -c %{src}))))))
+
+(rule
+ (alias runtest)
+ (deps reject_offline_stream.err)
+ (action
+  (progn
+   (run grep -q "Soundml.Pipeline.offline" %{deps})
+   (run grep -q "Soundml.Pipeline.causal" %{deps})
+   (run grep -q "is not compatible with" %{deps}))))
