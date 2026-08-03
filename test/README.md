@@ -37,6 +37,13 @@ Current suites:
   `amin` floor, `top_db` clamping (global across a rank-two input),
   negative entries, both element dtypes. Each case stores its input in the
   params, flattened in C order.
+- `mel` — `librosa.filters.mel` weight matrices (Slaney and HTK scales x
+  slaney/no-op norms over several `(n_mels, fft_size)` geometries,
+  including a nonzero `fmin` and an `fmax` pinned at Nyquist), plus
+  `librosa.feature.melspectrogram` and `librosa.feature.mfcc` end-to-end
+  over the LCG signal — `n_mfcc` 13 and 20, lifter 0 and 22, both element
+  dtypes, and a decaying-envelope case that drives the log-mel through
+  librosa's `top_db` clamp and `amin` floor.
 
 ## Regenerating the vectors
 

@@ -1,0 +1,7 @@
+(test
+ (name test_mel)
+ (package soundml)
+ (modules mel_goldens mel_props mel_law mel_alloc accept_chain test_mel)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files ../vectors/mel/*.json)))

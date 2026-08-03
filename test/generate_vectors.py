@@ -364,6 +364,260 @@ class StftVectorGenerator:
 
 
 
+class MelVectorGenerator:
+    """Golden vectors for Soundml.Mel and the flat mel features.
+
+    Three files:
+
+    - filterbank: librosa.filters.mel weight matrices in float64, covering
+      the Slaney and HTK scales x the slaney and no-op norms across several
+      (n_mels, fft_size) geometries, including a nonzero fmin and an fmax
+      pinned exactly at Nyquist.
+    - mel_spectrogram: librosa.feature.melspectrogram end-to-end over the
+      deterministic LCG signal (reproduced bit-exactly in OCaml), with
+      pad_mode, htk and norm always passed explicitly and the filterbank
+      computed in float64 (dtype=np.float64), so the reference carries no
+      float32 quantisation of its own.
+    - mfcc: librosa.feature.mfcc end-to-end (n_mfcc 13 and 20, lifter 0 and
+      22, both scales), including a decaying-envelope case whose dynamic
+      range exceeds 80 dB so the top_db clamp and the amin floor inside
+      librosa's log-mel are both exercised.
+
+    float32 cases quantize the signal to float32 and compute the reference
+    in float64, exactly like the stft suite: the reference isolates input
+    rounding from implementation precision.
+    """
+
+    SUITE = "mel"
+
+    SEED = 20260803
+
+    # (case key, sample_rate, fft_size, n_mels, fmin, fmax, [(scale, norm)])
+    FILTERBANKS = [
+        ("fft512_mel40", 22050, 512, 40, 0.0, None, [("slaney", "slaney")]),
+        ("fft256_mel32", 22050, 256, 32, 0.0, None, [("htk", "none")]),
+        (
+            "fft128_mel13_bounds",
+            16000,
+            128,
+            13,
+            300.0,
+            8000.0,
+            [
+                ("slaney", "slaney"),
+                ("slaney", "none"),
+                ("htk", "slaney"),
+                ("htk", "none"),
+            ],
+        ),
+        (
+            "fft64_mel8_narrow",
+            8000,
+            64,
+            8,
+            100.0,
+            4000.0,
+            [
+                ("slaney", "slaney"),
+                ("slaney", "none"),
+                ("htk", "slaney"),
+                ("htk", "none"),
+            ],
+        ),
+    ]
+
+    @staticmethod
+    def signal(n, envelope=False, seed=SEED):
+        """The 31-bit LCG signal of the stft suite under this suite's seed,
+        optionally shaped by an exp(-12 i / n) envelope whose ~104 dB power
+        decay drives librosa's log-mel through both its top_db clamp and its
+        amin floor."""
+        base = StftVectorGenerator.lcg_signal(n, seed=seed)
+        if not envelope:
+            return base
+        return base * np.exp(-12.0 * np.arange(n, dtype=np.float64) / n)
+
+    @staticmethod
+    def mel_kwargs(n_mels, fmin, fmax, scale, norm):
+        return {
+            "n_mels": n_mels,
+            "fmin": fmin,
+            "fmax": fmax,
+            "htk": scale == "htk",
+            "norm": None if norm == "none" else norm,
+            "dtype": np.float64,
+        }
+
+    def filterbank_cases(self):
+        cases = []
+        for key, sr, fft_size, n_mels, fmin, fmax, combos in self.FILTERBANKS:
+            for scale, norm in combos:
+                weights = librosa.filters.mel(
+                    sr=sr,
+                    n_fft=fft_size,
+                    **self.mel_kwargs(n_mels, fmin, fmax, scale, norm),
+                )
+                assert weights.shape == (n_mels, 1 + fft_size // 2)
+                assert weights.dtype == np.float64
+                cases.append(
+                    {
+                        "name": f"{key}_{scale}_{norm}",
+                        "params": {
+                            "sample_rate": sr,
+                            "fft_size": fft_size,
+                            "n_mels": n_mels,
+                            "f_min": fmin,
+                            "f_max": fmax,
+                            "scale": scale,
+                            "norm": norm,
+                        },
+                        "shape": list(weights.shape),
+                        "values": weights.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    # (case key, sample_rate, fft_size, hop, length, n_mels, fmin, fmax,
+    #  scale, norm, power, alignment, dtypes)
+    SPECTROGRAMS = [
+        ("base", 22050, 512, 128, 1000, 40, 0.0, None, "slaney", "slaney",
+         2.0, "centered", ["float64", "float32"]),
+        ("magnitude", 22050, 512, 128, 1000, 40, 0.0, None, "slaney",
+         "slaney", 1.0, "centered", ["float64"]),
+        ("htk_none", 22050, 512, 128, 1000, 40, 0.0, None, "htk", "none",
+         2.0, "centered", ["float64", "float32"]),
+        ("left", 22050, 256, 64, 512, 32, 0.0, None, "slaney", "slaney",
+         2.0, "left", ["float64"]),
+        ("bounds", 16000, 128, 32, 400, 13, 300.0, 8000.0, "slaney",
+         "slaney", 2.0, "centered", ["float64", "float32"]),
+    ]
+
+    def spectrogram_cases(self):
+        cases = []
+        for (key, sr, fft_size, hop, length, n_mels, fmin, fmax, scale,
+             norm, power, alignment, dtypes) in self.SPECTROGRAMS:
+            base = self.signal(length)
+            for dtype in dtypes:
+                y = (
+                    base
+                    if dtype == "float64"
+                    else base.astype(np.float32).astype(np.float64)
+                )
+                expected = librosa.feature.melspectrogram(
+                    y=y,
+                    sr=sr,
+                    n_fft=fft_size,
+                    hop_length=hop,
+                    win_length=fft_size,
+                    window="hann",
+                    center=alignment == "centered",
+                    pad_mode="reflect",
+                    power=power,
+                    **self.mel_kwargs(n_mels, fmin, fmax, scale, norm),
+                )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "sample_rate": sr,
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "length": length,
+                            "n_mels": n_mels,
+                            "f_min": fmin,
+                            "f_max": fmax,
+                            "scale": scale,
+                            "norm": norm,
+                            "power": power,
+                            "alignment": alignment,
+                            "dtype": dtype,
+                            "envelope": False,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    # (case key, n_mfcc, lifter, scale, envelope, dtypes) over the base
+    # geometry, plus one bounded-filterbank geometry appended below.
+    MFCCS = [
+        ("n20_lifter0", 20, 0.0, "slaney", False, ["float64", "float32"]),
+        ("n13_lifter22", 13, 22.0, "slaney", False, ["float64", "float32"]),
+        ("n13_htk", 13, 0.0, "htk", False, ["float64"]),
+        ("n20_lifter22", 20, 22.0, "slaney", False, ["float64"]),
+        ("clamped", 20, 0.0, "slaney", True, ["float64", "float32"]),
+    ]
+
+    def mfcc_cases(self):
+        geometries = {
+            "base": (22050, 512, 128, 1000, 40, 0.0, None),
+            "bounds": (16000, 128, 32, 400, 13, 300.0, 8000.0),
+        }
+        specs = [("base",) + spec for spec in self.MFCCS]
+        specs.append(("bounds", "n13_bounds", 13, 0.0, "slaney", False,
+                      ["float64"]))
+        cases = []
+        for geometry, key, n_mfcc, lifter, scale, envelope, dtypes in specs:
+            sr, fft_size, hop, length, n_mels, fmin, fmax = geometries[
+                geometry
+            ]
+            base = self.signal(length, envelope=envelope)
+            for dtype in dtypes:
+                y = (
+                    base
+                    if dtype == "float64"
+                    else base.astype(np.float32).astype(np.float64)
+                )
+                kwargs = self.mel_kwargs(n_mels, fmin, fmax, scale, "slaney")
+                del kwargs["norm"]  # mfcc's own norm is the DCT's
+                expected = librosa.feature.mfcc(
+                    y=y,
+                    sr=sr,
+                    n_mfcc=n_mfcc,
+                    dct_type=2,
+                    norm="ortho",
+                    lifter=lifter,
+                    n_fft=fft_size,
+                    hop_length=hop,
+                    win_length=fft_size,
+                    window="hann",
+                    center=True,
+                    pad_mode="reflect",
+                    power=2.0,
+                    **kwargs,
+                )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "sample_rate": sr,
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "length": length,
+                            "n_mels": n_mels,
+                            "f_min": fmin,
+                            "f_max": fmax,
+                            "scale": scale,
+                            "norm": "slaney",
+                            "n_mfcc": n_mfcc,
+                            "lifter": lifter,
+                            "alignment": "centered",
+                            "dtype": dtype,
+                            "envelope": envelope,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "filterbank", self.filterbank_cases())
+        write_suite(self.SUITE, "mel_spectrogram", self.spectrogram_cases())
+        write_suite(self.SUITE, "mfcc", self.mfcc_cases())
+
+
 class DbConversionsVectorGenerator:
     """Golden vectors for Soundml.Convert's decibel conversions.
 
@@ -458,6 +712,7 @@ class DbConversionsVectorGenerator:
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
+    MelVectorGenerator,
     DbConversionsVectorGenerator,
 ]
 
