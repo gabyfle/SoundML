@@ -1,5 +1,16 @@
 (library
  (name soundml)
  (public_name soundml)
- (modules soundml pipeline window stft convert db mel)
+ (modules
+  soundml
+  pipeline
+  window
+  stft
+  convert
+  db
+  mel
+  spectral
+  energy
+  contrast
+  onset)
  (libraries nx))

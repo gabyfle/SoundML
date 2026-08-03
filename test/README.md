@@ -44,6 +44,28 @@ Current suites:
   over the LCG signal — `n_mfcc` 13 and 20, lifter 0 and 22, both element
   dtypes, and a decaying-envelope case that drives the log-mel through
   librosa's `top_db` clamp and `amin` floor.
+- `features_spectral` — the flat spectral-shape features
+  (`spectral_centroid`, `spectral_bandwidth`, `spectral_rolloff`,
+  `spectral_flatness`) against `librosa.feature.*` over |LCG| magnitude
+  spectrograms reproduced bit-exactly (several geometries, a batched
+  rank-three input, a custom non-uniform frequency grid, both element
+  dtypes) and end-to-end from the LCG signal through
+  `Stft.power_spectrum ~power:1.`.
+- `features_energy` — the flat energy features: `librosa.feature.rms` over
+  audio (constant-zero centered padding) and over synthetic magnitude
+  spectrograms (the `S=` path, halved DC/Nyquist bins), and
+  `librosa.feature.zero_crossing_rate` (edge-copy centered padding) with
+  explicit thresholds 0 and 0.5 beside the 1e-10 default — the librosa
+  defaults and small `(frame_length, hop)` geometries including an odd
+  frame length and `hop > frame_length`, a stereo case, both element
+  dtypes.
+- `features_onset` — `librosa.feature.spectral_contrast` over LCG magnitude
+  spectrograms (default and large quantiles pinning numpy's half-to-even
+  band sizing, linear and logarithmic differences, a silence tail driving
+  the `amin` floor and the global `top_db` clamp) and
+  `librosa.onset.onset_strength` end-to-end on its default log-power-mel
+  chain (lags 1-3, centered and left alignment, degenerate short signals,
+  the >80 dB envelope), both element dtypes.
 
 ## Regenerating the vectors
 

@@ -91,4 +91,48 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
     in
     Nx.cast dtype cepstrum
 
+(* Spectral-shape features: flat delegations to the private [Spectral]
+   module. *)
+
+let spectral_centroid = Spectral.centroid
+
+let spectral_centroid_stage = Spectral.centroid_stage
+
+let spectral_bandwidth = Spectral.bandwidth
+
+let spectral_bandwidth_stage = Spectral.bandwidth_stage
+
+let spectral_rolloff = Spectral.rolloff
+
+let spectral_rolloff_stage = Spectral.rolloff_stage
+
+let spectral_flatness = Spectral.flatness
+
+let spectral_flatness_stage = Spectral.flatness_stage
+
+(* Energy features: flat delegations to the private [Energy] module. *)
+
+let rms = Energy.rms
+
+let rms_of_spectrogram = Energy.rms_of_spectrogram
+
+let rms_stage = Energy.rms_stage
+
+let zero_crossing_rate = Energy.zero_crossing_rate
+
+let zero_crossing_rate_stage = Energy.zero_crossing_rate_stage
+
+(* Spectral contrast and onset strength: flat delegations to the private
+   [Contrast] and [Onset] modules. *)
+
+let spectral_contrast = Contrast.spectral_contrast
+
+let spectral_contrast_of_spectrogram = Contrast.spectral_contrast_of_spectrogram
+
+let spectral_contrast_stage = Contrast.stage
+
+let onset_strength = Onset.onset_strength
+
+let onset_strength_stage = Onset.stage
+
 let version = "0.1.0-dev"

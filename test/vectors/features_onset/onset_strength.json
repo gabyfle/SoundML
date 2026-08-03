@@ -1,0 +1,16 @@
+{
+"schema": 1,
+"suite": "features_onset",
+"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"cases": [
+  {"name": "base_float64", "params": {"sample_rate": 22050, "fft_size": 512, "hop": 128, "length": 1000, "n_mels": 40, "lag": 1, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [8], "values": [0.0, 0.0, 0.0, 1.0513757006010929, 0.8022994978624556, 1.7447940026634172, 1.0612994209534143, 1.188215299777118]},
+  {"name": "base_float32", "params": {"sample_rate": 22050, "fft_size": 512, "hop": 128, "length": 1000, "n_mels": 40, "lag": 1, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float32"}, "shape": [8], "values": [0.0, 0.0, 0.0, 1.0513756996512214, 0.8022994992742853, 1.7447939814553173, 1.061299421042191, 1.1882152998513118]},
+  {"name": "lag2_float64", "params": {"sample_rate": 22050, "fft_size": 512, "hop": 128, "length": 1000, "n_mels": 40, "lag": 2, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [8], "values": [0.0, 0.0, 0.0, 0.0, 1.5589247686938905, 1.8315895760131329, 2.2629842313139648, 1.4585370087324783]},
+  {"name": "lag3_small_float64", "params": {"sample_rate": 8000, "fft_size": 128, "hop": 32, "length": 400, "n_mels": 13, "lag": 3, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [13], "values": [0.0, 0.0, 0.0, 0.0, 0.0, 2.8655579901357955, 2.109152170609726, 0.988280778647076, 0.4059480361826667, 0.676081484198336, 1.2808352241523862, 1.046047324701332, 1.4348926813508553]},
+  {"name": "left_float64", "params": {"sample_rate": 8000, "fft_size": 128, "hop": 32, "length": 400, "n_mels": 13, "lag": 1, "alignment": "left", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [9], "values": [0.0, 0.7754218892469293, 0.7151306111724401, 0.8159449915732572, 0.33425582684786737, 1.6382068243331114, 0.884969490966104, 0.8648787607780739, 1.6271218747725003]},
+  {"name": "short_partial_float64", "params": {"sample_rate": 8000, "fft_size": 64, "hop": 16, "length": 80, "n_mels": 6, "lag": 2, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [6], "values": [0.0, 0.0, 0.0, 0.0, 1.318963885128466, 1.7570975186468623]},
+  {"name": "short_degenerate_float64", "params": {"sample_rate": 8000, "fft_size": 64, "hop": 16, "length": 80, "n_mels": 6, "lag": 7, "alignment": "centered", "envelope": false, "silence_tail": false, "dtype": "float64"}, "shape": [6], "values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+  {"name": "envelope_float64", "params": {"sample_rate": 22050, "fft_size": 512, "hop": 128, "length": 1000, "n_mels": 40, "lag": 1, "alignment": "centered", "envelope": true, "silence_tail": false, "dtype": "float64"}, "shape": [8], "values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+  {"name": "envelope_float32", "params": {"sample_rate": 22050, "fft_size": 512, "hop": 128, "length": 1000, "n_mels": 40, "lag": 1, "alignment": "centered", "envelope": true, "silence_tail": false, "dtype": "float32"}, "shape": [8], "values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+]
+}
