@@ -709,11 +709,642 @@ class DbConversionsVectorGenerator:
 
 
 
+class SpectralFeaturesVectorGenerator:
+    """Golden vectors for the flat spectral-shape features
+    (spectral_centroid, spectral_bandwidth, spectral_rolloff,
+    spectral_flatness), one file per feature.
+
+    Direct-spectrogram cases feed librosa.feature.* a magnitude tensor
+    reproduced bit-exactly on the OCaml side: the 31-bit LCG of the stft
+    suite under this suite's seed, absolute value, C-order reshape. They
+    cover several (bins, frames, sample_rate) geometries, a batched
+    rank-three input, a custom non-uniform frequency grid (exact
+    triangular-number arithmetic) and both element dtypes; float32 cases
+    quantize the magnitudes to float32 and compute the reference in
+    float64, exactly like the stft and mel suites.
+
+    End-to-end cases run librosa.feature.* from the LCG signal with
+    center=True and pad_mode="reflect" passed explicitly (the OCaml side
+    computes the magnitude spectrogram with Stft.power_spectrum ~power:1.).
+    Rolloff has no float32 end-to-end case: its output is a discrete bin
+    choice, and float32 spectrogram rounding could flip the threshold bin
+    against a float64 reference.
+    """
+
+    SUITE = "features_spectral"
+
+    SEED = 20261024
+
+    SR = 22050
+
+    # end-to-end geometry
+    LENGTH = 400
+
+    FFT_SIZE = 128
+
+    HOP = 32
+
+    @classmethod
+    def magnitudes(cls, shape, dtype):
+        n = int(np.prod(shape))
+        base = np.abs(StftVectorGenerator.lcg_signal(n, seed=cls.SEED))
+        if dtype == "float32":
+            base = base.astype(np.float32).astype(np.float64)
+        return base.reshape(shape)
+
+    @staticmethod
+    def triangular_freqs(bins):
+        """An increasing non-uniform grid in exact integer arithmetic:
+        10 * (k + 1) * (k + 2) / 2 for bin k."""
+        return np.array([10.0 * (k + 1) * (k + 2) / 2 for k in range(bins)])
+
+    def spectrogram_case(self, function, name, shape, sr, dtype, *,
+                         triangular=False, squared=False, **feature_kwargs):
+        s = self.magnitudes(shape, dtype)
+        if squared:
+            s = s**2
+        kwargs = dict(feature_kwargs)
+        params = {
+            "function": function.__name__,
+            "source": "spectrogram",
+            "shape_s": list(shape),
+            "dtype": dtype,
+            **{k: v for k, v in feature_kwargs.items()},
+        }
+        if function is not librosa.feature.spectral_flatness:
+            params["sample_rate"] = sr
+            kwargs["sr"] = sr
+            if triangular:
+                kwargs["freq"] = self.triangular_freqs(shape[-2])
+        params["freqs"] = "triangular" if triangular else "fft"
+        params["squared"] = squared
+        expected = function(S=s, **kwargs)
+        return {
+            "name": name,
+            "params": params,
+            "shape": list(expected.shape),
+            "values": expected.flatten().tolist(),
+        }
+
+    def signal_case(self, function, name, dtype, **feature_kwargs):
+        base = StftVectorGenerator.lcg_signal(self.LENGTH, seed=self.SEED)
+        y = (
+            base
+            if dtype == "float64"
+            else base.astype(np.float32).astype(np.float64)
+        )
+        kwargs = dict(feature_kwargs)
+        params = {
+            "function": function.__name__,
+            "source": "signal",
+            "length": self.LENGTH,
+            "fft_size": self.FFT_SIZE,
+            "hop": self.HOP,
+            "dtype": dtype,
+            "freqs": "fft",
+            "squared": False,
+            **{k: v for k, v in feature_kwargs.items()},
+        }
+        if function is not librosa.feature.spectral_flatness:
+            params["sample_rate"] = self.SR
+            kwargs["sr"] = self.SR
+        expected = function(
+            y=y,
+            n_fft=self.FFT_SIZE,
+            hop_length=self.HOP,
+            win_length=self.FFT_SIZE,
+            window="hann",
+            center=True,
+            pad_mode="reflect",
+            **kwargs,
+        )
+        return {
+            "name": name,
+            "params": params,
+            "shape": list(expected.shape),
+            "values": expected.flatten().tolist(),
+        }
+
+    def centroid_cases(self):
+        f = librosa.feature.spectral_centroid
+        return [
+            self.spectrogram_case(f, "s9x12_float64", (9, 12), 22050, "float64"),
+            self.spectrogram_case(f, "s9x12_float32", (9, 12), 22050, "float32"),
+            self.spectrogram_case(
+                f, "s17x7_sr8000_float64", (17, 7), 8000, "float64"
+            ),
+            self.spectrogram_case(
+                f, "batch2x9x5_float64", (2, 9, 5), 22050, "float64"
+            ),
+            self.spectrogram_case(
+                f, "s9x12_triangular_float64", (9, 12), 22050, "float64",
+                triangular=True,
+            ),
+            self.signal_case(f, "signal_float64", "float64"),
+            self.signal_case(f, "signal_float32", "float32"),
+        ]
+
+    def bandwidth_cases(self):
+        f = librosa.feature.spectral_bandwidth
+        return [
+            self.spectrogram_case(
+                f, "s9x12_p2_float64", (9, 12), 22050, "float64", p=2.0
+            ),
+            self.spectrogram_case(
+                f, "s9x12_p2_float32", (9, 12), 22050, "float32", p=2.0
+            ),
+            self.spectrogram_case(
+                f, "s9x12_p3_float64", (9, 12), 22050, "float64", p=3.0
+            ),
+            self.spectrogram_case(
+                f, "s17x7_sr8000_p1_float64", (17, 7), 8000, "float64", p=1.0
+            ),
+            self.spectrogram_case(
+                f, "batch2x9x5_p2_float64", (2, 9, 5), 22050, "float64", p=2.0
+            ),
+            self.spectrogram_case(
+                f, "s9x12_triangular_p2_float64", (9, 12), 22050, "float64",
+                triangular=True, p=2.0,
+            ),
+            self.signal_case(f, "signal_p2_float64", "float64", p=2.0),
+            self.signal_case(f, "signal_p2_float32", "float32", p=2.0),
+        ]
+
+    def rolloff_cases(self):
+        f = librosa.feature.spectral_rolloff
+        return [
+            self.spectrogram_case(
+                f, "s9x12_r85_float64", (9, 12), 22050, "float64",
+                roll_percent=0.85,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_r85_float32", (9, 12), 22050, "float32",
+                roll_percent=0.85,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_r01_float64", (9, 12), 22050, "float64",
+                roll_percent=0.01,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_r50_float64", (9, 12), 22050, "float64",
+                roll_percent=0.5,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_r99_float64", (9, 12), 22050, "float64",
+                roll_percent=0.99,
+            ),
+            self.spectrogram_case(
+                f, "s17x7_sr8000_r85_float64", (17, 7), 8000, "float64",
+                roll_percent=0.85,
+            ),
+            self.spectrogram_case(
+                f, "batch2x9x5_r85_float64", (2, 9, 5), 22050, "float64",
+                roll_percent=0.85,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_triangular_r85_float64", (9, 12), 22050, "float64",
+                triangular=True, roll_percent=0.85,
+            ),
+            self.signal_case(f, "signal_r85_float64", "float64",
+                             roll_percent=0.85),
+            self.signal_case(f, "signal_r99_float64", "float64",
+                             roll_percent=0.99),
+        ]
+
+    def flatness_cases(self):
+        f = librosa.feature.spectral_flatness
+        return [
+            self.spectrogram_case(
+                f, "s9x12_float64", (9, 12), 22050, "float64",
+                amin=1e-10, power=2.0,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_float32", (9, 12), 22050, "float32",
+                amin=1e-10, power=2.0,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_power1_squared_float64", (9, 12), 22050, "float64",
+                squared=True, amin=1e-10, power=1.0,
+            ),
+            self.spectrogram_case(
+                f, "s9x12_amin1e3_float64", (9, 12), 22050, "float64",
+                amin=1e-3, power=2.0,
+            ),
+            self.spectrogram_case(
+                f, "s17x7_float64", (17, 7), 22050, "float64",
+                amin=1e-10, power=2.0,
+            ),
+            self.spectrogram_case(
+                f, "batch2x9x5_float64", (2, 9, 5), 22050, "float64",
+                amin=1e-10, power=2.0,
+            ),
+            self.signal_case(f, "signal_float64", "float64",
+                             amin=1e-10, power=2.0),
+            self.signal_case(f, "signal_float32", "float32",
+                             amin=1e-10, power=2.0),
+        ]
+
+    def generate(self):
+        write_suite(self.SUITE, "spectral_centroid", self.centroid_cases())
+        write_suite(self.SUITE, "spectral_bandwidth", self.bandwidth_cases())
+        write_suite(self.SUITE, "spectral_rolloff", self.rolloff_cases())
+        write_suite(self.SUITE, "spectral_flatness", self.flatness_cases())
+
+
+class EnergyFeaturesVectorGenerator:
+    """Golden vectors for the flat energy features (Soundml.rms,
+    Soundml.rms_of_spectrogram, Soundml.zero_crossing_rate).
+
+    Three files, all over the deterministic LCG stream of the stft suite
+    under this suite's seed (reproduced bit-exactly in OCaml):
+
+    - rms: librosa.feature.rms over audio, with center and pad_mode passed
+      explicitly at their librosa 0.11 defaults (constant-zero centered
+      padding) and the reference computed in float64 (dtype=np.float64),
+      covering the true defaults, small (frame_length, hop) geometries
+      including an odd frame length and hop > frame_length, frame_length 1,
+      and a stereo case (C-order reshape of the stream).
+    - rms_spectrogram: librosa.feature.rms on the S= path over synthetic
+      magnitude spectrograms (|LCG values| reshaped in C order), pinning the
+      halved DC bin, the even-length Nyquist halving and its absence for an
+      odd frame length.
+    - zero_crossing_rate: librosa.feature.zero_crossing_rate (edge-copy
+      centered padding, hard-wired there), with explicit thresholds 0 and
+      0.5 beside the 1e-10 default.
+
+    float32 cases quantize the input to float32 and compute the reference in
+    float64, exactly like the stft suite: the reference isolates input
+    rounding from implementation precision.
+    """
+
+    SUITE = "features_energy"
+
+    SEED = 20260812
+
+    def signal(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    # (case key, frame_length, hop, length, channels, dtypes)
+    RMS_CASES = [
+        ("defaults", 2048, 512, 3000, 1, ["float64", "float32"]),
+        ("fl16_hop4", 16, 4, 100, 1, ["float64", "float32"]),
+        ("fl15_hop7_odd", 15, 7, 64, 1, ["float64"]),
+        ("fl8_hop11_gap", 8, 11, 60, 1, ["float64"]),
+        ("fl1_hop3", 1, 3, 20, 1, ["float64"]),
+        ("fl16_hop4_stereo", 16, 4, 80, 2, ["float64"]),
+    ]
+
+    def rms_cases(self):
+        cases = []
+        for key, frame_length, hop, length, channels, dtypes in self.RMS_CASES:
+            base = self.signal(channels * length)
+            if channels > 1:
+                base = base.reshape(channels, length)
+            for dtype in dtypes:
+                y = self.quantize(base, dtype)
+                expected = librosa.feature.rms(
+                    y=y,
+                    frame_length=frame_length,
+                    hop_length=hop,
+                    center=True,
+                    pad_mode="constant",
+                    dtype=np.float64,
+                )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "frame_length": frame_length,
+                            "hop": hop,
+                            "length": length,
+                            "channels": channels,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    # (case key, frame_length, frames, channels, dtypes)
+    RMS_SPECTROGRAM_CASES = [
+        ("fl16", 16, 12, 1, ["float64", "float32"]),
+        ("fl15_odd", 15, 10, 1, ["float64"]),
+        ("defaults", 2048, 4, 1, ["float64"]),
+        ("fl16_stereo", 16, 5, 2, ["float64"]),
+    ]
+
+    def rms_spectrogram_cases(self):
+        cases = []
+        for key, frame_length, frames, channels, dtypes in (
+            self.RMS_SPECTROGRAM_CASES
+        ):
+            bins = frame_length // 2 + 1
+            base = np.abs(self.signal(channels * bins * frames))
+            shape = ([channels] if channels > 1 else []) + [bins, frames]
+            base = base.reshape(shape)
+            for dtype in dtypes:
+                s = self.quantize(base, dtype)
+                expected = librosa.feature.rms(
+                    S=s, frame_length=frame_length, dtype=np.float64
+                )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "frame_length": frame_length,
+                            "bins": bins,
+                            "frames": frames,
+                            "channels": channels,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    # (case key, frame_length, hop, threshold or None, length, channels,
+    #  dtypes)
+    ZCR_CASES = [
+        ("defaults", 2048, 512, None, 3000, 1, ["float64", "float32"]),
+        ("fl16_hop4", 16, 4, None, 100, 1, ["float64", "float32"]),
+        ("fl15_hop7_odd", 15, 7, None, 64, 1, ["float64"]),
+        ("fl8_hop11_gap", 8, 11, None, 60, 1, ["float64"]),
+        ("fl16_hop8_thr0", 16, 8, 0.0, 100, 1, ["float64"]),
+        ("fl16_hop8_thr05", 16, 8, 0.5, 100, 1, ["float64", "float32"]),
+        ("fl16_hop4_stereo", 16, 4, None, 80, 2, ["float64"]),
+    ]
+
+    def zcr_cases(self):
+        cases = []
+        for key, frame_length, hop, threshold, length, channels, dtypes in (
+            self.ZCR_CASES
+        ):
+            base = self.signal(channels * length)
+            if channels > 1:
+                base = base.reshape(channels, length)
+            for dtype in dtypes:
+                y = self.quantize(base, dtype)
+                kwargs = {} if threshold is None else {"threshold": threshold}
+                expected = librosa.feature.zero_crossing_rate(
+                    y,
+                    frame_length=frame_length,
+                    hop_length=hop,
+                    center=True,
+                    **kwargs,
+                )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "frame_length": frame_length,
+                            "hop": hop,
+                            "threshold": threshold,
+                            "length": length,
+                            "channels": channels,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "rms", self.rms_cases())
+        write_suite(
+            self.SUITE, "rms_spectrogram", self.rms_spectrogram_cases()
+        )
+        write_suite(self.SUITE, "zero_crossing_rate", self.zcr_cases())
+
+
+
+class OnsetFeaturesVectorGenerator:
+    """Golden vectors for the spectral-contrast and onset-strength features.
+
+    Two files:
+
+    - spectral_contrast: librosa.feature.spectral_contrast over magnitude
+      spectrograms of the deterministic LCG signal (reproduced bit-exactly in
+      OCaml), covering the librosa defaults, the linear difference, large
+      quantiles that exercise numpy's rint half-to-even band sizing and its
+      slice clamping, a left-aligned geometry, a small-FFT geometry, and a
+      silence tail whose all-zero frames drive the amin floor and the global
+      top_db clamp inside the logarithmic difference (verified to bind).
+      pad_mode is always passed explicitly ("reflect", the Stft.Config
+      default).
+
+    - onset_strength: librosa.onset.onset_strength end-to-end on its default
+      chain (the log-power mel spectrogram at power_to_db defaults): lags
+      1-3, centered and left-aligned analysis, degenerate short signals
+      (fewer frames than the lag or the centered shift), and the
+      decaying-envelope case whose >80 dB range drives the log-mel through
+      the top_db clamp. The mel parameters are always passed explicitly with
+      dtype=np.float64, forwarded through **kwargs to melspectrogram (the
+      mel-suite convention: the reference carries no float32 quantisation of
+      its own). Centered cases go through the y= path; left-aligned cases go
+      through the S= path with power_to_db applied at its defaults, because
+      onset_strength's own center flag only controls the compensation shift,
+      never the feature's framing.
+
+    float32 cases quantize the signal to float32 and compute the reference in
+    float64, exactly like the stft and mel suites.
+    """
+
+    SUITE = "features_onset"
+
+    SEED = 20260802
+
+    @staticmethod
+    def signal(n, envelope=False, silence_tail=False, seed=SEED):
+        """The 31-bit LCG signal of the stft suite under this suite's seed,
+        optionally shaped by the mel suite's exp(-12 i / n) envelope or
+        zeroed over its second half."""
+        base = StftVectorGenerator.lcg_signal(n, seed=seed)
+        if envelope:
+            base = base * np.exp(-12.0 * np.arange(n, dtype=np.float64) / n)
+        if silence_tail:
+            base = base.copy()
+            base[n // 2 :] = 0.0
+        return base
+
+    # (case key, sample_rate, fft_size, hop, length, n_bands, f_min,
+    #  quantile, linear, alignment, silence_tail, dtypes)
+    CONTRASTS = [
+        ("defaults", 22050, 512, 128, 1000, 6, 200.0, 0.02, False,
+         "centered", False, ["float64", "float32"]),
+        ("linear", 22050, 512, 128, 1000, 6, 200.0, 0.02, True, "centered",
+         False, ["float64", "float32"]),
+        # 0.5 * count lands exactly on .5 for odd band sizes: rint half-even
+        ("quantile_half", 22050, 512, 128, 1000, 5, 300.0, 0.5, False,
+         "centered", False, ["float64"]),
+        ("quantile_31", 22050, 512, 128, 1000, 3, 200.0, 0.31, True,
+         "centered", False, ["float64"]),
+        ("left", 22050, 256, 64, 600, 4, 200.0, 0.02, False, "left", False,
+         ["float64"]),
+        ("silence_tail", 22050, 512, 128, 1000, 6, 200.0, 0.02, False,
+         "centered", True, ["float64", "float32"]),
+        ("small_fft", 8000, 128, 32, 400, 4, 150.0, 0.1, False, "centered",
+         False, ["float64"]),
+    ]
+
+    def contrast_cases(self):
+        cases = []
+        for (key, sr, fft_size, hop, length, n_bands, f_min, quantile,
+             linear, alignment, silence_tail, dtypes) in self.CONTRASTS:
+            base = self.signal(length, silence_tail=silence_tail)
+            for dtype in dtypes:
+                y = (
+                    base
+                    if dtype == "float64"
+                    else base.astype(np.float32).astype(np.float64)
+                )
+                spectrum = np.abs(
+                    librosa.stft(
+                        y,
+                        n_fft=fft_size,
+                        hop_length=hop,
+                        win_length=fft_size,
+                        window="hann",
+                        center=alignment == "centered",
+                        pad_mode="reflect",
+                        dtype=np.complex128,
+                    )
+                )
+                expected = librosa.feature.spectral_contrast(
+                    S=spectrum,
+                    sr=sr,
+                    n_fft=fft_size,
+                    fmin=f_min,
+                    n_bands=n_bands,
+                    quantile=quantile,
+                    linear=linear,
+                )
+                assert expected.shape == (n_bands + 1, spectrum.shape[-1])
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "sample_rate": sr,
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "length": length,
+                            "n_bands": n_bands,
+                            "f_min": f_min,
+                            "quantile": quantile,
+                            "linear": linear,
+                            "alignment": alignment,
+                            "silence_tail": silence_tail,
+                            "envelope": False,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    # (case key, sample_rate, fft_size, hop, length, n_mels, lag, alignment,
+    #  envelope, dtypes)
+    ONSETS = [
+        ("base", 22050, 512, 128, 1000, 40, 1, "centered", False,
+         ["float64", "float32"]),
+        ("lag2", 22050, 512, 128, 1000, 40, 2, "centered", False,
+         ["float64"]),
+        ("lag3_small", 8000, 128, 32, 400, 13, 3, "centered", False,
+         ["float64"]),
+        ("left", 8000, 128, 32, 400, 13, 1, "left", False, ["float64"]),
+        # 6 frames, lag 2, shift 2: a partially zero prefix
+        ("short_partial", 8000, 64, 16, 80, 6, 2, "centered", False,
+         ["float64"]),
+        # 6 frames, lag 7: the envelope degenerates to zeros
+        ("short_degenerate", 8000, 64, 16, 80, 6, 7, "centered", False,
+         ["float64"]),
+        ("envelope", 22050, 512, 128, 1000, 40, 1, "centered", True,
+         ["float64", "float32"]),
+    ]
+
+    def onset_cases(self):
+        cases = []
+        for (key, sr, fft_size, hop, length, n_mels, lag, alignment,
+             envelope, dtypes) in self.ONSETS:
+            base = self.signal(length, envelope=envelope)
+            for dtype in dtypes:
+                y = (
+                    base
+                    if dtype == "float64"
+                    else base.astype(np.float32).astype(np.float64)
+                )
+                mel_kwargs = MelVectorGenerator.mel_kwargs(
+                    n_mels, 0.0, 0.5 * sr, "slaney", "slaney"
+                )
+                if alignment == "centered":
+                    expected = librosa.onset.onset_strength(
+                        y=y,
+                        sr=sr,
+                        n_fft=fft_size,
+                        hop_length=hop,
+                        lag=lag,
+                        center=True,
+                        pad_mode="reflect",
+                        **mel_kwargs,
+                    )
+                else:
+                    log_mel = librosa.power_to_db(
+                        librosa.feature.melspectrogram(
+                            y=y,
+                            sr=sr,
+                            n_fft=fft_size,
+                            hop_length=hop,
+                            win_length=fft_size,
+                            window="hann",
+                            center=False,
+                            power=2.0,
+                            **mel_kwargs,
+                        )
+                    )
+                    expected = librosa.onset.onset_strength(
+                        S=log_mel, lag=lag, center=False
+                    )
+                cases.append(
+                    {
+                        "name": f"{key}_{dtype}",
+                        "params": {
+                            "sample_rate": sr,
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "length": length,
+                            "n_mels": n_mels,
+                            "lag": lag,
+                            "alignment": alignment,
+                            "envelope": envelope,
+                            "silence_tail": False,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.flatten().tolist(),
+                    }
+                )
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "spectral_contrast", self.contrast_cases())
+        write_suite(self.SUITE, "onset_strength", self.onset_cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
     MelVectorGenerator,
     DbConversionsVectorGenerator,
+    SpectralFeaturesVectorGenerator,
+    EnergyFeaturesVectorGenerator,
+    OnsetFeaturesVectorGenerator,
 ]
 
 if __name__ == "__main__":
