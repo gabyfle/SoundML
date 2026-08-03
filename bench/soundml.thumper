@@ -1,0 +1,11 @@
+# thumper baseline v1
+# suite: soundml
+
+# machine: bcbdd3103086d91d
+# host: dww7dqmx0f-macos · Apple M4 Pro · arm64 · macos
+# ocaml: 5.5.0 · 64-bit · release
+
+pipeline/direct-gain-bias-abs-1M	alloc_words	exact	962
+pipeline/direct-gain-bias-abs-1M	wall_time	batch=8	n=20	6.450e-04	6.319e-04 6.336e-04 6.346e-04 6.353e-04 6.361e-04 6.401e-04 6.404e-04 6.418e-04 6.423e-04 6.449e-04 6.450e-04 6.470e-04 6.484e-04 6.485e-04 6.583e-04 6.616e-04 6.634e-04 6.747e-04 6.892e-04 7.079e-04
+pipeline/run-gain-bias-abs-1M	alloc_words	exact	970
+pipeline/run-gain-bias-abs-1M	wall_time	batch=1	n=20	6.578e-04	6.178e-04 6.206e-04 6.209e-04 6.216e-04 6.237e-04 6.243e-04 6.264e-04 6.372e-04 6.400e-04 6.575e-04 6.582e-04 6.582e-04 6.582e-04 6.585e-04 6.592e-04 6.593e-04 6.913e-04 7.426e-04 7.494e-04 8.809e-04
