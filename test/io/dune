@@ -1,0 +1,9 @@
+(test
+ (name test_io)
+ (package soundml-io)
+ (modules io_roundtrip io_goldens io_errors test_io)
+ (libraries nx soundml_io tutils unix windtrap yojson)
+ (deps
+  (glob_files corpus/*)
+  (glob_files corpus/malformed/*)
+  (glob_files ../vectors/io/*.json)))
