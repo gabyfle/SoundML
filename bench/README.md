@@ -71,6 +71,74 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   defining contract, and none exposes an incremental kernel with exact
   rational latency accounting.
 
+- `io` — `Soundml_io` decode and encode over a deterministic corpus the
+  suite generates with soundml-io's own writer (`bench/io_corpus.ml`; the C
+  ceiling harness and the Python cross-reference read the identical bytes).
+  Rows: whole-file `read` per format family at 1 s mono, 30 s stereo and
+  30 s mono; the `Reader.read ?out` form (open, one full-file chunk into a
+  lent destination, close — the C ceiling's own shape); `info`; the
+  many-small-files ingest loop in both the allocating form (librosa's shape)
+  and the reused-destination form (the C ceiling's shape); chunked writes;
+  and the fused `read ~sample_rate` next to its offline decomposition
+  (native read plus `Resample.apply`, config built per call on both sides).
+
+  The measured position (all min-of-N, warm cache, quiet reference host —
+  Apple M4 Pro, libsndfile 1.2.2, soundfile 0.14.0, librosa 0.11.0 — over
+  the shared corpus in one session; re-derive the ceilings with
+  `bench/run_io_ceiling.sh` before porting any multiplier to another
+  machine):
+
+  - **Small reads (1 s files)**: per-file wall 0.95–1.04x the C ceiling on
+    every family (budget 1.25x) — 2.4–3.3x faster than
+    `librosa.load(sr=None, mono=False)` on WAV PCM, 1.7x on wav-float32,
+    1.4x on FLAC, 1.1x on Ogg.
+  - **Bulk reads (30 s files)**: at the C ceiling on FLAC (1.02x), Ogg
+    (1.01x) and every mono cell (0.95–1.10x). The stereo WAV cells pay the
+    planar-materialization pass — `data` is C-contiguous
+    `[channels; frames]` by contract, and transposing libsndfile's
+    interleaved delivery costs ~0.2–0.3 ms per 30 s stereo file (~53 GB/s
+    effective; NEON `ld2` after the channel-2 specialization in the stubs)
+    — landing 1.19x (pcm16) to 1.73x (float32, where the baseline is pure
+    memcpy) over the interleaved-destination C ceiling. The comparison that
+    holds the layout fixed: librosa's channel-first result is a *strided
+    view* of the interleaved buffer; materializing it
+    (`np.ascontiguousarray`) costs python 4.26 ms (pcm16) / 1.03 ms
+    (float32) against our 1.24 ms / 0.51 ms — 2.0–3.3x in our favor on the
+    same delivered layout.
+  - **Many small files (1000 x 1 s, total wall)**: the reused-destination
+    loop runs 1.02–1.06x the C many-files ceiling (budget 1.15x); the
+    allocating loop runs 1.07–1.28x (OCaml GC churn on 88 KB tensors) and
+    is still 2.06x (wav-pcm16), 1.37x (wav-float32), 1.35x (FLAC) faster
+    than the librosa loop (floors 1.9x / 1.3x / 1.1x).
+  - **Header probes**: `info` at 1.00–1.13x the C open ceiling (budget
+    1.2x) on every family.
+  - **Writes**: FLAC 1.07x and Ogg 1.00x the C chunked-write ceiling
+    (encoder-bound; parity is the claim, budget 1.1x). The WAV cells are
+    disk-noise-dominated in this session (the reference volume ran at 98%
+    capacity; the C ceiling's own write minima moved 3–6x against the
+    recon-era numbers, medians swinging further): measured minima land
+    0.86–1.18x the no-clipping C ceiling. Two structural facts hold
+    regardless: `SFC_SET_CLIPPING` — the pinned saturation policy, byte-
+    compared against python-soundfile by the goldens — costs +27% on the
+    float-to-PCM conversion (measured directly), and against
+    python-soundfile (which also clips) our pcm16/pcm24 writes are
+    1.6–1.8x faster with float32/FLAC/Ogg at parity.
+  - **Fused resampled read**: `read ~sample_rate` within 1.004x (44.1→16 k)
+    and 1.045x (44.1→48 k) of reading natively and applying
+    `Resample.apply` afterwards (budget 1.05x, min-of-N; the thumper
+    median-of-batches statistic reads 1.07x/1.03x — per-call kernel-state
+    allocation shows up in means), while never materializing the
+    native-rate signal. The fused path feeds the kernel multi-hundred-
+    kiloframe blocks: at the L2-resident 32768-frame staging the FFT-
+    executed plans run 1.5x their offline decomposition (few transform
+    lines per step), and the block escalation recovers all of it.
+
+  The rows are regression-ratcheted like every other group; the verdicts
+  above are measurement evidence for this host, recorded next to the
+  numbers they derive from (`bench/profile/gate_io.ml` re-measures every
+  gate cell as CSV; `bench/run_io_ceiling.sh` re-derives the C side;
+  `bench/bench_soundml_io.py` re-runs the Python side).
+
 `bench/soxr_reference.py` is not a benchmark: it is the dev-time SoXR oracle
 that regenerates the committed quality-harness vectors under
 `test/vectors/resample/` (its header documents the pinned invocation). It is

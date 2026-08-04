@@ -171,6 +171,29 @@ let malformed_files =
 
 let outcome_name = function Ok _ -> "valid data" | Error e -> variant_name e
 
+(* [drain_reader path] opens a reader and reads it dry — typed error or valid
+   chunks, never a crash. The iteration cap bounds a hypothetically endless
+   stream; the corpus never reaches it. *)
+let drain_reader ?sample_rate path =
+  match Reader.open_ ?sample_rate Nx.float32 path with
+  | Error e ->
+      Error e
+  | Ok r ->
+      Fun.protect
+        ~finally:(fun () -> Reader.close r)
+        (fun () ->
+          let rec drain total steps =
+            if steps > 4096 then fail "the drain cap was reached" ;
+            match Reader.read r ~frames:4096 with
+            | Ok None ->
+                Ok total
+            | Ok (Some c) ->
+                drain (total + (Nx.shape c).(1)) (steps + 1)
+            | Error e ->
+                Error e
+          in
+          drain 0 0 )
+
 let malformed_tests =
   List.map
     (fun file ->
@@ -179,6 +202,11 @@ let malformed_tests =
           let probe = info path in
           let r32 = read Nx.float32 path in
           let r64 = read Nx.float64 path in
+          (* the remaining matrix legs: a reader drained dry, and the resampled
+             read — typed error or valid data, never a crash *)
+          let drained = drain_reader path in
+          let drained_rs = drain_reader ~sample_rate:16000 path in
+          let resampled = read ~sample_rate:16000 Nx.float32 path in
           (* reaching this point is the assertion — every call returned a value;
              record the outcomes so a behavior change is visible *)
           let describe = function
@@ -190,9 +218,31 @@ let malformed_tests =
                 variant_name e
           in
           let _summary =
-            Printf.sprintf "info: %s, f32: %s, f64: %s" (outcome_name probe)
-              (describe r32) (describe r64)
+            Printf.sprintf "info: %s, f32: %s, f64: %s, resampled: %s"
+              (outcome_name probe) (describe r32) (describe r64)
+              (describe resampled)
           in
+          (* a drained reader agrees with the whole-file read on both the
+             outcome class and the delivered extent *)
+          ( match (r32, drained) with
+          | Ok audio, Ok total ->
+              equal ~msg:"drained extent" int (Nx.shape audio.data).(1) total
+          | Error _, Error _ ->
+              ()
+          | Ok _, Error _ | Error _, Ok _ ->
+              fail "read and the drained reader disagree on the outcome class"
+          ) ;
+          ( match (resampled, drained_rs) with
+          | Ok audio, Ok total ->
+              equal ~msg:"resampled drained extent" int
+                (Nx.shape audio.data).(1)
+                total
+          | Error _, Error _ ->
+              ()
+          | Ok _, Error _ | Error _, Ok _ ->
+              fail
+                "resampled read and the drained reader disagree on the outcome \
+                 class" ) ;
           (* both dtypes must land in the same outcome class (the exact error
              variant may differ: liar_frames.flac trips the allocation guard at
              float64 and decodes short — Truncated — at float32) *)

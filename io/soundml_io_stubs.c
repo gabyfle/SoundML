@@ -323,19 +323,38 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
       if (got <= 0) break;                                                    \
       if (mode == SOUNDML_IO_MODE_PLANAR) {                                   \
         T *out = dst + dst_off + done;                                        \
-        for (int64_t i = 0; i < got; i++) {                                   \
-          const T *fr = staging + (i * channels);                             \
-          for (int64_t c = 0; c < channels; c++)                              \
-            out[(c * dst_total) + i] = fr[c];                                 \
-        }                                                                     \
+        if (channels == 2) {                                                  \
+          /* the stereo transpose, written as an interleave group the        \
+             vectorizer lowers to paired lane loads (ld2 on arm64) — the     \
+             layout pass must track the decoder, not trail it */             \
+          T *restrict o0 = out;                                              \
+          T *restrict o1 = out + dst_total;                                  \
+          const T *restrict s = staging;                                     \
+          for (int64_t i = 0; i < got; i++) {                                \
+            o0[i] = s[2 * i];                                                \
+            o1[i] = s[(2 * i) + 1];                                          \
+          }                                                                  \
+        } else {                                                             \
+          for (int64_t i = 0; i < got; i++) {                                \
+            const T *fr = staging + (i * channels);                          \
+            for (int64_t c = 0; c < channels; c++)                           \
+              out[(c * dst_total) + i] = fr[c];                              \
+          }                                                                  \
+        }                                                                    \
       } else {                                                                \
         T *out = dst + dst_off + done;                                        \
-        for (int64_t i = 0; i < got; i++) {                                   \
-          const T *fr = staging + (i * channels);                             \
-          T acc = (T) 0;                                                      \
-          for (int64_t c = 0; c < channels; c++) acc += fr[c];                \
-          out[i] = acc * inv;                                                 \
-        }                                                                     \
+        if (channels == 2) {                                                  \
+          const T *restrict s = staging;                                     \
+          for (int64_t i = 0; i < got; i++)                                  \
+            out[i] = (s[2 * i] + s[(2 * i) + 1]) * inv;                      \
+        } else {                                                             \
+          for (int64_t i = 0; i < got; i++) {                                \
+            const T *fr = staging + (i * channels);                          \
+            T acc = (T) 0;                                                   \
+            for (int64_t c = 0; c < channels; c++) acc += fr[c];             \
+            out[i] = acc * inv;                                              \
+          }                                                                  \
+        }                                                                    \
       }                                                                       \
       done += got;                                                            \
       if (got < want) break;                                                  \
@@ -364,9 +383,20 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
       int64_t want = frames - done;                                           \
       if (want > block) want = block;                                         \
       const T *in = src + src_off + done;                                     \
-      for (int64_t i = 0; i < want; i++) {                                    \
-        T *fr = staging + (i * channels);                                     \
-        for (int64_t c = 0; c < channels; c++) fr[c] = in[(c * src_total) + i]; \
+      if (channels == 2) {                                                    \
+        const T *restrict i0 = in;                                           \
+        const T *restrict i1 = in + src_total;                               \
+        T *restrict s = staging;                                             \
+        for (int64_t i = 0; i < want; i++) {                                 \
+          s[2 * i] = i0[i];                                                  \
+          s[(2 * i) + 1] = i1[i];                                            \
+        }                                                                    \
+      } else {                                                                \
+        for (int64_t i = 0; i < want; i++) {                                 \
+          T *fr = staging + (i * channels);                                  \
+          for (int64_t c = 0; c < channels; c++)                             \
+            fr[c] = in[(c * src_total) + i];                                 \
+        }                                                                    \
       }                                                                       \
       int64_t put = SF_WRITEF_##SUFFIX(file, staging, want);                  \
       if (put <= 0) break;                                                    \
@@ -533,6 +563,27 @@ CAMLprim value soundml_io_writef_bc(value *argv, int argn) {
   (void) argn;
   return soundml_io_writef(argv[0], argv[1], argv[2], argv[3], argv[4], argv[5],
                            argv[6]);
+}
+
+/* {1 Seeking} */
+
+CAMLprim value soundml_io_seek(value v_handle, value v_frame) {
+  CAMLparam1(v_handle);
+  CAMLlocal1(v_res);
+  SNDFILE *file = soundml_io_file(v_handle);
+  const sf_count_t frame = (sf_count_t) Long_val(v_frame);
+  sf_count_t pos;
+  char details[256] = {0};
+
+  caml_release_runtime_system();
+  pos = sf_seek(file, frame, SEEK_SET);
+  if (pos < 0) snprintf(details, sizeof details, "%s", sf_strerror(file));
+  caml_acquire_runtime_system();
+
+  v_res = caml_alloc_tuple(2);
+  Store_field(v_res, 0, Val_long((intnat) pos));
+  Store_field(v_res, 1, caml_copy_string(details));
+  CAMLreturn(v_res);
 }
 
 /* {1 Closing} */

@@ -111,6 +111,11 @@ let mode_planar = 1
 
 let mode_downmix = 2
 
+(* Stub-level failure reported in the error slot of a read/write outcome when
+   the failure is the stub's own (staging allocation), not libsndfile's. *)
+
+let soundml_io_err_staging = -1
+
 (* {1 Formats} *)
 
 module Format = struct
@@ -310,6 +315,8 @@ external stub_writef :
   -> int
   -> int * int * string = "soundml_io_writef_bc" "soundml_io_writef"
 
+external stub_seek : handle -> int -> int * string = "soundml_io_seek"
+
 external stub_close : handle -> int * string = "soundml_io_close"
 
 external stub_format_check : int -> int -> int -> bool
@@ -354,6 +361,24 @@ let check_dtype : type a. string -> (float, a) Nx.dtype -> unit =
            "%s: cannot carry %a audio (the decoder delivers float32 and \
             float64)"
            op Nx.pp_dtype dt )
+
+let check_sample_rate op = function
+  | Some rate when rate < 1 ->
+      invalid_arg
+        (Printf.sprintf
+           "%s: sample_rate %d is not positive (a signal has a rate)" op rate )
+  | _ ->
+      ()
+
+let check_quality op quality sample_rate =
+  match (quality, sample_rate) with
+  | Some _, None ->
+      invalid_arg
+        ( op
+        ^ ": ?quality without ?sample_rate changes nothing (a resampling \
+           quality needs a resampling)" )
+  | _ ->
+      ()
 
 let kind_of_dtype : type a. (float, a) Nx.dtype -> (float, a) Nx_buffer.kind =
   function
@@ -459,31 +484,504 @@ let read_to_eof kind h ~mode ~channels ~channels_out =
     pieces ;
   (dst, total)
 
-let read (type a) ?(mono = false) (dt : (float, a) Nx.dtype) path :
-    (a audio, error) result =
-  check_dtype "Soundml_io.read" dt ;
+(* {1 The reader core}
+
+   One state record serves every reading face: [Reader] wraps it directly,
+   [read] drives it once over the whole file, [fold] loops it over a lent chunk.
+   A native state decodes straight into each call's destination (carry-less); a
+   resampled state feeds decoded blocks to a [Resample.Kernel] and buffers the
+   kernel's emission cadence — per-step pieces from direct plans, block bursts
+   from FFT-executed ones — in an output carry so chunk sizes are exact
+   regardless of the plan. *)
+
+module Resample = Soundml.Resample
+
+(* The flat storage of a C-contiguous tensor, shared (never copied): the
+   bigarray view starts at the tensor's own offset, so fresh buffers and
+   contiguous views into larger storage take the same path. *)
+let planar_array1 t =
+  Bigarray.Array1.sub
+    (Nx_buffer.to_bigarray1 (Nx.data t))
+    (Nx.offset t) (Nx.numel t)
+
+(* The decode block feeding the resampler, in frames. Unlike the native staging
+   (stub-local, L2-resident: the deinterleave is a pure layout pass), the kernel
+   amortizes per-step dispatch and — on FFT-executed plans — stacks more
+   transform lines the longer its chunks are, so the fused path stages a few
+   megabytes rather than a quarter of one: measured on the reference host, 30 s
+   stereo float32 through the near-unity 44.1 -> 48 kHz plan runs 1.5x its
+   offline decomposition at 32768-frame blocks and within 1-3% at this size (the
+   44.1 -> 16 kHz cascade likewise). Clamped to the advertised length so short
+   files never over-stage; still O(1) in file length — the native-rate signal
+   never exists as a whole buffer. *)
+let decode_block_frames ~channels ~elt ~advertised =
+  let budget = 4194304 / (channels * elt) in
+  let block = Stdlib.min 1048576 (Stdlib.max 4096 budget) in
+  if advertised > 0 then Stdlib.min block (Stdlib.max 4096 advertised)
+  else block
+
+(* A kernel output not yet delivered: [plen] frames, planar with channel stride
+   [plen], the leading [poff] already served. [pt] keeps the storage alive and
+   lets the unknown-length path concatenate tensors directly. *)
+type 'a piece =
+  { pt: (float, 'a) Nx.t
+  ; pba: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+  ; plen: int
+  ; mutable poff: int }
+
+type 'a resampler =
+  { config: Resample.Config.t
+  ; kernel: 'a Resample.Kernel.t
+  ; stage_ba: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+        (* [channels_out * decode_block] planar staging the decoder fills *)
+  ; stage_t: (float, 'a) Nx.t (* the [channels_out; decode_block] view *)
+  ; decode_block: int }
+
+type 'a state =
+  { handle: handle
+  ; path: string
+  ; dt: (float, 'a) Nx.dtype
+  ; kind: (float, 'a) Nx_buffer.kind
+  ; native: Info.t
+  ; mode: int
+  ; channels: int (* the file's channels, what the decoder delivers *)
+  ; channels_out: int (* post-downmix, what the reader delivers *)
+  ; target_rate: int
+  ; resampler: 'a resampler option
+  ; carry: 'a piece Queue.t
+  ; mutable carry_len: int
+  ; mutable src_pos: int (* source frames decoded so far, absolute *)
+  ; mutable out_served: int (* output-grid frames delivered or dropped *)
+  ; mutable closed: bool
+  ; mutable decoder_eof: bool
+  ; mutable flushed: bool (* the kernel's one flush has happened *)
+  ; mutable finished: bool (* [Ok None] was reached; forever after *) }
+
+let close_state st =
+  if not st.closed then begin
+    st.closed <- true ;
+    (* a close error on a read-only handle puts no data at risk *)
+    let (_ : int * string) = stub_close st.handle in
+    ()
+  end
+
+let ensure_open st op =
+  if st.closed then invalid_arg (Printf.sprintf "%s: the reader is closed" op)
+
+(* Truncation is judged against the header: the destination of {!read} is sized
+   from the advertised count, so a shortfall is an error, never a silently
+   partial result. Streams advertising [0] have no claim to break and decode to
+   EOF. *)
+let truncated_at_eof st =
+  st.native.Info.frames > 0 && st.src_pos < st.native.Info.frames
+
+let make_state (type a) (dt : (float, a) Nx.dtype) path h ~frames ~channels
+    ~sample_rate:native_rate ~code ~mono ~target ~quality : a state =
+  let mode, channels_out = read_mode ~mono ~channels in
+  let kind = kind_of_dtype dt in
+  let native =
+    info_of_header ~frames ~channels ~sample_rate:native_rate ~code
+  in
+  let resampler, target_rate =
+    match target with
+    | Some target when target <> native_rate ->
+        (* [Config.create] validates the pair and may raise; the handle must not
+           leak with the exception *)
+        let config =
+          try
+            Resample.Config.create ?quality ~sample_rate:native_rate ~target ()
+          with e ->
+            let (_ : int * string) = stub_close h in
+            raise e
+        in
+        let decode_block =
+          decode_block_frames ~channels:channels_out ~elt:(elt_size dt)
+            ~advertised:frames
+        in
+        let kernel =
+          Resample.Kernel.prepare config dt ~channels:channels_out
+            ~max_block:decode_block
+        in
+        let stage = Nx_buffer.create kind (channels_out * decode_block) in
+        ( Some
+            { config
+            ; kernel
+            ; stage_ba= Nx_buffer.to_bigarray1 stage
+            ; stage_t= Nx.of_buffer stage ~shape:[|channels_out; decode_block|]
+            ; decode_block }
+        , target )
+    | _ ->
+        (None, native_rate)
+  in
+  { handle= h
+  ; path
+  ; dt
+  ; kind
+  ; native
+  ; mode
+  ; channels
+  ; channels_out
+  ; target_rate
+  ; resampler
+  ; carry= Queue.create ()
+  ; carry_len= 0
+  ; src_pos= 0
+  ; out_served= 0
+  ; closed= false
+  ; decoder_eof= false
+  ; flushed= false
+  ; finished= false }
+
+let open_state op ?sample_rate ?quality ?(mono = false) dt path =
+  check_dtype op dt ;
+  check_sample_rate op sample_rate ;
+  check_quality op quality sample_rate ;
   match stub_open_read path with
   | Error e ->
       Error (read_open_error path e)
-  | Ok (h, frames, channels, sample_rate, _code, _seekable) ->
-      let mode, channels_out = read_mode ~mono ~channels in
-      let kind = kind_of_dtype dt in
-      let finish buf frames_out =
-        let (_ : int * string) = stub_close h in
-        Ok
-          { data= Nx.of_buffer buf ~shape:[|channels_out; frames_out|]
-          ; sample_rate }
+  | Ok (h, frames, channels, native_rate, code, _seekable) ->
+      Ok
+        (make_state dt path h ~frames ~channels ~sample_rate:native_rate ~code
+           ~mono ~target:sample_rate ~quality )
+
+(* {2 The carry} *)
+
+let enqueue_piece st t =
+  let t = if Nx.is_c_contiguous t then t else Nx.contiguous t in
+  let plen = (Nx.shape t).(Nx.ndim t - 1) in
+  if plen > 0 then begin
+    Queue.push {pt= t; pba= planar_array1 t; plen; poff= 0} st.carry ;
+    st.carry_len <- st.carry_len + plen
+  end
+
+(* [serve_from_carry st ~dst_ba ~dst_total ~dst_off ~n] copies the next [n]
+   carried frames into the planar destination (channel stride [dst_total], frame
+   origin [dst_off]) — the kernel-output blit of the fused read path, and the
+   only copy between kernel output and caller. *)
+let serve_from_carry st ~dst_ba ~dst_total ~dst_off ~n =
+  let written = ref 0 in
+  while !written < n do
+    let p = Queue.peek st.carry in
+    let k = Stdlib.min (p.plen - p.poff) (n - !written) in
+    for c = 0 to st.channels_out - 1 do
+      Bigarray.Array1.blit
+        (Bigarray.Array1.sub p.pba ((c * p.plen) + p.poff) k)
+        (Bigarray.Array1.sub dst_ba ((c * dst_total) + dst_off + !written) k)
+    done ;
+    p.poff <- p.poff + k ;
+    if p.poff = p.plen then ignore (Queue.pop st.carry) ;
+    written := !written + k
+  done ;
+  st.carry_len <- st.carry_len - n ;
+  st.out_served <- st.out_served + n
+
+let drop_from_carry st n =
+  let dropped = ref 0 in
+  while !dropped < n do
+    let p = Queue.peek st.carry in
+    let k = Stdlib.min (p.plen - p.poff) (n - !dropped) in
+    p.poff <- p.poff + k ;
+    if p.poff = p.plen then ignore (Queue.pop st.carry) ;
+    dropped := !dropped + k
+  done ;
+  st.carry_len <- st.carry_len - n ;
+  st.out_served <- st.out_served + n
+
+(* {2 Decoding into the kernel} *)
+
+(* One decode block: stage, feed the kernel, enqueue what it emits. Respects the
+   header's frame count as the length authority (the same authority that sizes
+   {!read}'s destination); a short read below it is decoder EOF. *)
+let decode_step st rs =
+  let advertised = st.native.Info.frames in
+  let want =
+    if advertised > 0 then Stdlib.min rs.decode_block (advertised - st.src_pos)
+    else rs.decode_block
+  in
+  if want = 0 then st.decoder_eof <- true
+  else begin
+    let got, _err, _details =
+      stub_readf st.handle rs.stage_ba st.mode 0 rs.decode_block want
+        st.channels
+    in
+    if got > 0 then begin
+      let chunk =
+        if got = rs.decode_block then rs.stage_t
+        else Nx.shrink [|(0, st.channels_out); (0, got)|] rs.stage_t
       in
-      if frames = 0 then
-        (* Unknown length (or genuinely empty): decode to EOF. *)
-        let dst, total = read_to_eof kind h ~mode ~channels ~channels_out in
-        finish dst total
-      else if
-        not
-          (destination_admissible ~path ~frames ~channels:channels_out
-             ~elt:(elt_size dt) )
-      then
-        let (_ : int * string) = stub_close h in
+      ( match Resample.Kernel.step rs.kernel chunk with
+      | Some piece ->
+          enqueue_piece st piece
+      | None ->
+          () ) ;
+      st.src_pos <- st.src_pos + got
+    end ;
+    if got < want then st.decoder_eof <- true
+  end
+
+(* Decoder EOF, resolved exactly once: a broken header claim wins over the flush
+   (no flush output is delivered on a [Truncated] outcome — both sides of the
+   delegation law fail identically); a clean EOF drains the kernel's one flush
+   into the carry. *)
+let resolve_eof st rs =
+  if st.flushed then Ok ()
+  else if truncated_at_eof st then begin
+    st.flushed <- true ;
+    st.finished <- true ;
+    Queue.clear st.carry ;
+    st.carry_len <- 0 ;
+    Error
+      (Truncated
+         { path= st.path
+         ; expected_frames= st.native.Info.frames
+         ; read_frames= st.src_pos } )
+  end
+  else begin
+    ( match Resample.Kernel.flush rs.kernel with
+    | Some piece ->
+        enqueue_piece st piece
+    | None ->
+        () ) ;
+    st.flushed <- true ;
+    Ok ()
+  end
+
+(* {2 Reading one chunk} *)
+
+let shrink_frames t ~channels ~frames ~n =
+  if n = frames then t else Nx.shrink [|(0, channels); (0, n)|] t
+
+let validate_out st ~frames out =
+  let shape = Nx.shape out in
+  if shape <> [|st.channels_out; frames|] then
+    invalid_arg
+      (Printf.sprintf
+         "Soundml_io.Reader.read: out is %s; this call needs [%d; %d]"
+         ( "["
+         ^ String.concat "; " (Array.to_list (Array.map string_of_int shape))
+         ^ "]" )
+         st.channels_out frames ) ;
+  if not (Nx.is_c_contiguous out) then
+    invalid_arg "Soundml_io.Reader.read: out is not C-contiguous"
+
+(* The native chunk: decode straight into the destination — the caller's [out]
+   (zero copies on mono; one staged pass otherwise) or a fresh chunk buffer. *)
+let read_chunk_native (type a) (st : a state) ~frames out :
+    ((float, a) Nx.t option, error) result =
+  let advertised = st.native.Info.frames in
+  let want =
+    if advertised > 0 then Stdlib.min frames (advertised - st.src_pos)
+    else frames
+  in
+  if st.decoder_eof || want = 0 then begin
+    (* [want = 0]: the advertised extent is exhausted — EOF without another
+       decoder call *)
+    if want = 0 then st.decoder_eof <- true ;
+    st.finished <- true ;
+    Ok None
+  end
+  else begin
+    let dst_ba, view =
+      match out with
+      | Some o ->
+          ( planar_array1 o
+          , fun n -> shrink_frames o ~channels:st.channels_out ~frames ~n )
+      | None ->
+          let buf = Nx_buffer.create st.kind (st.channels_out * frames) in
+          let t = Nx.of_buffer buf ~shape:[|st.channels_out; frames|] in
+          ( Nx_buffer.to_bigarray1 buf
+          , fun n -> shrink_frames t ~channels:st.channels_out ~frames ~n )
+    in
+    let got, err, details =
+      stub_readf st.handle dst_ba st.mode 0 frames want st.channels
+    in
+    if err = soundml_io_err_staging then begin
+      st.finished <- true ;
+      Error (Io {path= st.path; op= "read"; details})
+    end
+    else begin
+      st.src_pos <- st.src_pos + got ;
+      st.out_served <- st.out_served + got ;
+      if got < want then begin
+        st.decoder_eof <- true ;
+        if truncated_at_eof st then begin
+          st.finished <- true ;
+          Error
+            (Truncated
+               { path= st.path
+               ; expected_frames= advertised
+               ; read_frames= st.src_pos } )
+        end
+        else if got = 0 then begin
+          st.finished <- true ;
+          Ok None
+        end
+        else Ok (Some (view got))
+      end
+      else Ok (Some (view got))
+    end
+  end
+
+(* The resampled chunk: decode blocks through the kernel until the carry covers
+   the request or EOF, then serve exactly [min frames carry]. *)
+let read_chunk_resampled (type a) (st : a state) rs ~frames out :
+    ((float, a) Nx.t option, error) result =
+  let rec fill () =
+    if st.carry_len >= frames then Ok ()
+    else if st.decoder_eof then resolve_eof st rs
+    else begin
+      decode_step st rs ; fill ()
+    end
+  in
+  match fill () with
+  | Error e ->
+      Error e
+  | Ok () ->
+      let n = Stdlib.min frames st.carry_len in
+      if n = 0 then begin
+        st.finished <- true ;
+        Ok None
+      end
+      else begin
+        match out with
+        | Some o ->
+            serve_from_carry st ~dst_ba:(planar_array1 o) ~dst_total:frames
+              ~dst_off:0 ~n ;
+            Ok (Some (shrink_frames o ~channels:st.channels_out ~frames ~n))
+        | None ->
+            let buf = Nx_buffer.create st.kind (st.channels_out * n) in
+            serve_from_carry st
+              ~dst_ba:(Nx_buffer.to_bigarray1 buf)
+              ~dst_total:n ~dst_off:0 ~n ;
+            Ok (Some (Nx.of_buffer buf ~shape:[|st.channels_out; n|]))
+      end
+
+let read_chunk st ?out ~frames () =
+  ensure_open st "Soundml_io.Reader.read" ;
+  if frames < 1 then
+    invalid_arg
+      (Printf.sprintf
+         "Soundml_io.Reader.read: cannot read %d frames (frames must be \
+          positive)"
+         frames ) ;
+  Option.iter (validate_out st ~frames) out ;
+  if st.finished then Ok None
+  else
+    match st.resampler with
+    | None ->
+        read_chunk_native st ~frames out
+    | Some rs ->
+        read_chunk_resampled st rs ~frames out
+
+(* {2 Seeking} *)
+
+let seek_state st ~frame =
+  ensure_open st "Soundml_io.Reader.seek" ;
+  if frame < 0 then
+    invalid_arg
+      (Printf.sprintf
+         "Soundml_io.Reader.seek: cannot seek to frame %d (frames are \
+          non-negative)"
+         frame ) ;
+  match st.resampler with
+  | None ->
+      let pos, details = stub_seek st.handle frame in
+      if pos < 0 then
+        Error
+          (Io
+             { path= st.path
+             ; op= "seek"
+             ; details= (if details = "" then "seek failed" else details) } )
+      else begin
+        st.src_pos <- pos ;
+        st.out_served <- pos ;
+        st.decoder_eof <- false ;
+        st.finished <- false ;
+        Ok ()
+      end
+  | Some rs -> (
+      let advertised = st.native.Info.frames in
+      let bound =
+        if advertised > 0 then
+          Some (Resample.Config.output_frames rs.config ~n:advertised)
+        else None
+      in
+      match bound with
+      | Some total when frame > total ->
+          Error
+            (Io
+               { path= st.path
+               ; op= "seek"
+               ; details=
+                   Printf.sprintf "cannot seek to frame %d of a %d-frame stream"
+                     frame total } )
+      | _ -> (
+          (* Bit-identity is the contract, so the kernel is never fed an
+             approximated suffix: backward targets restart the absolute stream
+             at the origin, forward targets advance it — the delivered samples
+             are the uninterrupted stream's own. *)
+          let restart () =
+            let pos, details = stub_seek st.handle 0 in
+            if pos < 0 then
+              Error
+                (Io
+                   { path= st.path
+                   ; op= "seek"
+                   ; details= (if details = "" then "seek failed" else details)
+                   } )
+            else begin
+              Resample.Kernel.reset rs.kernel ;
+              Queue.clear st.carry ;
+              st.carry_len <- 0 ;
+              st.src_pos <- 0 ;
+              st.out_served <- 0 ;
+              st.decoder_eof <- false ;
+              st.flushed <- false ;
+              st.finished <- false ;
+              Ok ()
+            end
+          in
+          let rec advance () =
+            let need = frame - st.out_served in
+            if need = 0 then Ok ()
+            else if st.carry_len > 0 then begin
+              drop_from_carry st (Stdlib.min need st.carry_len) ;
+              advance ()
+            end
+            else if st.decoder_eof then
+              if st.flushed then
+                (* only reachable on unknown-length streams: the stream ended
+                   before [frame]; the position is EOF *)
+                Ok ()
+              else
+                match resolve_eof st rs with
+                | Error e ->
+                    Error e
+                | Ok () ->
+                    advance ()
+            else begin
+              decode_step st rs ; advance ()
+            end
+          in
+          let start = if frame < st.out_served then restart () else Ok () in
+          match start with
+          | Error e ->
+              Error e
+          | Ok () ->
+              st.finished <- false ;
+              advance () ) )
+
+(* {1 Reading} *)
+
+let read (type a) ?sample_rate ?quality ?(mono = false)
+    (dt : (float, a) Nx.dtype) path : (a audio, error) result =
+  match open_state "Soundml_io.read" ?sample_rate ?quality ~mono dt path with
+  | Error e ->
+      Error e
+  | Ok st -> (
+      let elt = elt_size dt in
+      let advertised = st.native.Info.frames in
+      let liar () =
         Error
           (Io
              { path
@@ -492,18 +990,177 @@ let read (type a) ?(mono = false) (dt : (float, a) Nx.dtype) path :
                  Printf.sprintf
                    "the header advertises %d frames x %d channels, more than \
                     the file could hold"
-                   frames channels } )
-      else
-        let buf = Nx_buffer.create kind (channels_out * frames) in
-        let ba = Nx_buffer.to_bigarray1 buf in
-        let delivered, _err, _details =
-          stub_readf h ba mode 0 frames frames channels
-        in
-        if delivered < frames then
-          let (_ : int * string) = stub_close h in
-          Error
-            (Truncated {path; expected_frames= frames; read_frames= delivered})
-        else finish buf frames
+                   advertised st.channels } )
+      in
+      let finish result = close_state st ; result in
+      match st.resampler with
+      | None -> (
+          if advertised = 0 then
+            (* unknown length (or genuinely empty): decode to EOF *)
+            let dst, total =
+              read_to_eof st.kind st.handle ~mode:st.mode ~channels:st.channels
+                ~channels_out:st.channels_out
+            in
+            finish
+              (Ok
+                 { data= Nx.of_buffer dst ~shape:[|st.channels_out; total|]
+                 ; sample_rate= st.target_rate } )
+          else if
+            not
+              (destination_admissible ~path ~frames:advertised
+                 ~channels:st.channels_out ~elt )
+          then finish (liar ())
+          else
+            match read_chunk st ~frames:advertised () with
+            | Ok (Some data) ->
+                finish (Ok {data; sample_rate= st.target_rate})
+            | Ok None ->
+                (* unreachable for a positive advertised count: a shortfall is
+                   [Truncated] above; defensive completeness *)
+                finish
+                  (Ok
+                     { data= Nx.zeros dt [|st.channels_out; 0|]
+                     ; sample_rate= st.target_rate } )
+            | Error e ->
+                finish (Error e) )
+      | Some rs ->
+          if advertised = 0 then begin
+            (* unknown length: chunked to EOF, pieces concatenated once — the
+               documented transient for this degenerate case only *)
+            let rec pump () =
+              if st.decoder_eof then resolve_eof st rs
+              else begin
+                decode_step st rs ; pump ()
+              end
+            in
+            match pump () with
+            | Error e ->
+                finish (Error e)
+            | Ok () ->
+                let pieces =
+                  Queue.fold (fun acc p -> p.pt :: acc) [] st.carry
+                in
+                let data =
+                  match List.rev pieces with
+                  | [] ->
+                      Nx.zeros dt [|st.channels_out; 0|]
+                  | pieces ->
+                      Nx.concatenate ~axis:1 pieces
+                in
+                finish (Ok {data; sample_rate= st.target_rate})
+          end
+          else if
+            not
+              (destination_admissible ~path ~frames:advertised
+                 ~channels:st.channels_out ~elt )
+          then finish (liar ())
+          else begin
+            let l =
+              (Resample.Config.rate rs.config).Soundml.Pipeline.Rate.num
+            in
+            if not (mul_no_overflow advertised l) then finish (liar ())
+            else begin
+              let total_out =
+                Resample.Config.output_frames rs.config ~n:advertised
+              in
+              if
+                not
+                  (destination_admissible ~path ~frames:total_out
+                     ~channels:st.channels_out ~elt )
+              then finish (liar ())
+              else begin
+                (* the preallocated fused destination: kernel pieces land here
+                   as they are emitted; the native-rate signal never exists as a
+                   whole buffer *)
+                let dst =
+                  Nx_buffer.create st.kind (st.channels_out * total_out)
+                in
+                let dst_ba = Nx_buffer.to_bigarray1 dst in
+                let rec pump () =
+                  if st.carry_len > 0 then begin
+                    serve_from_carry st ~dst_ba ~dst_total:total_out
+                      ~dst_off:st.out_served ~n:st.carry_len ;
+                    pump ()
+                  end
+                  else if st.decoder_eof then
+                    if st.flushed then Ok ()
+                    else
+                      match resolve_eof st rs with
+                      | Error e ->
+                          Error e
+                      | Ok () ->
+                          pump ()
+                  else begin
+                    decode_step st rs ; pump ()
+                  end
+                in
+                match pump () with
+                | Error e ->
+                    finish (Error e)
+                | Ok () ->
+                    assert (st.out_served = total_out) ;
+                    finish
+                      (Ok
+                         { data=
+                             Nx.of_buffer dst
+                               ~shape:[|st.channels_out; total_out|]
+                         ; sample_rate= st.target_rate } )
+              end
+            end
+          end )
+
+let fold ?(block = 65536) ?sample_rate ?quality ?(mono = false) dt path ~init ~f
+    =
+  if block < 1 then
+    invalid_arg
+      (Printf.sprintf
+         "Soundml_io.fold: cannot fold %d-frame blocks (block must be positive)"
+         block ) ;
+  match open_state "Soundml_io.fold" ?sample_rate ?quality ~mono dt path with
+  | Error e ->
+      Error e
+  | Ok st ->
+      Fun.protect
+        ~finally:(fun () -> close_state st)
+        (fun () ->
+          (* the one lent chunk buffer, reused for every block *)
+          let out =
+            Nx.of_buffer
+              (Nx_buffer.create st.kind (st.channels_out * block))
+              ~shape:[|st.channels_out; block|]
+          in
+          let rec loop acc =
+            match read_chunk st ~out ~frames:block () with
+            | Ok None ->
+                Ok acc
+            | Ok (Some chunk) ->
+                loop (f acc chunk)
+            | Error e ->
+                Error e
+          in
+          loop init )
+
+module Reader = struct
+  type 'a t = 'a state
+
+  let open_ ?sample_rate ?quality ?mono dt path =
+    open_state "Soundml_io.Reader.open_" ?sample_rate ?quality ?mono dt path
+
+  let info st =
+    ensure_open st "Soundml_io.Reader.info" ;
+    st.native
+
+  let format st =
+    ensure_open st "Soundml_io.Reader.format" ;
+    Soundml.Pipeline.Format.audio st.dt ~sample_rate:st.target_rate
+      ~channels:st.channels_out
+
+  let read ?out st ~frames = read_chunk st ?out ~frames ()
+
+  let seek st ~frame = seek_state st ~frame
+
+  let close = close_state
+end
 
 (* {1 Writing} *)
 
