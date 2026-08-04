@@ -1,0 +1,7 @@
+(executable
+ (name profile_resample)
+ (libraries soundml nx unix))
+
+(executable
+ (name bitdump)
+ (libraries soundml nx))

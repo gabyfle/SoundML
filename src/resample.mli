@@ -36,7 +36,21 @@
     silence and no trailing padding. The conversion is between two {e nominal}
     rates; clock-drift compensation and variable ratios are deliberately not
     this function's job — those need a variable-ratio converter, a different
-    feature with different state. *)
+    feature with different state.
+
+    {!Config.create} plans each conversion as one polyphase stage or a
+    cascade of two, decided by a deterministic cost search at creation.
+    Near-unity ratios (44.1 ↔ 48 kHz) keep the single-stage design — no
+    split beats it. Wide ratios (44.1 → 16 kHz, 48 ↔ 8 kHz, …) run a
+    wide-transition stage and a sharp stage ordered so the sharp filter sits
+    at the lowest rate in the chain — a 1.5-2.3x cut in multiplies per output
+    at equal spec. Each cascade stage is designed 6 dB past the tier's
+    attenuation (two error sources, amplitude-summed), so the composite meets
+    the tier spec everywhere; every contract above — exact rational rate,
+    integral compensated latency, exact output length, the partition law —
+    holds identically for both plan shapes, and the plan is an internal
+    choice, invisible in this API except through {!Config.latency} and
+    {!Config.pp}. *)
 
 (** The type for custom filter specifications. [attenuation] is the stop-band
     rejection target in dB; [passband] is the flat-to-0-dB bandwidth preserved,
@@ -64,14 +78,19 @@ type quality = [`Fast | `High | `Best | `Custom of spec]
 
 module Config : sig
   (** The type for validated, immutable resampling configurations. Creation
-      reduces the ratio, designs the prototype filter (float64) and lays the
-      polyphase bank out phase-major; configs are cheap to share, and one
-      config serves any number of {!apply} calls and prepared kernels.
-      Construction is {e not} cheap: the prototype runs tens of thousands of
-      taps (measured, [`High] 44.1 → 48 kHz: about 1 ms, roughly twice the
-      cost of resampling one second of float32 audio), so corpus jobs must
-      build the config once and reuse it — the flat [Soundml.resample]
-      convenience rebuilds it on every call. *)
+      reduces the ratio, plans the stage decomposition (one polyphase stage,
+      or two for wide ratios — see the module overview), designs each
+      prototype filter (float64) and lays each polyphase bank out both
+      phase-major and in the executor's row-visit order — kernels pick the
+      visit-order copy when their bank outgrows L1, so streaming a large bank
+      reads it sequentially; configs are cheap to share, and one config serves
+      any
+      number of {!apply} calls and prepared kernels. Construction is {e not}
+      cheap: a prototype runs tens of thousands of taps (measured, [`High]
+      44.1 → 48 kHz: about 1 ms, roughly twice the cost of resampling one
+      second of float32 audio), so corpus jobs must build the config once and
+      reuse it — the flat [Soundml.resample] convenience rebuilds it on every
+      call. *)
   type t
 
   val create : ?quality:quality -> sample_rate:int -> target:int -> unit -> t
@@ -86,11 +105,12 @@ module Config : sig
       [`Custom] spec is invalid ([attenuation] not finite or outside
       [\[40., 200.\]], [passband] not finite or outside [\[0.5, 0.99\]]); or
       if the reduced ratio needs a coefficient bank above the documented
-      budget (8 MB) — the near-unity case, e.g. 44100 → 44099. The message
-      names L, the bank size, and states that near-unity conversion is
-      clock-drift correction, which this fixed-ratio resampler does not do.
-      Every pair of standard rates fits with margin: the worst,
-      11025 → 192000, needs under 4 MB. *)
+      budget (8 MB) with no two-stage split under it either. The message
+      names L, the bank size and the budget; in the near-unity case (e.g.
+      44100 → 44099, where the reduced ratio is within 1% of unity) it adds
+      that near-unity conversion is clock-drift correction, which this
+      fixed-ratio resampler does not do. Every pair of standard rates fits
+      with margin: the worst, 11025 → 192000, needs under 4 MB. *)
 
   val sample_rate : t -> int
   (** [sample_rate c] is the source rate in hertz. *)
@@ -107,9 +127,11 @@ module Config : sig
 
   val latency : t -> int
   (** [latency c] is the group delay in {e input} samples — exact and
-      integral, because the prototype length is rounded up to [2*K*L + 1] so
-      the linear-phase delay [K] lands on the input grid. [0] for the
-      identity. At [`High] 44.1 → 48 kHz, [K = 95] (~2.2 ms). *)
+      integral: each prototype length is rounded up to [2*K*L + 1] so the
+      linear-phase delay [K] lands on that stage's input grid, and a cascade
+      composes [K1 + K2 * M1 / L1] with [K2] rounded onto stage 1's grid at
+      design time. [0] for the identity. At [`High] 44.1 → 48 kHz, [K = 95]
+      (~2.2 ms); at [`High] 44.1 → 16 kHz (a cascade), [K = 303] (~6.9 ms). *)
 
   val output_latency : t -> Pipeline.Rate.t
   (** [output_latency c] is the group delay in output samples, exact:
@@ -124,9 +146,14 @@ module Config : sig
       Raises [Invalid_argument] if [n < 0]. *)
 
   val prototype : (float, 'a) Nx.dtype -> t -> (float, 'a) Nx.t
-  (** [prototype dtype c] is a fresh copy of the designed lowpass, rank-one,
-      length [2*K*L + 1] — for inspection, response plots and tests. Kernels
-      use the config-owned bank without copying; this accessor copies. *)
+  (** [prototype dtype c] is a fresh copy of the designed lowpass, rank-one —
+      for inspection, response plots and tests. For a single-stage plan it is
+      the stage's prototype, length [2*K*L + 1]. For a cascade it is the
+      plan's equivalent-response lowpass: the two stage prototypes convolved
+      on their least common interpolation grid — its frequency response is
+      the product of the stage responses, linear-phase, centered at
+      {!latency} input samples. Kernels use the config-owned banks without
+      copying; this accessor copies. *)
 
   val pp : Format.formatter -> t -> unit
   (** [pp fmt c] prints [c] on [fmt] in a compact single-line form. *)
@@ -157,11 +184,14 @@ val apply : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [apply_gemm c x] is the same conversion as {!apply} — same config-owned
     filter, same exact output length, same group-delay compensation, same
-    zeros-outside-the-extent convention — computed as one dense tensor
-    expression: the input is cut into strided patches ([Nx.extract_patches])
+    zeros-outside-the-extent convention — computed as dense tensor
+    expressions: the input is cut into strided patches ([Nx.extract_patches])
     and multiplied against the filter bank laid out as a single matrix
-    ([Nx.matmul]). Because it is built from Nx operations end to end, it is
-    differentiable and device-eligible wherever those operations are.
+    ([Nx.matmul]), once per plan stage — a cascade config runs two such
+    stages over the same two banks the executor runs, so the two surfaces
+    always compute the same filter architecture. Because it is built from Nx
+    operations end to end, it is differentiable and device-eligible wherever
+    those operations are.
 
     It is numerically {e distinct} from {!apply}: the matrix product sums each
     output in a different order than the executor's fixed dot product, so the
@@ -171,7 +201,13 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     is {e never} zero by contract. The tested bound is 16 such units across
     presets and dtypes at the common conversions (150-800-tap filters) and 32
     across the full standard-rate matrix (extreme pairs run 1 500+ taps):
-    around −290 dBFS at float64, far below every quality threshold. It is
+    around −290 dBFS at float64, far below every quality threshold. Both
+    bounds are in units of the output {e peak} and are tested on outputs a
+    signal dominates; an output that is nothing but stopband residual — a
+    full-scale tone parked above the target's passband, say — divides the
+    same absolute agreement (order 10{^-17} at float64) by a residual-sized
+    peak and reads a few times larger in these units, a property of the unit,
+    not of the filters. It is
     offline-only and carries no partitioning law: it is not a {!Pipeline}
     stage, it has no streaming form, and it is deliberately not a flag on
     {!apply} — a flag that changes bits would fork the library's one resampler
@@ -212,9 +248,11 @@ module Kernel : sig
     Config.t -> (float, 'a) Nx.dtype -> channels:int -> max_block:int -> 'a t
   (** [prepare c dtype ~channels ~max_block] is a fresh kernel state for
       chunks of at most [max_block] samples of [channels]-channel [dtype]
-      audio. Allocates everything: the per-channel history ([2K] samples) and
-      the dtype-instantiated bank (cast from the config's float64 design once,
-      here — never cached narrower than the state's dtype).
+      audio. Allocates everything: each stage's per-channel history ([2K]
+      samples), the dtype-instantiated banks (cast from the config's float64
+      design once, here — never cached narrower than the state's dtype) and,
+      for cascade plans, the fixed stage-1 → stage-2 hand-off buffer —
+      {!step} allocates exactly the output tensor.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
       [dtype] is neither float32 nor float64 — the two sample types the
@@ -224,8 +262,10 @@ module Kernel : sig
   (** [step k chunk] feeds [chunk] — time axis last — and is the newly
       computable output samples, if any. [chunk] is borrowed: the kernel
       copies what it must retain, and the returned tensor aliases neither
-      [chunk] nor kernel state. At most [ceil (len * L / M) + 1] samples are
-      returned for a length-[len] chunk.
+      [chunk] nor kernel state. At most [ceil (len * L / M) + s] samples are
+      returned for a length-[len] chunk, where [s] is a small plan-alignment
+      constant: [1] for single-stage plans, at most [1 + L2/M2] for
+      cascades.
 
       Raises [Invalid_argument] if [chunk] is longer than [max_block], if a
       leading axis disagrees with [channels], or if [k] was drained by
@@ -249,9 +289,11 @@ val stage : Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
     ['k] — with latency [Config.latency c] input items and rate
     [Config.rate c]. Its [out_format] scales items per second by exactly
     [L / M] (44100 → 48000 threads through as exactly 48000) and widens the
-    per-chunk bound to [ceil (bound * L / M) + 1]. [prepare] validates that
-    the incoming format's items per second equal [sample_rate] and raises
-    [Invalid_argument] otherwise — at prepare time, never mid-stream.
+    per-chunk bound to cover the plan's worst step and drain —
+    [ceil (bound * L / M) + 1] for single-stage plans. [prepare] validates
+    that the incoming format's items per second equal [sample_rate] and
+    raises [Invalid_argument] otherwise — at prepare time, never
+    mid-stream.
 
     For the identity configuration the stage is transparent to the latency and
     rate accounting (latency [0], rate [1/1]) and forwards chunks with one

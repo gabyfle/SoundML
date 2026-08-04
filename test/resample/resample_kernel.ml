@@ -100,7 +100,13 @@ let latency_tests =
           ; (44100, 48000, `Fast, 588, 640)
           ; (48000, 44100, `High, 320, 294)
           ; (44100, 22050, `High, 500, 250)
-          ; (22050, 44100, `Best, 250, 500) ] )
+          ; (22050, 44100, `Best, 250, 500)
+            (* cascade plans: both stages compensate their own delay, so the
+               composite compensation is exact by composition *)
+          ; (44100, 16000, `High, 882, 320)
+          ; (16000, 44100, `High, 320, 882)
+          ; (48000, 8000, `High, 600, 100)
+          ; (8000, 48000, `High, 100, 600) ] )
   ; test "no leading silence: a DC signal is alive at sample zero" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
         let x = Nx.create Nx.float64 [|500|] (Array.make 500 1.) in
@@ -130,7 +136,11 @@ let latency_tests =
    prototype, in OCaml: output [i] has phase [(i*M) mod L], base [(i*M)/L + K],
    and sums [proto.(p + t*L) * x.(base - t)] over t — the signal is zero outside
    its extent. Summation order differs from the executor's, so agreement is to
-   tolerance; what this pins is the indexing. *)
+   tolerance; what this pins is the indexing. The pairs below are all
+   single-stage plans by construction (spans under the cascade planner's pay-off
+   point): a cascade is not one polyphase filter, and its independent second
+   implementation is the GEMM surface, pinned by the cross-validation suite over
+   the same two banks. *)
 let reference cfg x =
   let l, m =
     let r = Resample.Config.rate cfg in
@@ -181,7 +191,7 @@ let reference_tests =
                   failf "%d->%d: index %d: got %.17g, expected %.17g"
                     sample_rate target i got.(i) e )
               expected )
-          [(3, 2); (2, 3); (44100, 48000); (44100, 16000); (5, 5)] ) ]
+          [(3, 2); (2, 3); (44100, 48000); (44100, 32000); (5, 5)] ) ]
 
 (* {2 Multi-channel planar correctness} *)
 

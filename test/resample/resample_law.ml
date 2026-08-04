@@ -139,7 +139,8 @@ let law_case name dtype ~sample_rate ~target ~quality ~ns () =
 
 (* {2 The max_chunk sweep: same signal, uniform chunkings} *)
 
-let sweep_case name dtype ~sample_rate ~target ~quality ~n () =
+let sweep_case ?(chunks = [1; 7; 64; 401; 4096]) name dtype ~sample_rate ~target
+    ~quality ~n () =
   test name (fun () ->
       let cfg = Resample.Config.create ~quality ~sample_rate ~target () in
       let p = Resample.stage cfg in
@@ -156,7 +157,7 @@ let sweep_case name dtype ~sample_rate ~target ~quality ~n () =
           check_bits
             ~msg:(Printf.sprintf "%s/max_chunk=%d" name max_chunk)
             expected got )
-        [1; 7; 64; 401; 4096] )
+        chunks )
 
 (* {2 apply == the kernel fold, under every chunking} *)
 
@@ -339,10 +340,78 @@ let fold_tests =
   ; fold_case "apply == fold, stereo down f64" Nx.float64 ~channels:2
       ~sample_rate:44100 ~target:16000 ~quality:`Fast ~n:333 () ]
 
+(* {2 The law over cascade plans}
+
+   Wide-ratio conversions run as two chained stages (the planner in
+   resample.ml); the composite keeps the law by composition — stage 1 is
+   chunk-invariant, so stage 2 sees one sample sequence under every
+   partitioning, and stage 2 is invariant to how that sequence is cut. These
+   cases pin the composition where it could crack: the adversarial partitioner
+   over cascade configs at `High (the shipped spec, both directions and both
+   dtypes), one-sample chunks, uniform chunkings walking +-1 around the stage
+   rationals' periods, inputs around the composite latency (flush-adjacent
+   splits), and the ceil-composition truncation edge — the n = 11 class at 44.1
+   -> 16 k, where the raw two-stage stream over-produces by one sample and the
+   drain cut restores the exact [ceil (n * L / M)] contract. Every comparison is
+   bit-equality against the offline run, whose length law_case asserts against
+   [output_frames]. *)
+
+let cascade_law_tests =
+  [ law_case "cascade 44100->16000 High f64" Nx.float64 ~sample_rate:44100
+      ~target:16000 ~quality:`High ~ns:[1000; 341; 11; 5; 1; 0] ()
+  ; law_case "cascade 44100->16000 High f32" Nx.float32 ~sample_rate:44100
+      ~target:16000 ~quality:`High ~ns:[1000; 11] ()
+  ; law_case "cascade 48000->8000 High f64" Nx.float64 ~sample_rate:48000
+      ~target:8000 ~quality:`High ~ns:[2000; 700; 11; 1] ()
+  ; law_case "cascade 8000->48000 High f32" Nx.float32 ~sample_rate:8000
+      ~target:48000 ~quality:`High ~ns:[500; 113; 11; 1] ()
+  ; law_case "cascade 16000->44100 High f64" Nx.float64 ~sample_rate:16000
+      ~target:44100 ~quality:`High ~ns:[500; 217; 3] ()
+  ; law_case "cascade 22050->44100 Best f64" Nx.float64 ~sample_rate:22050
+      ~target:44100 ~quality:`Best ~ns:[400; 11] () ]
+
+let cascade_sweep_tests =
+  [ sweep_case
+      ~chunks:[1; 2; 3; 440; 441; 442; 4096]
+      "cascade sweep 44100->16000 High f64" Nx.float64 ~sample_rate:44100
+      ~target:16000 ~quality:`High ~n:2000 ()
+  ; sweep_case
+      ~chunks:[1; 2; 3; 4; 108; 109; 4096]
+      "cascade sweep 8000->48000 High f32" Nx.float32 ~sample_rate:8000
+      ~target:48000 ~quality:`High ~n:1500 () ]
+
+let cascade_fold_tests =
+  [ fold_case "apply == fold, stereo cascade down f32" Nx.float32 ~channels:2
+      ~sample_rate:44100 ~target:16000 ~quality:`High ~n:600 ()
+  ; fold_case "apply == fold, mono cascade up f64" Nx.float64 ~channels:1
+      ~sample_rate:8000 ~target:48000 ~quality:`High ~n:333 () ]
+
+let cascade_length_tests =
+  [ test "cascade totals hit ceil(n * L / M) for every small n" (fun () ->
+        (* the drain truncation, walked across every phase alignment: the raw
+           two-stage total exceeds the composite ceil by at most one, and the
+           excess pattern cycles with n — small n sweeps the whole cycle *)
+        List.iter
+          (fun (sample_rate, target) ->
+            let cfg = Resample.Config.create ~sample_rate ~target () in
+            for n = 0 to 130 do
+              let y = Resample.apply cfg (signal Nx.float64 n) in
+              equal
+                ~msg:(Printf.sprintf "%d->%d n=%d" sample_rate target n)
+                int
+                (Resample.Config.output_frames cfg ~n)
+                (Nx.dim (Nx.ndim y - 1) y)
+            done )
+          [(44100, 16000); (16000, 44100); (48000, 8000); (8000, 48000)] ) ]
+
 let suite =
   [ group "law" law_tests
   ; group "max-chunk sweep" sweep_tests
   ; group "apply-fold" fold_tests
+  ; group "cascade-law" cascade_law_tests
+  ; group "cascade-sweep" cascade_sweep_tests
+  ; group "cascade-fold" cascade_fold_tests
+  ; group "cascade-length" cascade_length_tests
   ; group "identity" identity_tests
   ; group "flat" flat_tests
   ; group "capability" capability_tests ]
