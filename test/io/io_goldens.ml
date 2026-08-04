@@ -7,9 +7,16 @@
    decode; the float32 expectation is its correctly-rounded float32 cast — an
    equality the generator asserts against python-soundfile's own float32 decode
    for every fixture at generation time, so the cast is a recorded fact about
-   libsndfile's conversions, not an assumption. Ogg/Vorbis decodes are held to
-   the measured cross-stack noise ceiling (1.79e-7, gated at 2e-7): the codec
-   stack itself does not promise bit-parity between builds, and neither do we.
+   libsndfile's conversions, not an assumption. Ogg/Vorbis decodes are held to a
+   tolerance instead: the codec stack does not promise bit-parity between
+   builds, and neither do we. The bound is a cross-platform one, not a local
+   measurement — the goldens are recorded on one host and replayed on every CI
+   platform, and libvorbis builds legitimately differ (2.1e-7 observed between
+   the recording host and Linux CI, against a 1.8e-7 same-host cross-stack
+   floor). It stays two orders of magnitude under a 16-bit LSB (3.05e-5), so it
+   cannot mask what this gate exists to catch: a decode-path defect — wrong
+   deinterleave, frame offset, scaling or dtype conversion — moves samples by
+   O(0.1), never by 1e-6.
 
    The write-clipping golden pins SFC_SET_CLIPPING: a +/-1.5 full-scale ramp on
    the exact k/64 grid encoded to PCM_16 decodes byte-for-byte as
@@ -25,7 +32,7 @@ let golden_file name = Tutils.Golden.load (Filename.concat vectors_dir name)
 
 let f32 x = Int32.float_of_bits (Int32.bits_of_float x)
 
-let ogg_tolerance = 2e-7
+let ogg_tolerance = 1e-6
 
 let check_values ~msg ~tolerance expected (actual : (float, 'a) Nx.t) =
   let a = Nx.to_array actual in
