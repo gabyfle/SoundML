@@ -15,14 +15,16 @@
    mirroring the librosa rows of [bench_soundml.py] one to one.
 
    The resample group covers every face of [Resample] on one-second mono clips:
-   [apply] across the three presets, the three headline rate pairs and both
-   dtypes; the GEMM surface next to the executor at [`High]; the streaming
-   kernel at [`High] float32 across chunk sizes (the 1024 row keeps the
-   per-chunk dispatch overhead honest); the stage inside a resample-then-STFT
-   front next to the same computation hand-written; the identity-rate
-   passthrough; and [Config.create] itself, priced separately because filter
-   design costs more than converting the clip it configures — reuse is the
-   documented contract, and this row keeps the design cost visible.
+   [apply] across the three presets, the six headline rate pairs — near-unity
+   both ways and every pair the planner splits into a cascade, so a stage-level
+   regression on any plan shape trips the ratchet — and both dtypes; the GEMM
+   surface next to the executor at [`High]; the streaming kernel at [`High]
+   float32 across chunk sizes (the 1024 row keeps the per-chunk dispatch
+   overhead honest); the stage inside a resample-then-STFT front next to the
+   same computation hand-written; the identity-rate passthrough; and
+   [Config.create] itself, priced separately because filter design costs more
+   than converting the clip it configures — reuse is the documented contract,
+   and this row keeps the design cost visible.
 
    The committed baseline gates drift (the suite budgets below), not absolute
    throughput: the resample rows record what the executor delivers on the
@@ -110,7 +112,10 @@ let pipeline_benchmarks () =
 let resample_pairs =
   [ ("44k1-48k", 44100, 48000)
   ; ("48k-44k1", 48000, 44100)
-  ; ("44k1-16k", 44100, 16000) ]
+  ; ("44k1-16k", 44100, 16000)
+  ; ("16k-44k1", 16000, 44100)
+  ; ("8k-48k", 8000, 48000)
+  ; ("48k-8k", 48000, 8000) ]
 
 let resample_tiers = [("fast", `Fast); ("high", `High); ("best", `Best)]
 

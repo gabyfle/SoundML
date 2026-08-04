@@ -21,12 +21,13 @@
 
 /* resample_stubs.c — the one polyphase executor behind Soundml.Resample.
 
-   One call per chunk: the stub receives the phase-major coefficient bank, the
-   per-channel history, a scratch lane, the input chunk and the output tensor,
-   and does all slicing internally. Each output sample is one independent dot
-   product over a deterministic window of `history ++ chunk` with a fixed,
-   chunk-independent summation order, which is what makes offline-vs-streaming
-   bit-equality structural rather than tested-in.
+   One call per chunk: the stub receives the coefficient bank (phase-major or
+   in visit order, named by the `visit` flag — see the geometry note below),
+   the per-channel history, a scratch lane, the input chunk and the output
+   tensor, and does all slicing internally. Each output sample is one
+   independent dot product over a deterministic window of `history ++ chunk`
+   with a fixed, chunk-independent summation order, which is what makes
+   offline-vs-streaming bit-equality structural rather than tested-in.
 
    Floating-point discipline: the dot-product loop alone is allowed to
    reassociate and contract (multiply-add), scoped with a pragma on clang and a
@@ -68,10 +69,21 @@
 
    Geometry, in scratch coordinates: scratch[s] is input sample
    `total_fed - 2K + s`. Output i (absolute) reads the taps window starting at
-   `floor(i*M/L) + K - total_fed`, phase `(i*M) mod L`; both advance by exact
-   integer arithmetic (p += M; s += p / L; p %= L), so no drift is
-   representable. Rows of the bank are stored reversed, so the window is read
-   forward. */
+   `floor(i*M/L) + K - total_fed` with phase `(i*M) mod L`; the window advance
+   is exact integer arithmetic (p += M; s += p / L; p %= L), so no drift is
+   representable, and p0 is reconstructed from the caller's row0 = i mod L:
+   (row0 * M) mod L equals (i * M) mod L. The bank arrives in one of two
+   layouts, named by `visit`. Phase-major (row of output i is its phase p):
+   the natural object, kept whenever the bank is L1-resident — there the
+   phase walk is free and the loop carries no row counter. Visit order (slot
+   j holds the phase-((j*M) mod L) row, row of output i is i mod L): chosen
+   by the OCaml side once the bank outgrows L1, so consecutive outputs read
+   consecutive rows and the bank streams forward with one wrap per L outputs
+   instead of hopping M rows per output — the hop ran the L2-resident
+   geometries at 57-60% of the load-bound dot ceiling against 76-94% for
+   resident or sequential banks (measured, Apple M4 Pro). Row contents and
+   the summation order are identical in both layouts, so the choice cannot
+   move a bit. Rows are stored reversed, so the window is read forward. */
 #define SOUNDML_RESAMPLE_KERNEL(SUFFIX, T)                                   \
   static SOUNDML_ASSOC_FN T soundml_resample_dot_##SUFFIX(                   \
       const T *restrict x, const T *restrict h, int64_t taps) {              \
@@ -85,24 +97,39 @@
   static void soundml_resample_run_##SUFFIX(                                 \
       const T *restrict bank, T *restrict hist, T *restrict scratch,         \
       const T *restrict x, T *restrict y, int64_t n, int64_t n_out,          \
-      int64_t channels, int64_t k, int64_t l, int64_t m, int64_t phase0,     \
-      int64_t s0, int is_flush) {                                            \
+      int64_t channels, int64_t k, int64_t l, int64_t m, int64_t row0,       \
+      int64_t s0, int visit, int is_flush) {                                 \
     const int64_t taps = (2 * k) + 1, hlen = 2 * k;                          \
+    const int64_t p0 = (row0 * m) % l;                                       \
     for (int64_t c = 0; c < channels; c++) {                                 \
       memcpy(scratch, hist + (c * hlen), (size_t)hlen * sizeof(T));          \
       if (is_flush)                                                          \
         memset(scratch + hlen, 0, (size_t)n * sizeof(T));                    \
       else                                                                   \
         memcpy(scratch + hlen, x + (c * n), (size_t)n * sizeof(T));          \
-      int64_t p = phase0, s = s0;                                            \
+      int64_t p = p0, s = s0;                                                \
       T *out = y + (c * n_out);                                              \
-      for (int64_t i = 0; i < n_out; i++) {                                  \
-        out[i] =                                                             \
-            soundml_resample_dot_##SUFFIX(scratch + s, bank + (p * taps),    \
-                                          taps);                             \
-        p += m;                                                              \
-        s += p / l;                                                          \
-        p %= l;                                                              \
+      if (visit) {                                                           \
+        int64_t j = row0;                                                    \
+        for (int64_t i = 0; i < n_out; i++) {                                \
+          out[i] =                                                           \
+              soundml_resample_dot_##SUFFIX(scratch + s, bank + (j * taps),  \
+                                            taps);                           \
+          j++;                                                               \
+          if (j == l) j = 0;                                                 \
+          p += m;                                                            \
+          s += p / l;                                                        \
+          p %= l;                                                            \
+        }                                                                    \
+      } else {                                                               \
+        for (int64_t i = 0; i < n_out; i++) {                                \
+          out[i] =                                                           \
+              soundml_resample_dot_##SUFFIX(scratch + s, bank + (p * taps),  \
+                                            taps);                           \
+          p += m;                                                            \
+          s += p / l;                                                        \
+          p %= l;                                                            \
+        }                                                                    \
       }                                                                      \
       memcpy(hist + (c * hlen), scratch + n, (size_t)hlen * sizeof(T));      \
     }                                                                        \
@@ -127,21 +154,22 @@ CAMLprim value soundml_resample_step(value v_bank, value v_hist,
                                      value v_scratch, value v_x, value v_y,
                                      value v_n, value v_n_out,
                                      value v_channels, value v_k, value v_l,
-                                     value v_m, value v_phase0, value v_s0,
-                                     value v_is_flush) {
+                                     value v_m, value v_row0, value v_s0,
+                                     value v_visit, value v_is_flush) {
   const int64_t n = Long_val(v_n);
   const int64_t n_out = Long_val(v_n_out);
   const int64_t channels = Long_val(v_channels);
   const int64_t k = Long_val(v_k);
   const int64_t l = Long_val(v_l);
   const int64_t m = Long_val(v_m);
-  const int64_t phase0 = Long_val(v_phase0);
+  const int64_t row0 = Long_val(v_row0);
   const int64_t s0 = Long_val(v_s0);
+  const int visit = Bool_val(v_visit);
   const int is_flush = Bool_val(v_is_flush);
   const int64_t taps = (2 * k) + 1, hlen = 2 * k;
 
   if (n < 0 || n_out < 0 || channels < 1 || k < 0 || l < 1 || m < 1 ||
-      phase0 < 0 || phase0 >= l || s0 < 0)
+      row0 < 0 || row0 >= l || s0 < 0)
     caml_failwith("soundml_resample: invalid geometry");
   const int kind = soundml_resample_kind(v_bank);
   if (kind != CAML_BA_FLOAT32 && kind != CAML_BA_FLOAT64)
@@ -159,7 +187,7 @@ CAMLprim value soundml_resample_step(value v_bank, value v_hist,
     caml_failwith("soundml_resample: buffer extents disagree with geometry");
   if (n_out > 0) {
     /* the last window must fit inside the scratch lane */
-    const int64_t s_last = s0 + ((phase0 + ((n_out - 1) * m)) / l);
+    const int64_t s_last = s0 + ((((row0 * m) % l) + ((n_out - 1) * m)) / l);
     if (s_last > n - 1)
       caml_failwith("soundml_resample: window overruns the scratch lane");
   }
@@ -174,11 +202,12 @@ CAMLprim value soundml_resample_step(value v_bank, value v_hist,
   if (kind == CAML_BA_FLOAT32)
     soundml_resample_run_f32((const float *)bank, (float *)hist,
                              (float *)scratch, (const float *)x, (float *)y, n,
-                             n_out, channels, k, l, m, phase0, s0, is_flush);
+                             n_out, channels, k, l, m, row0, s0, visit,
+                             is_flush);
   else
     soundml_resample_run_f64((const double *)bank, (double *)hist,
                              (double *)scratch, (const double *)x, (double *)y,
-                             n, n_out, channels, k, l, m, phase0, s0,
+                             n, n_out, channels, k, l, m, row0, s0, visit,
                              is_flush);
   caml_acquire_runtime_system();
   return Val_unit;
@@ -188,5 +217,6 @@ CAMLprim value soundml_resample_step_bc(value *argv, int argn) {
   (void)argn;
   return soundml_resample_step(argv[0], argv[1], argv[2], argv[3], argv[4],
                                argv[5], argv[6], argv[7], argv[8], argv[9],
-                               argv[10], argv[11], argv[12], argv[13]);
+                               argv[10], argv[11], argv[12], argv[13],
+                               argv[14]);
 }
