@@ -39,18 +39,27 @@
     feature with different state.
 
     {!Config.create} plans each conversion as one polyphase stage or a
-    cascade of two, decided by a deterministic cost search at creation.
-    Near-unity ratios (44.1 ↔ 48 kHz) keep the single-stage design — no
-    split beats it. Wide ratios (44.1 → 16 kHz, 48 ↔ 8 kHz, …) run a
-    wide-transition stage and a sharp stage ordered so the sharp filter sits
-    at the lowest rate in the chain — a 1.5-2.3x cut in multiplies per output
-    at equal spec. Each cascade stage is designed 6 dB past the tier's
-    attenuation (two error sources, amplitude-summed), so the composite meets
-    the tier spec everywhere; every contract above — exact rational rate,
-    integral compensated latency, exact output length, the partition law —
-    holds identically for both plan shapes, and the plan is an internal
-    choice, invisible in this API except through {!Config.latency} and
-    {!Config.pp}. *)
+    cascade of two, decided by a deterministic cost search at creation. Wide
+    ratios (44.1 → 16 kHz, 48 ↔ 8 kHz, …) run a wide-transition stage and a
+    sharp stage ordered so the sharp filter sits at the lowest rate in the
+    chain; near-unity ratios (44.1 ↔ 48 kHz) admit no useful all-FIR split
+    and instead oversample by two through the FFT-executed sharp stage below,
+    then descend by a cheap rational stage. Each cascade stage is designed
+    6 dB past the tier's attenuation (two error sources, amplitude-summed),
+    so the composite meets the tier spec everywhere; every contract above —
+    exact rational rate, integral compensated latency, exact output length,
+    the partition law — holds identically for every plan shape, and the plan
+    is an internal choice, invisible in this API except through
+    {!Config.latency} and {!Config.pp}.
+
+    For most conversions the planner additionally executes the sharp stage by
+    FFT convolution on a fixed block grid (overlap-save) — the same filter,
+    the same exact accessors, the same partition law, chosen only when it is
+    strictly cheaper. FFT-executed plans change the {e cadence} of streaming:
+    output leaves in block-sized bursts, and the first samples emerge after
+    roughly one block (about the class of soxr's DFT stages, 1-4 k source
+    samples, {!Config.pp} names the block length) instead of after the group
+    delay. Offline {!apply} is unaffected. *)
 
 (** The type for custom filter specifications. [attenuation] is the stop-band
     rejection target in dB; [passband] is the flat-to-0-dB bandwidth preserved,
@@ -86,11 +95,12 @@ module Config : sig
       reads it sequentially; configs are cheap to share, and one config serves
       any
       number of {!apply} calls and prepared kernels. Construction is {e not}
-      cheap: a prototype runs tens of thousands of taps (measured, [`High]
-      44.1 → 48 kHz: about 1 ms, roughly twice the cost of resampling one
-      second of float32 audio), so corpus jobs must build the config once and
-      reuse it — the flat [Soundml.resample] convenience rebuilds it on every
-      call. *)
+      free: filter design measures about 0.1 ms at [`High] 44.1 → 48 kHz —
+      the FFT-executed plans design far smaller banks than the retired
+      single-stage ones — up to ~0.6x the cost of resampling one second of
+      float32 audio on the wider ratios, so corpus jobs should still build
+      the config once and reuse it — the flat [Soundml.resample] convenience
+      rebuilds it on every call. *)
   type t
 
   val create : ?quality:quality -> sample_rate:int -> target:int -> unit -> t
@@ -130,8 +140,11 @@ module Config : sig
       integral: each prototype length is rounded up to [2*K*L + 1] so the
       linear-phase delay [K] lands on that stage's input grid, and a cascade
       composes [K1 + K2 * M1 / L1] with [K2] rounded onto stage 1's grid at
-      design time. [0] for the identity. At [`High] 44.1 → 48 kHz, [K = 95]
-      (~2.2 ms); at [`High] 44.1 → 16 kHz (a cascade), [K = 303] (~6.9 ms). *)
+      design time. [0] for the identity. At [`High] 44.1 → 48 kHz, [K = 105]
+      (~2.4 ms); at [`High] 44.1 → 16 kHz, [K = 453] (~10.3 ms).
+      The executor never moves this number: an FFT-executed stage runs the
+      same filter with the same delay — only the streaming {e cadence}
+      changes (see the module overview and {!Kernel.step}). *)
 
   val output_latency : t -> Pipeline.Rate.t
   (** [output_latency c] is the group delay in output samples, exact:
@@ -194,29 +207,40 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     those operations are.
 
     It is numerically {e distinct} from {!apply}: the matrix product sums each
-    output in a different order than the executor's fixed dot product, so the
-    two surfaces agree only to within a small multiple of [peak * 2{^-52}]
-    (float64; [peak * 2{^-23}] at float32, [peak] the largest output
-    magnitude) — a divergence that grows with the reduced filter's length and
-    is {e never} zero by contract. The tested bound is 16 such units across
-    presets and dtypes at the common conversions (150-800-tap filters) and 32
-    across the full standard-rate matrix (extreme pairs run 1 500+ taps):
-    around −290 dBFS at float64, far below every quality threshold. Both
-    bounds are in units of the output {e peak} and are tested on outputs a
-    signal dominates; an output that is nothing but stopband residual — a
-    full-scale tone parked above the target's passband, say — divides the
-    same absolute agreement (order 10{^-17} at float64) by a residual-sized
-    peak and reads a few times larger in these units, a property of the unit,
-    not of the filters. It is
+    output in a different order than the executor — the fixed dot product of
+    a direct stage, the FFT-convolution roundings of an FFT-executed one — so
+    the two surfaces agree only to within a small multiple of
+    [peak * 2{^-52}] (float64; [peak * 2{^-23}] at float32, [peak] the
+    largest output magnitude) — a divergence that grows with the reduced
+    filter's length and is {e never} zero by contract. The tested bounds: 16
+    such units on broadband noise across presets and dtypes at the common
+    conversions (150-800-tap filters; re-measured with the FFT-executed
+    plans, the worst observed stays at 10-11 units — an FFT-executed float32
+    [apply] computes in a float64 interior, so its side of the comparison
+    only tightens), and 32 both across the full standard-rate matrix
+    (extreme pairs run 1 500+ taps) and on one-second single-component
+    corpora — a full-scale passband sine, a near-Nyquist sine, a
+    10{^-30}-amplitude sine — which read systematically higher in this
+    peak-relative unit than noise (measured worst ~16 float32 / ~21
+    float64). All of it is around −290 dBFS at float64, far below every
+    quality threshold. The
+    bounds are in units of the output {e peak}: an output that is nothing
+    but stopband residual — a full-scale tone parked above the target's
+    passband, say — divides the same absolute agreement (order 10{^-17} at
+    float64) by a residual-sized peak and reads a few times larger in these
+    units, a property of the unit, not of the filters. It is
     offline-only and carries no partitioning law: it is not a {!Pipeline}
     stage, it has no streaming form, and it is deliberately not a flag on
     {!apply} — a flag that changes bits would fork the library's one resampler
     in place. When bit-stability across
-    partitionings matters, use {!apply} or {!Kernel}; when differentiability,
-    device eligibility, or offline float64 throughput matters, use this — the
-    dense form rides the platform GEMM, which multiplies wide float64 far
-    faster than the executor's scalar-width lanes (measured: 2.5-3x on
-    one-second clips), and runs level with the executor at float32.
+    partitionings matters, use {!apply} or {!Kernel}; when differentiability
+    or device eligibility matters, use this. The offline-float64-throughput
+    case for the dense form is gone on FFT-executed plans — there [apply]
+    runs a float64 interior that outpaces the GEMM twin (measured: 1.6x at
+    [`High] 44.1 → 48 kHz on one-second float64 clips) — and survives only
+    on plans that stay entirely on the direct executor, where the platform
+    GEMM still multiplies wide float64 far faster than the executor's
+    scalar-width lanes.
 
     For the identity configuration it returns [x] itself, like {!apply}.
 
@@ -251,8 +275,13 @@ module Kernel : sig
       audio. Allocates everything: each stage's per-channel history ([2K]
       samples), the dtype-instantiated banks (cast from the config's float64
       design once, here — never cached narrower than the state's dtype) and,
-      for cascade plans, the fixed stage-1 → stage-2 hand-off buffer —
-      {!step} allocates exactly the output tensor.
+      for cascade plans, the fixed stage-1 → stage-2 hand-off buffer — a
+      direct {!step} allocates exactly the output tensor. An FFT-executed
+      stage keeps a per-channel block carry ([N] samples) here instead of the
+      history, and its {!step} additionally allocates bounded per-block
+      transform transients on top of the output — gated by the allocation
+      tests, and collapsing back to output-only when the tensor library
+      grows destination passing.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
       [dtype] is neither float32 nor float64 — the two sample types the
@@ -262,10 +291,13 @@ module Kernel : sig
   (** [step k chunk] feeds [chunk] — time axis last — and is the newly
       computable output samples, if any. [chunk] is borrowed: the kernel
       copies what it must retain, and the returned tensor aliases neither
-      [chunk] nor kernel state. At most [ceil (len * L / M) + s] samples are
-      returned for a length-[len] chunk, where [s] is a small plan-alignment
-      constant: [1] for single-stage plans, at most [1 + L2/M2] for
-      cascades.
+      [chunk] nor kernel state. For direct plans at most
+      [ceil (len * L / M) + s] samples are returned for a length-[len] chunk,
+      where [s] is a small plan-alignment constant: [1] for single-stage
+      plans, at most [1 + L2/M2] for cascades. For FFT-executed plans,
+      "computable" means completed blocks: steps inside a block return
+      [None] and boundary crossings emit the whole block — burst emission is
+      normal operation and identical across partitionings.
 
       Raises [Invalid_argument] if [chunk] is longer than [max_block], if a
       leading axis disagrees with [channels], or if [k] was drained by
@@ -290,10 +322,10 @@ val stage : Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
     [Config.rate c]. Its [out_format] scales items per second by exactly
     [L / M] (44100 → 48000 threads through as exactly 48000) and widens the
     per-chunk bound to cover the plan's worst step and drain —
-    [ceil (bound * L / M) + 1] for single-stage plans. [prepare] validates
-    that the incoming format's items per second equal [sample_rate] and
-    raises [Invalid_argument] otherwise — at prepare time, never
-    mid-stream.
+    [ceil (bound * L / M) + 1] for direct single-stage plans, at least one
+    full block for FFT-executed plans. [prepare] validates that the incoming
+    format's items per second equal [sample_rate] and raises
+    [Invalid_argument] otherwise — at prepare time, never mid-stream.
 
     For the identity configuration the stage is transparent to the latency and
     rate accounting (latency [0], rate [1/1]) and forwards chunks with one

@@ -8,21 +8,23 @@
    windows measure [Gc.minor_words] and major-heap growth per call, so a
    per-call cost growing with accumulated state fails the gate.
 
-   Budget rationale, chunk_len = 512, `High 44100 -> 48000 (L/M = 160/147, ~558
-   output samples per step): one step wraps three bigarrays around the kernel
-   state and the chunk, allocates the output tensor (record, shape metadata and
-   a custom block on the OCaml heap — the payload is malloc'd outside it) and a
-   few options and closures. Measured on OCaml 5.5: ~493 minor words/step mono
-   float32, ~508 stereo float64, ~534 per stage push, identical across windows;
-   the minor budget is ~2x the measured figure, absorbing runtime variation
-   across hosts while still failing any O(history) regression. The promoted
-   budget is its own, an order of magnitude over the measured ~0 words/step:
-   comparing promotions against the minor budget would let a steady
-   promoted-heap leak pass unnoticed.
+   Budget rationale, chunk_len = 512, `High 11025 -> 8000 (L/M = 320/441, a
+   single direct stage — the near-unity class whose block rule sits past the FFT
+   executor's emission ceiling, so it pins the direct path now that the 44.1 <->
+   48 kHz plans execute their sharp stage by overlap-save): one step wraps three
+   bigarrays around the kernel state and the chunk, allocates the output tensor
+   (record, shape metadata and a custom block on the OCaml heap — the payload is
+   malloc'd outside it) and a few options and closures. Measured on OCaml 5.5:
+   ~493 minor words/step mono float32, ~508 stereo float64, ~534 per stage push,
+   identical across windows; the minor budget is ~2x the measured figure,
+   absorbing runtime variation across hosts while still failing any O(history)
+   regression. The promoted budget is its own, an order of magnitude over the
+   measured ~0 words/step: comparing promotions against the minor budget would
+   let a steady promoted-heap leak pass unnoticed.
 
    [apply] carries its own per-call budget: it prepares a kernel (the bank cast
    plus zeroed history and scratch) and concatenates the stepped and drained
-   tensors — ~1.7k minor and ~12 promoted words per call, measured, fixed in the
+   tensors — ~1.9k minor and ~18 promoted words per call, measured, fixed in the
    input length. *)
 
 open Windtrap
@@ -67,7 +69,30 @@ let check ~minor_budget ~promoted_budget windows =
           window major_per_call promoted_budget )
     windows
 
-let cfg () = Resample.Config.create ~sample_rate:44100 ~target:48000 ()
+let cfg () = Resample.Config.create ~sample_rate:11025 ~target:8000 ()
+
+(* FFT-executed plans (the `High 8 -> 48 k and 44.1 -> 16 k plans of record run
+   their sharp stage by overlap-save) allocate transform transients per executed
+   block — the assembly, the spectra, the inverse — on top of the output tensor:
+   the documented deviation until nx grows destination passing, the same class
+   the Stft kernel lives with. The budgets are still BOUNDED per call and
+   independent of accumulated state: at chunk 512 the 8 -> 48 k stage-1 grid (B
+   = 824) completes a block on ~2 of 3 steps, and a block is a fixed handful of
+   tensors whatever the history. Measured on OCaml 5.5: ~2.7k minor words/step
+   and ~3 promoted, mono float32, identical across windows; budgets are ~2x the
+   measured figures, same discipline as the direct rows above. [apply] on a
+   one-second 44.1 -> 16 k clip batches every block of the whole signal through
+   one stacked transform: ~11.9k minor and ~410 promoted words per call, fixed
+   in the input length. *)
+let ols_minor_budget = 5500.
+
+let ols_promoted_budget = 60.
+
+let ols_apply_minor_budget = 24000.
+
+let ols_apply_promoted_budget = 800.
+
+let ols_cfg () = Resample.Config.create ~sample_rate:8000 ~target:48000 ()
 
 let suite =
   [ group "alloc"
@@ -95,7 +120,7 @@ let suite =
               ) )
       ; test "stage push stays within budget" (fun () ->
             let source =
-              Pipeline.Format.audio Nx.float32 ~sample_rate:44100 ~channels:1
+              Pipeline.Format.audio Nx.float32 ~sample_rate:11025 ~channels:1
             in
             let plan =
               Pipeline.Stream.prepare
@@ -114,5 +139,28 @@ let suite =
             check ~minor_budget:apply_minor_budget
               ~promoted_budget:apply_promoted_budget
               (measure_windows ~warmup:16 ~calls:128 (fun () ->
+                   ignore (Sys.opaque_identity (Resample.apply c clip)) ) ) )
+      ; test "ols kernel step stays within budget (mono float32, 8k -> 48k)"
+          (fun () ->
+            let kernel =
+              Resample.Kernel.prepare (ols_cfg ()) Nx.float32 ~channels:1
+                ~max_block:chunk_len
+            in
+            let chunk = Nx.rand Nx.float32 [|chunk_len|] in
+            check ~minor_budget:ols_minor_budget
+              ~promoted_budget:ols_promoted_budget
+              (measure_windows ~warmup:64 ~calls:256 (fun () ->
+                   ignore
+                     (Sys.opaque_identity (Resample.Kernel.step kernel chunk)) )
+              ) )
+      ; test "ols apply stays within its per-call budget (44.1k -> 16k)"
+          (fun () ->
+            let c =
+              Resample.Config.create ~sample_rate:44100 ~target:16000 ()
+            in
+            let clip = Nx.rand Nx.float32 [|44100|] in
+            check ~minor_budget:ols_apply_minor_budget
+              ~promoted_budget:ols_apply_promoted_budget
+              (measure_windows ~warmup:8 ~calls:64 (fun () ->
                    ignore (Sys.opaque_identity (Resample.apply c clip)) ) ) ) ]
   ]
