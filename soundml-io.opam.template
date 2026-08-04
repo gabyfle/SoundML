@@ -4,12 +4,3 @@ pin-depends: [
     "git+https://github.com/gabyfle/raven.git#69aa608f93ae6583a4d9f8d69c233c9f66bc0920"
   ]
 ]
-
-depexts: [
-  ["libsoxr-dev"] {os-family = "debian" | os-family = "ubuntu"}
-  ["soxr"] {os-family = "arch"}
-  ["soxr-dev"] {os-distribution = "alpine"}
-  ["soxr-devel"] {os-family = "fedora" | os-distribution = "centos" | os-distribution = "rhel"}
-  ["audio/libsoxr"] {os = "freebsd" | os = "openbsd"}
-  ["soxr"] {os = "macos" & os-distribution = "homebrew"}
-]

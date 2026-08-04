@@ -66,6 +66,17 @@ Current suites:
   `librosa.onset.onset_strength` end-to-end on its default log-power-mel
   chain (lags 1-3, centered and left alignment, degenerate short signals,
   the >80 dB envelope), both element dtypes.
+- `io` — decode parity for `Soundml_io` against python-soundfile (the io
+  vector files record the soundfile and bundled-libsndfile versions beside
+  the base stack) over the committed fixtures in `test/io/corpus/`, which
+  the same generator class writes: float64 decodes stored planar
+  `[channels; frames]`, sample-exact for lossless cells — the float32
+  expectation is the correctly-rounded float32 cast, an equality the
+  generator asserts against python-soundfile's own float32 decode for every
+  fixture — and Ogg/Vorbis at the measured cross-stack noise ceiling; plus
+  the write-clipping golden (SFC_SET_CLIPPING saturation, not wraparound).
+  The generator also constructs the malformed-input corpus under
+  `test/io/corpus/malformed/`, seeds and offsets pinned in its MANIFEST.
 - `resample` — the one deliberate exception to librosa bit-parity:
   `Soundml.Resample` targets soxr HQ's published specification with its own
   bits, so its harness asserts measured decibel thresholds, never vector

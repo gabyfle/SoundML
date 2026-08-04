@@ -52,10 +52,9 @@
 
 (package
  (name soundml-io)
- (allow_empty)
- (synopsis "Audio-file I/O and resampling for SoundML")
+ (synopsis "Audio-file I/O for SoundML")
  (description
-  "SoundML I/O decodes and encodes audio with libsndfile and optionally resamples it with SoXR.")
+  "SoundML I/O decodes and encodes audio with libsndfile. Load-time resampling is Soundml.Resample, fed at decode time.")
  (depends
   (ocaml
    (>= 5.5.0))
@@ -64,15 +63,15 @@
    (= :version))
   (nx
    (= dev))
-  (conf-c++ :build)
   (conf-pkg-config :build)
   (conf-sndfile :build)
-  (conf-samplerate :build)
   (dune-configurator :build)
   (odoc :with-doc)
-  (windtrap :with-test))
+  (windtrap :with-test)
+  (thumper :with-test)
+  (yojson :with-test))
  (tags
-  (sound audio file-io resampling)))
+  (sound audio file-io)))
 
 (package
  (name soundml-rubberband)

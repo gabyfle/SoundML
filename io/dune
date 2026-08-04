@@ -1,0 +1,23 @@
+(library
+ (name soundml_io)
+ (public_name soundml-io)
+ (foreign_stubs
+  (language c)
+  (names soundml_io_stubs)
+  (flags
+   :standard
+   (:include c_flags.sexp)))
+ (c_library_flags
+  (:include c_library_flags.sexp))
+ (libraries soundml nx nx.buffer))
+
+; SOUNDML_IO_SANITIZE builds the stubs (and their link line) under a
+; sanitizer, e.g. SOUNDML_IO_SANITIZE=address,undefined — the CI leg the
+; malformed-input matrix is gated on.
+
+(rule
+ (targets c_flags.sexp c_library_flags.sexp)
+ (deps
+  (env_var SOUNDML_IO_SANITIZE))
+ (action
+  (run config/discover.exe)))
