@@ -4,13 +4,14 @@
    group-delay compensation, zeros outside the extent — with different bits: the
    matrix product reassociates each output's dot product. The binding contract
    is a tolerance in ULP of the signal peak — one unit is [peak * 2^-52]
-   (float64) or [peak * 2^-23] (float32) — measured here across a seeded corpus
-   of rates, presets and dtypes; the mli documents exactly the bound this suite
-   gates (16 units at the common conversions, 32 across the standard-rate matrix
-   in the quality suite), so the documentation and the gate cannot drift apart.
-   Geometry, by contrast, is asserted exactly: lengths, batch broadcasting, the
-   identity passthrough, and the error matrix are the same statements the C path
-   already passes. *)
+   (float64) or [peak * 2^-23] (float32) — measured here across a seeded noise
+   corpus of rates, presets and dtypes plus a deterministic tone corpus; the mli
+   documents exactly the bounds this suite gates (16 units on broadband noise at
+   the common conversions, 32 on the tone corpus here and across the
+   standard-rate matrix in the quality suite), so the documentation and the
+   gates cannot drift apart. Geometry, by contrast, is asserted exactly:
+   lengths, batch broadcasting, the identity passthrough, and the error matrix
+   are the same statements the C path already passes. *)
 
 open Windtrap
 open Soundml
@@ -76,12 +77,55 @@ let rates =
 
 let qualities = [("fast", `Fast); ("high", `High); ("best", `Best)]
 
-(* The binding tolerance, which the mli documents verbatim. The measured worst
-   case across this corpus is 9.3 ULP of peak (float32, [`Best] — the longest
-   dot products diverge most under the matmul's blocking); the gate is the next
-   power of two, leaving margin for backend blocking changes while still failing
-   well before the divergence could matter (~ -290 dBFS at float64). *)
+(* The binding tolerance, which the mli documents verbatim. Re-measured after
+   the FFT-executed sharp stage landed (the comparison's [apply] side then
+   computes FFT-convolution roundings instead of ordered dot products on the
+   OLS-planned configs): the worst across this corpus is 10.4 ULP of peak
+   ([`Best] float64, 44.1 -> 16 kHz, n = 1024); the gate stays the next power of
+   two, leaving the policy's >= 1.5x margin for backend blocking changes while
+   still failing well before the divergence could matter (~ -290 dBFS at
+   float64). The float32 OLS path runs a float64 interior and tightens its side
+   of the comparison, so the bound is dominated by the GEMM as before. *)
 let tolerance_ulp = 16.
+
+(* The tone corpus binds separately: deterministic one-second signals a single
+   component dominates — a full-scale passband sine, a near-Nyquist sine (above
+   the target Nyquist on the downsamples, where the output is mostly stopband
+   residual and the peak-relative unit reads large by construction — the
+   carve-out the mli spells out), and a 1e-30-amplitude sine. These corpora
+   measure systematically higher in ULP of peak than broadband noise — worst
+   observed 16.4 float32 (44.1 -> 16 kHz [`Fast], tiny) and 20.7 float64 (44.1
+   -> 22.05 kHz [`Best], near-Nyquist) — so their gate is the next power of two
+   over that envelope, same >= 1.5x-margin policy. *)
+let tone_tolerance_ulp = 32.
+
+let tone_corpora n =
+  [ ("sine", Array.init n (fun i -> 0.9 *. sin (0.1 *. Float.of_int i)))
+  ; ("sine-hi", Array.init n (fun i -> 0.9 *. sin (2.2 *. Float.of_int i)))
+  ; ("tiny", Array.init n (fun i -> 1e-30 *. sin (0.1 *. Float.of_int i))) ]
+
+let tone_case (type a) name (dtype : (float, a) Nx.dtype) () =
+  test name (fun () ->
+      let n = 44100 in
+      List.iter
+        (fun (sample_rate, target) ->
+          List.iter
+            (fun (qname, quality) ->
+              let cfg =
+                Resample.Config.create ~quality ~sample_rate ~target ()
+              in
+              List.iter
+                (fun (cname, samples) ->
+                  let x = Nx.create dtype [|n|] samples in
+                  let expected = Resample.apply cfg x in
+                  let got = Resample.apply_gemm cfg x in
+                  let d = ulp_distance dtype expected got in
+                  if d > tone_tolerance_ulp then
+                    failf "%s: %d -> %d Hz (%s, %s): %.2f ULP of peak (gate %g)"
+                      name sample_rate target qname cname d tone_tolerance_ulp )
+                (tone_corpora n) )
+            qualities )
+        rates )
 
 let cross_case name dtype ~ns () =
   test name (fun () ->
@@ -212,6 +256,8 @@ let suite =
   [ group "gemm"
       [ cross_case "cross-validation f64" Nx.float64 ~ns:[1; 96; 147; 1024] ()
       ; cross_case "cross-validation f32" Nx.float32 ~ns:[1; 96; 147; 1024] ()
+      ; tone_case "cross-validation f64 tones" Nx.float64 ()
+      ; tone_case "cross-validation f32 tones" Nx.float32 ()
       ; length_case ()
       ; batch_case ()
       ; identity_case ()

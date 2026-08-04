@@ -5,3 +5,7 @@
 (executable
  (name bitdump)
  (libraries soundml nx))
+
+(executable
+ (name profile_fft)
+ (libraries nx unix))

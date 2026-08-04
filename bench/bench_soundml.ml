@@ -22,9 +22,10 @@
    float32 across chunk sizes (the 1024 row keeps the per-chunk dispatch
    overhead honest); the stage inside a resample-then-STFT front next to the
    same computation hand-written; the identity-rate passthrough; and
-   [Config.create] itself, priced separately because filter design costs more
-   than converting the clip it configures — reuse is the documented contract,
-   and this row keeps the design cost visible.
+   [Config.create] itself, priced separately: the OLS plans design far smaller
+   banks, so creation now costs a fraction of the one-second conversion it
+   configures (0.1-0.6x, from ~2x before) — reuse is still the documented
+   contract, and this row keeps the design cost visible.
 
    The committed baseline gates drift (the suite budgets below), not absolute
    throughput: the resample rows record what the executor delivers on the
@@ -149,33 +150,44 @@ let resample_gemm_benchmarks () =
     [("44k1-48k", 44100, 48000); ("44k1-16k", 44100, 16000)]
 
 let resample_stream_benchmarks () =
-  let sample_rate = 44100 in
-  let clip = Nx.rand Nx.float32 [|sample_rate|] in
-  let cfg = Soundml.Resample.Config.create ~sample_rate ~target:48000 () in
-  List.map
-    (fun max_chunk ->
-      let kernel =
-        Soundml.Resample.Kernel.prepare cfg Nx.float32 ~channels:1
-          ~max_block:max_chunk
-      in
-      let chunks =
-        let rec cut off =
-          if off >= sample_rate then []
-          else
-            let stop = min sample_rate (off + max_chunk) in
-            Nx.shrink [|(off, stop)|] clip :: cut stop
+  (* every streaming cadence: 44.1 -> 48 k feeds the near-unity FFT-executed
+     plan (block bursts), 48 -> 8 k the /F-last FFT-executed class — the two
+     shapes whose float32 streaming pays the FFT executor's few-line stacking
+     price, so both stay ratcheted — and 11.025 -> 8 k the direct dot-product
+     kernel; the 1024 rows keep each executor's per-chunk overhead story
+     honest *)
+  let one (name, sample_rate, target, chunk_sizes) =
+    let clip = Nx.rand Nx.float32 [|sample_rate|] in
+    let cfg = Soundml.Resample.Config.create ~sample_rate ~target () in
+    List.map
+      (fun max_chunk ->
+        let kernel =
+          Soundml.Resample.Kernel.prepare cfg Nx.float32 ~channels:1
+            ~max_block:max_chunk
         in
-        cut 0
-      in
-      Thumper.bench
-        (Printf.sprintf "stream high 44k1-48k f32 chunk %d" max_chunk)
-        (fun () ->
-          Soundml.Resample.Kernel.reset kernel ;
-          List.iter
-            (fun c -> ignore (Soundml.Resample.Kernel.step kernel c))
-            chunks ;
-          ignore (Soundml.Resample.Kernel.flush kernel) ) )
-    [1024; 4096; 16384]
+        let chunks =
+          let rec cut off =
+            if off >= sample_rate then []
+            else
+              let stop = min sample_rate (off + max_chunk) in
+              Nx.shrink [|(off, stop)|] clip :: cut stop
+          in
+          cut 0
+        in
+        Thumper.bench
+          (Printf.sprintf "stream high %s f32 chunk %d" name max_chunk)
+          (fun () ->
+            Soundml.Resample.Kernel.reset kernel ;
+            List.iter
+              (fun c -> ignore (Soundml.Resample.Kernel.step kernel c))
+              chunks ;
+            ignore (Soundml.Resample.Kernel.flush kernel) ) )
+      chunk_sizes
+  in
+  List.concat_map one
+    [ ("44k1-48k", 44100, 48000, [1024; 4096; 16384])
+    ; ("48k-8k", 48000, 8000, [1024; 4096])
+    ; ("11k025-8k", 11025, 8000, [1024; 4096]) ]
 
 let resample_config_benchmarks () =
   [ Thumper.bench "config create high 44k1-48k" (fun () ->

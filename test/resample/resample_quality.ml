@@ -376,6 +376,42 @@ let q6_tiers () =
             failf "44100->48000 %s: worst alias %.1f dB > %.0f" qn worst limit )
         [(`Fast, "fast", -85.); (`Best, "best", -100.)] )
 
+(* {2 The FFT-executed classes, held to the same thresholds}
+
+   The `High plans of record run 8 <-> 48 kHz through the interpolate-x2 and
+   decimate-x2 overlap-save identities (44.1 -> 16 k, the ÷2-last cascade, is
+   already in [mains] and Q3/Q6). Same signals, same ruler, same Q1/Q2
+   thresholds as everywhere — the executor is not allowed to move a quality
+   number the filters do not. Both surfaces, both dtypes. *)
+
+let q_ols_classes () =
+  test "Q1/Q2 hold on the x2/÷2 OLS classes at `High" (fun () ->
+      List.iter
+        (fun (sr, target) ->
+          let c = cfg (sr, target) in
+          List.iter
+            (fun s ->
+              List.iter
+                (fun p ->
+                  let sfdr_min = match p with F64 -> 130. | F32 -> 125. in
+                  List.iter
+                    (fun f ->
+                      let y = convert s p c (tone ~sr ~f ~seconds:2.) in
+                      let mags = spectrum y in
+                      let d = sfdr mags and t = thdn mags in
+                      if d < sfdr_min then
+                        failf "%d->%d %s %s %g Hz: SFDR %.1f dB < %.0f" sr
+                          target s.sname (pname p) f d sfdr_min ;
+                      if t > -125. then
+                        failf "%d->%d %s %s %g Hz: THD+N %.1f dB > -125" sr
+                          target s.sname (pname p) f t )
+                    (* both directions share the 4 kHz lower Nyquist; the tones
+                       sit inside its 3652 Hz passband edge *)
+                    [400.; 1000.; 3000.] )
+                precs )
+            surfaces )
+        [(8000, 48000); (48000, 8000)] )
+
 (* {2 Q9 — round trip} *)
 
 let q9 () =
@@ -509,5 +545,6 @@ let suite =
       ; q5 ()
       ; q6 ()
       ; q6_tiers ()
+      ; q_ols_classes ()
       ; q9 ()
       ; q10 () ] ]
