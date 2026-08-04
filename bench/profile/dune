@@ -9,3 +9,11 @@
 (executable
  (name profile_fft)
  (libraries nx unix))
+
+(executable
+ (name profile_io)
+ (libraries soundml_io nx nx.buffer unix))
+
+(executable
+ (name gate_io)
+ (libraries soundml soundml_io io_bench_corpus nx unix))

@@ -34,14 +34,17 @@ side of the harness is test/support/tutils.ml; new suites (mel, stft, ...)
 add a generator class here and load their files through the same module.
 """
 
+import io
 import json
 import os
 import platform
+import struct
 
 import librosa
 import numpy as np
 import scipy
 import scipy.signal
+import soundfile
 
 VECTOR_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors")
 
@@ -57,7 +60,7 @@ assert librosa.__version__.startswith(
 ), f"librosa 0.11 is the pinned reference, found {librosa.__version__}"
 
 
-def write_suite(suite: str, filename: str, cases: list):
+def write_suite(suite: str, filename: str, cases: list, versions: dict = None):
     """Write one golden file for `suite`, pretty-printed with the values of
     each case kept on a single line."""
     directory = os.path.join(VECTOR_DIRECTORY, suite)
@@ -68,7 +71,7 @@ def write_suite(suite: str, filename: str, cases: list):
         fields = [f'"{key}": {json.dumps(value)}' for key, value in case.items()]
         rendered.append("  {" + ", ".join(fields) + "}")
     body = ",\n".join(rendered)
-    generator = json.dumps(GENERATOR_VERSIONS)
+    generator = json.dumps(GENERATOR_VERSIONS if versions is None else versions)
     with open(path, "w", encoding="utf-8") as f:
         f.write(
             f'{{\n"schema": 1,\n"suite": "{suite}",\n'
@@ -1337,6 +1340,295 @@ class OnsetFeaturesVectorGenerator:
         write_suite(self.SUITE, "onset_strength", self.onset_cases())
 
 
+class IoVectorGenerator:
+    """Golden fixtures and decode-parity vectors for Soundml_io.
+
+    Writes three artifact sets, all committed:
+
+      - test/io/corpus/: small deterministic audio fixtures (seeded
+        chirp+noise in the bench-corpus recipe), written with
+        python-soundfile across the tested container/encoding matrix;
+      - test/io/corpus/malformed/: the malformed-input corpus — empty and
+        garbage files, truncations at pinned offsets, header liars — with
+        every seed and offset recorded in MANIFEST;
+      - test/vectors/io/: python-soundfile float64 decodes of the corpus
+        fixtures, stored planar [channels; frames] (JSON floats round-trip
+        float64 exactly), plus the write-clipping golden. The float32
+        decode is asserted here to equal the correctly-rounded float32 cast
+        of the float64 decode for every fixture, so the OCaml harness
+        derives its float32 expectation from the same file; a break in that
+        law fails regeneration, not the replay.
+
+    The reference is python-soundfile (its bundled libsndfile); the io
+    vector files record both versions beside the base stack.
+    """
+
+    SUITE = "io"
+
+    CORPUS_DIRECTORY = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "io", "corpus"
+    )
+
+    # (name, soundfile format, subtype, extension, rate, channels, frames, seed)
+    PARITY_CASES = [
+        ("wav_pcm16_22050_mono", "WAV", "PCM_16", "wav", 22050, 1, 2205, 101),
+        ("wav_pcm16_44100_stereo", "WAV", "PCM_16", "wav", 44100, 2, 2205, 102),
+        ("wav_pcm24_22050_stereo", "WAV", "PCM_24", "wav", 22050, 2, 2205, 103),
+        ("wav_pcm32_22050_mono", "WAV", "PCM_32", "wav", 22050, 1, 2205, 104),
+        ("wav_float32_22050_stereo", "WAV", "FLOAT", "wav", 22050, 2, 2205, 105),
+        ("wav_float64_22050_mono", "WAV", "DOUBLE", "wav", 22050, 1, 2205, 106),
+        ("aiff_pcm16_22050_mono", "AIFF", "PCM_16", "aiff", 22050, 1, 2205, 107),
+        ("caf_pcm16_22050_stereo", "CAF", "PCM_16", "caf", 22050, 2, 2205, 108),
+        ("flac_pcm16_22050_mono", "FLAC", "PCM_16", "flac", 22050, 1, 2205, 109),
+        ("flac_pcm24_22050_stereo", "FLAC", "PCM_24", "flac", 22050, 2, 2205, 110),
+        ("ogg_vorbis_22050_mono", "OGG", "VORBIS", "ogg", 22050, 1, 6615, 111),
+        ("ogg_vorbis_44100_stereo", "OGG", "VORBIS", "ogg", 44100, 2, 6615, 112),
+    ]
+
+    MALFORMED_BASE_SEED = 4242
+    GARBAGE_SEED = 97531
+    TRUNCATION_FRACTION = 0.6
+    MID_HEADER_OFFSET = 20
+
+    def versions(self):
+        return {
+            **GENERATOR_VERSIONS,
+            "soundfile": soundfile.__version__,
+            "libsndfile": soundfile.__libsndfile_version__,
+        }
+
+    def signal(self, frames, rate, channels, seed):
+        """The bench-corpus recipe: per-channel chirp + lowpassed noise,
+        globally scaled to 0.60 peak. Deterministic in (frames, rate,
+        channels, seed)."""
+        rng = np.random.default_rng(seed)
+        t = np.arange(frames, dtype=np.float64) / rate
+        dur = frames / rate
+        out = np.empty((frames, channels), dtype=np.float64)
+        for c in range(channels):
+            f0, f1 = 220.0 * (c + 1), 2000.0
+            sweep = 0.45 * np.sin(2 * np.pi * (f0 * t + (f1 - f0) / (2 * dur) * t * t))
+            noise = scipy.signal.lfilter([0.15], [1.0, -0.85], rng.standard_normal(frames))
+            noise *= 0.15 / np.abs(noise).max()
+            out[:, c] = sweep + noise
+        out *= 0.60 / np.abs(out).max()
+        return out
+
+    def decode_case(self, name, path, relative, params):
+        """Decode `path` with python-soundfile in both dtypes, assert the
+        float32 = float32-cast-of-float64 law, and return the float64 case
+        (values planar [channels; frames], C order)."""
+        data64, rate = soundfile.read(path, dtype="float64", always_2d=True)
+        data32, rate32 = soundfile.read(path, dtype="float32", always_2d=True)
+        assert rate == rate32 and data64.shape == data32.shape, name
+        assert np.array_equal(data32, data64.astype(np.float32)), name
+        planar = np.ascontiguousarray(data64.T)
+        return {
+            "name": name,
+            "params": {"file": relative, "sample_rate": rate, **params},
+            "shape": list(planar.shape),
+            "values": planar.flatten().tolist(),
+        }
+
+    def parity_cases(self):
+        os.makedirs(self.CORPUS_DIRECTORY, exist_ok=True)
+        cases = []
+        for name, fmt, subtype, ext, rate, channels, frames, seed in self.PARITY_CASES:
+            filename = f"{name}.{ext}"
+            path = os.path.join(self.CORPUS_DIRECTORY, filename)
+            soundfile.write(
+                path,
+                self.signal(frames, rate, channels, seed),
+                rate,
+                format=fmt,
+                subtype=subtype,
+            )
+            params = {
+                "container": fmt.lower(),
+                "encoding": subtype.lower(),
+                "seed": seed,
+            }
+            cases.append(self.decode_case(name, path, f"corpus/{filename}", params))
+        return cases
+
+    def clipping_cases(self):
+        """The write-clipping golden: a ±1.5 full-scale ramp on the exact
+        k/64 grid, encoded to WAV/PCM_16 by python-soundfile (which sets
+        SFC_SET_CLIPPING, as Soundml_io.write does), decoded back in
+        float64. Out-of-range samples saturate at full scale."""
+        ramp = np.arange(-96, 97, dtype=np.float64) / 64.0
+        buffer = io.BytesIO()
+        soundfile.write(buffer, ramp, 22050, format="WAV", subtype="PCM_16")
+        buffer.seek(0)
+        decoded, rate = soundfile.read(buffer, dtype="float64", always_2d=True)
+        assert rate == 22050 and decoded.shape == (193, 1)
+        assert decoded[0, 0] == -1.0 and decoded[-1, 0] == 32767.0 / 32768.0
+        planar = np.ascontiguousarray(decoded.T)
+        return [
+            {
+                "name": "pcm16_clip_ramp",
+                "params": {
+                    "container": "wav",
+                    "encoding": "pcm_16",
+                    "sample_rate": 22050,
+                    "lo": -96,
+                    "hi": 96,
+                    "denominator": 64,
+                },
+                "shape": list(planar.shape),
+                "values": planar.flatten().tolist(),
+            }
+        ]
+
+    def render(self, fmt, subtype):
+        """One second of the malformed-base signal (mono, 22050 Hz) rendered
+        to `fmt` bytes in memory."""
+        buffer = io.BytesIO()
+        soundfile.write(
+            buffer,
+            self.signal(22050, 22050, 1, self.MALFORMED_BASE_SEED),
+            22050,
+            format=fmt,
+            subtype=subtype,
+        )
+        return buffer.getvalue()
+
+    @staticmethod
+    def header_end(label, data):
+        """Byte offset one past the container header: the canonical 44-byte
+        RIFF header for WAV, the fLaC magic + STREAMINFO block for FLAC, the
+        first Ogg page for OGG."""
+        if label == "wav":
+            assert data[36:40] == b"data", "non-canonical WAV header"
+            return 44
+        if label == "flac":
+            assert data[:4] == b"fLaC"
+            return 8 + 34
+        second = data.find(b"OggS", 4)
+        assert second > 0
+        return second
+
+    def malformed(self):
+        directory = os.path.join(self.CORPUS_DIRECTORY, "malformed")
+        os.makedirs(directory, exist_ok=True)
+        manifest = [
+            "# Malformed-input corpus, generated by generate_vectors.py",
+            "# (IoVectorGenerator.malformed). Deterministic: base fixture is",
+            f"# 1 s mono 22050 Hz of the corpus recipe, seed {self.MALFORMED_BASE_SEED};",
+            f"# truncations cut at {self.TRUNCATION_FRACTION:.0%} of byte length,",
+            f"# mid-header at offset {self.MID_HEADER_OFFSET}, and one byte past",
+            "# the container header. Every file must produce a typed error or",
+            "# valid data — never a crash, never zero-fill.",
+            "",
+        ]
+
+        def emit(filename, data, description):
+            with open(os.path.join(directory, filename), "wb") as f:
+                f.write(data)
+            manifest.append(f"{filename}\t{len(data)} bytes\t{description}")
+
+        emit("empty.wav", b"", "zero bytes")
+        rng = np.random.default_rng(self.GARBAGE_SEED)
+        emit(
+            "garbage.wav",
+            rng.integers(0, 256, size=8192, dtype=np.uint8).tobytes(),
+            f"8192 bytes of PRNG output, seed {self.GARBAGE_SEED}",
+        )
+
+        bases = {
+            "wav": self.render("WAV", "PCM_16"),
+            "flac": self.render("FLAC", "PCM_16"),
+            "ogg": self.render("OGG", "VORBIS"),
+        }
+        for label, data in bases.items():
+            cut = int(len(data) * self.TRUNCATION_FRACTION)
+            emit(
+                f"trunc.{label}",
+                data[:cut],
+                f"1 s base cut at byte {cut} of {len(data)}",
+            )
+            emit(
+                f"trunc_hdr20.{label}",
+                data[: self.MID_HEADER_OFFSET],
+                f"1 s base cut mid-header at byte {self.MID_HEADER_OFFSET}",
+            )
+            past = self.header_end(label, data) + 1
+            emit(
+                f"trunc_hdr_past.{label}",
+                data[:past],
+                f"1 s base cut one byte past the header, at byte {past}",
+            )
+
+        wav = bytearray(bases["wav"])
+        riff_size, data_size = len(wav) - 8, len(wav) - 44
+
+        def patched_wav(fields):
+            out = bytearray(wav)
+            for offset, spec, value in fields:
+                struct.pack_into(spec, out, offset, value)
+            return bytes(out)
+
+        emit(
+            "liar_datasize.wav",
+            patched_wav(
+                [(4, "<I", min(0xFFFFFFFF, riff_size * 10)), (40, "<I", data_size * 10)]
+            ),
+            f"RIFF and data sizes inflated 10x ({data_size} -> {data_size * 10})",
+        )
+        emit(
+            "liar_int32.wav",
+            patched_wav([(4, "<I", 0xFFFFFFF7), (40, "<I", 0x7FFFFFFF)]),
+            "data size 0x7FFFFFFF (INT32_MAX), RIFF size to match",
+        )
+        emit(
+            "liar_channels0.wav",
+            patched_wav([(22, "<H", 0)]),
+            "fmt chunk claims 0 channels",
+        )
+        emit(
+            "liar_channels65535.wav",
+            patched_wav([(22, "<H", 0xFFFF)]),
+            "fmt chunk claims 65535 channels",
+        )
+        emit(
+            "liar_rate.wav",
+            patched_wav([(24, "<I", 0x7FFFFFFF)]),
+            "fmt chunk claims a 2147483647 Hz sample rate (INT32_MAX)",
+        )
+
+        flac = bytearray(bases["flac"])
+        # STREAMINFO: the big-endian 64-bit word at bytes 18..26 packs
+        # rate(20) | channels(3) | bits(5) | total_samples(36).
+        (word,) = struct.unpack_from(">Q", flac, 18)
+        total = word & ((1 << 36) - 1)
+        assert total == 22050, total
+
+        def patched_flac(new_total):
+            out = bytearray(flac)
+            struct.pack_into(">Q", out, 18, (word & ~((1 << 36) - 1)) | new_total)
+            return bytes(out)
+
+        emit(
+            "liar_frames.flac",
+            patched_flac(total * 1000),
+            f"STREAMINFO total samples inflated 1000x ({total} -> {total * 1000})",
+        )
+        emit(
+            "liar_int64.flac",
+            patched_flac((1 << 36) - 1),
+            "STREAMINFO total samples at the 36-bit maximum (68719476735)",
+        )
+
+        with open(os.path.join(directory, "MANIFEST"), "w", encoding="utf-8") as f:
+            f.write("\n".join(manifest) + "\n")
+        print(f"wrote {directory} ({len(manifest) - 8} files)")
+
+    def generate(self):
+        write_suite(self.SUITE, "decode", self.parity_cases(), self.versions())
+        write_suite(self.SUITE, "clipping", self.clipping_cases(), self.versions())
+        self.malformed()
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -1345,6 +1637,7 @@ GENERATORS = [
     SpectralFeaturesVectorGenerator,
     EnergyFeaturesVectorGenerator,
     OnsetFeaturesVectorGenerator,
+    IoVectorGenerator,
 ]
 
 if __name__ == "__main__":
