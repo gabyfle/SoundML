@@ -8,6 +8,7 @@
   resample_gemm
   resample_quality
   resample_alloc
+  resample_fft_probe
   test_resample)
  (libraries nx soundml tutils windtrap)
  (deps
