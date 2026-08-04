@@ -307,7 +307,33 @@ let capability_tests =
               ~msg:(Printf.sprintf "composed law/max_chunk=%d" max_chunk)
               expected
               (concat_or (Nx.zeros Nx.float32 [|0; 0|]) outs) )
-          [1; 13; 230] ) ]
+          [1; 13; 230] )
+  ; test "an FFT-executed stage composes upstream of the STFT" (fun () ->
+        (* the widened out-bound must absorb the block bursts: the downstream
+           hop kernel sizes its own max_block from it, so an under-reported
+           bound would reject a burst mid-stream instead of streaming it *)
+        let cfg = Resample.Config.create ~sample_rate:8000 ~target:48000 () in
+        let p =
+          Pipeline.( >> ) (Resample.stage cfg)
+            (Stft.power_stage (Stft.Config.create ~fft_size:256 ~hop:120 ()))
+        in
+        let src =
+          Pipeline.Format.audio Nx.float64 ~sample_rate:8000 ~channels:1
+        in
+        let n = 2600 in
+        let x = signal Nx.float64 n in
+        let expected = Pipeline.run ~source:src p x in
+        List.iter
+          (fun max_chunk ->
+            let outs =
+              stream_outputs p ~source:src ~max_chunk
+                (chunks_of x (uniform_sizes max_chunk n))
+            in
+            check_bits
+              ~msg:(Printf.sprintf "ols composed law/max_chunk=%d" max_chunk)
+              expected
+              (concat_or (Nx.zeros Nx.float64 [|0; 0|]) outs) )
+          [1; 823; 824; 825; 2600] ) ]
 
 (* {2 The suites} *)
 
@@ -386,6 +412,222 @@ let cascade_fold_tests =
   ; fold_case "apply == fold, mono cascade up f64" Nx.float64 ~channels:1
       ~sample_rate:8000 ~target:48000 ~quality:`High ~n:333 () ]
 
+(* {2 The law over FFT-executed (OLS) plans}
+
+   Wide-ratio conversions now execute their sharp stage by overlap-save on a
+   fixed block grid (`High plans of record, pinned by the pp tests): 8 -> 48 k
+   and 16 -> 44.1 k run [x2 OLS] first on the source grid — N = 1024, K = 100,
+   block advance B = 824, seams at fed = 824, 1648, ... — while 44.1 -> 16 k and
+   48 -> 8 k run the OLS stage last, on the intermediate grid behind a direct
+   wide stage (seams land near source positions 4776 and 4973 for the first
+   block). The law cannot depend on any of this — the grid is a function of the
+   config and totals alone — and these cases pin exactly that: chunk edges at
+   the seams and straddling them by one, whole-block and multi-block chunks,
+   1-sample chunks walked across a seam (the [ones] partition at every listed
+   [n]), and a flush at seam-relative residues on both sides of every boundary,
+   including inputs that stop one sample before and after a block completes.
+   Bit-equality against the offline run, as everywhere. *)
+
+let ols_law_tests =
+  [ law_case "ols x2-first 8000->48000 High f64" Nx.float64 ~sample_rate:8000
+      ~target:48000 ~quality:`High
+      ~ns:[2600; 1649; 1648; 1647; 825; 824; 823; 199; 1]
+      ()
+  ; law_case "ols x2-first 8000->48000 High f32" Nx.float32 ~sample_rate:8000
+      ~target:48000 ~quality:`High ~ns:[1649; 825; 823] ()
+  ; law_case "ols x2-first 16000->44100 High f64" Nx.float64 ~sample_rate:16000
+      ~target:44100 ~quality:`High ~ns:[1700; 825; 824; 823; 1] ()
+  ; law_case "ols div2-last 44100->16000 High f64" Nx.float64 ~sample_rate:44100
+      ~target:16000 ~quality:`High
+      ~ns:[4790; 4777; 4776; 4775; 4413; 11]
+      ()
+  ; law_case "ols div2-last 48000->8000 High f32" Nx.float32 ~sample_rate:48000
+      ~target:8000 ~quality:`High
+      ~ns:[5000; 4974; 4973; 4972; 1]
+      ()
+  ; law_case "ols single-stage octave 44100->22050 High f64" Nx.float64
+      ~sample_rate:44100 ~target:22050 ~quality:`High
+      ~ns:[3800; 2049; 2048; 2047; 1669; 1668; 1667; 381; 1]
+      () ]
+
+let ols_sweep_tests =
+  [ sweep_case
+      ~chunks:[1; 823; 824; 825; 1648; 4096]
+      "ols sweep 8000->48000 High f32" Nx.float32 ~sample_rate:8000
+      ~target:48000 ~quality:`High ~n:4200 ()
+  ; sweep_case ~chunks:[1; 823; 824; 825; 4096]
+      "ols sweep 16000->44100 High f64" Nx.float64 ~sample_rate:16000
+      ~target:44100 ~quality:`High ~n:4200 ()
+  ; sweep_case
+      ~chunks:[1; 3; 4775; 4776; 4777; 8192]
+      "ols sweep 44100->16000 High f32" Nx.float32 ~sample_rate:44100
+      ~target:16000 ~quality:`High ~n:12000 () ]
+
+let ols_fold_tests =
+  [ fold_case "apply == fold, stereo ols up f32" Nx.float32 ~channels:2
+      ~sample_rate:8000 ~target:48000 ~quality:`High ~n:2500 ()
+  ; fold_case "apply == fold, stereo ols down f64" Nx.float64 ~channels:2
+      ~sample_rate:44100 ~target:16000 ~quality:`High ~n:5000 () ]
+
+(* The drift probe: a long stream in awkward uniform chunks, crossing many block
+   seams. The phase and grid bookkeeping is exact integer arithmetic, so no
+   drift is representable — this pins it empirically: cumulative emission never
+   passes the exact ceil at any prefix (an OLS stage only quantizes it
+   downward), the final total is exact, and the whole stream equals the offline
+   run bit for bit. *)
+let drift_probe name dtype ~sample_rate ~target ~n ~chunk () =
+  test name (fun () ->
+      let cfg = Resample.Config.create ~sample_rate ~target () in
+      let x = signal dtype n in
+      let expected = Resample.apply cfg x in
+      let k = Resample.Kernel.prepare cfg dtype ~channels:1 ~max_block:chunk in
+      let fed = ref 0 in
+      let outs = ref [] in
+      List.iter
+        (fun c ->
+          let len = Nx.dim (Nx.ndim c - 1) c in
+          ( match Resample.Kernel.step k c with
+          | None ->
+              ()
+          | Some y ->
+              outs := y :: !outs ) ;
+          fed := !fed + len ;
+          let emitted =
+            List.fold_left (fun a t -> a + Nx.dim (Nx.ndim t - 1) t) 0 !outs
+          in
+          let bound = Resample.Config.output_frames cfg ~n:!fed in
+          if emitted > bound then
+            failf "%s: emitted %d passes ceil bound %d at fed %d" name emitted
+              bound !fed )
+        (chunks_of x (uniform_sizes chunk n)) ;
+      ( match Resample.Kernel.flush k with
+      | None ->
+          ()
+      | Some y ->
+          outs := y :: !outs ) ;
+      let got = concat_or (Nx.zeros dtype [|0|]) (List.rev !outs) in
+      check_bits ~msg:(name ^ "/stream == apply") expected got )
+
+let drift_tests =
+  [ drift_probe "drift 8000->48000 High f64, 47 blocks" Nx.float64
+      ~sample_rate:8000 ~target:48000 ~n:39000 ~chunk:997 ()
+  ; drift_probe "drift 44100->16000 High f32, long stream" Nx.float32
+      ~sample_rate:44100 ~target:16000 ~n:120000 ~chunk:1009 () ]
+
+(* {2 The stacked-transform tile seam}
+
+   Batched OLS execution runs in tiles of at most 1024 transform lines (channels
+   * blocks) per stacked rfft/irfft call; the standing probe makes every
+   stacking bit-identical, and these cases pin that empirically at the tile
+   boundary, where no other case reaches. The mono stream crosses the 1024-block
+   seam offline (the apply side stacks two tiles, the streaming side a few lines
+   per step; 44.1 -> 48 k blocks advance B = 824 on the source grid, so ~846 k
+   samples make 1026 blocks); the stereo case holds a two-tile [channels = 2]
+   apply to the per-channel folds, each of which runs in one tile. *)
+
+let tile_seam_tests =
+  [ drift_probe "tile seam 44100->48000 High f32, 1026 blocks" Nx.float32
+      ~sample_rate:44100 ~target:48000 ~n:846000 ~chunk:4096 ()
+  ; test "tile seam, stereo apply equals per-channel folds" (fun () ->
+        let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
+        let n = 430000 in
+        let x =
+          Nx.create Nx.float64 [|2; n|]
+            (Array.init (2 * n) (fun i ->
+                 Float.sin
+                   ( (0.37 +. (0.11 *. Float.of_int (i / n)))
+                   *. Float.of_int (i mod n) ) ) )
+        in
+        let y = Resample.apply cfg x in
+        for c = 0 to 1 do
+          let one = Resample.apply cfg (Nx.shrink [|(c, c + 1); (0, n)|] x) in
+          check_bits
+            ~msg:(Printf.sprintf "channel %d" c)
+            one
+            (Nx.shrink [|(c, c + 1); (0, Nx.dim 1 y)|] y)
+        done ) ]
+
+(* {2 The cost-model boundary}
+
+   The FIR/OLS switch is a creation-time cost decision; semantics must be
+   continuous across it. Scan a custom-quality ladder over one conversion until
+   the executor flips (visible only through [Config.pp]), then hold the two
+   adjacent configs — one direct, one FFT-executed — to the same contracts:
+   exact lengths, compensated delay, and the bit law under partitionings on both
+   sides of the boundary. *)
+let boundary_tests =
+  [ test "adjacent configs across the FIR/OLS switch keep every contract"
+      (fun () ->
+        let mk att =
+          Resample.Config.create
+            ~quality:(`Custom {Resample.attenuation= att; passband= 0.913})
+            ~sample_rate:44100 ~target:22050 ()
+        in
+        let is_ols cfg =
+          let s = Format.asprintf "%a" Resample.Config.pp cfg in
+          let needle = "(ols" in
+          let rec contains i =
+            i + String.length needle <= String.length s
+            && ( String.sub s i (String.length needle) = needle
+               || contains (i + 1) )
+          in
+          contains 0
+        in
+        let flip = ref None in
+        let att = ref 40. in
+        while !flip = None && !att < 200. do
+          let a = !att and b = !att +. 4. in
+          if is_ols (mk a) <> is_ols (mk b) then flip := Some (a, b) ;
+          att := b
+        done ;
+        match !flip with
+        | None ->
+            fail
+              "no FIR/OLS boundary found on the attenuation ladder — the \
+               boundary test no longer exercises the switch; move the ladder"
+        | Some (a, b) ->
+            List.iter
+              (fun att ->
+                let cfg = mk att in
+                let n = 2500 in
+                let x = signal Nx.float64 n in
+                let expected = Resample.apply cfg x in
+                equal
+                  ~msg:(Printf.sprintf "att=%g length" att)
+                  int
+                  (Resample.Config.output_frames cfg ~n)
+                  (Nx.dim (Nx.ndim expected - 1) expected) ;
+                (* compensated delay: an impulse at j lands at j * L / M *)
+                let imp = Nx.zeros Nx.float64 [|n|] in
+                Nx.set_item [1000] 1. imp ;
+                let y = Nx.to_array (Resample.apply cfg imp) in
+                let best = ref 0 in
+                Array.iteri
+                  (fun i v ->
+                    if Float.abs v > Float.abs y.(!best) then best := i )
+                  y ;
+                equal ~msg:(Printf.sprintf "att=%g impulse" att) int 500 !best ;
+                (* the law, on both sides of the switch *)
+                List.iter
+                  (fun sizes ->
+                    let k =
+                      Resample.Kernel.prepare cfg Nx.float64 ~channels:1
+                        ~max_block:(List.fold_left max 1 sizes)
+                    in
+                    let stepped =
+                      List.filter_map (Resample.Kernel.step k)
+                        (chunks_of x sizes)
+                    in
+                    let outs =
+                      stepped @ Option.to_list (Resample.Kernel.flush k)
+                    in
+                    check_bits
+                      ~msg:(Printf.sprintf "att=%g law" att)
+                      expected
+                      (concat_or (Nx.zeros Nx.float64 [|0|]) outs) )
+                  [[1024; 512; 964]; List.init n (fun _ -> 1); [n]] )
+              [a; b] ) ]
+
 let cascade_length_tests =
   [ test "cascade totals hit ceil(n * L / M) for every small n" (fun () ->
         (* the drain truncation, walked across every phase alignment: the raw
@@ -412,6 +654,12 @@ let suite =
   ; group "cascade-sweep" cascade_sweep_tests
   ; group "cascade-fold" cascade_fold_tests
   ; group "cascade-length" cascade_length_tests
+  ; group "ols-law" ols_law_tests
+  ; group "ols-sweep" ols_sweep_tests
+  ; group "ols-fold" ols_fold_tests
+  ; group "ols-drift" drift_tests
+  ; group "ols-tile" tile_seam_tests
+  ; group "ols-boundary" boundary_tests
   ; group "identity" identity_tests
   ; group "flat" flat_tests
   ; group "capability" capability_tests ]

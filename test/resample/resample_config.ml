@@ -31,6 +31,8 @@ let geometry_tests =
           ; (44100, 44100, 1, 1) ] )
   ; test "the tier ladder lands on the documented delays at 44.1 -> 48"
       (fun () ->
+        (* every tier's plan is pinned by its composite delay; the plan shapes
+           themselves are pinned by the pp test below *)
         List.iter
           (fun (quality, k) ->
             let cfg =
@@ -40,16 +42,19 @@ let geometry_tests =
             equal
               ~msg:(Printf.sprintf "K at tier")
               int k
-              (Resample.Config.latency cfg) ;
-            let proto = Resample.Config.prototype Nx.float64 cfg in
-            equal
-              ~msg:(Printf.sprintf "prototype length 2*K*L + 1")
-              int
-              ((2 * k * 160) + 1)
-              (Nx.dim 0 proto) )
-          [(`Fast, 74); (`High, 95); (`Best, 134)] )
+              (Resample.Config.latency cfg) )
+          [(`Fast, 74); (`High, 105); (`Best, 145)] )
+  ; test "a single-stage prototype has length 2*K*L + 1" (fun () ->
+        (* 11025 -> 8000 stays a single direct stage (near-unity class, and its
+           block rule sits past the emission ceiling) *)
+        let cfg = Resample.Config.create ~sample_rate:11025 ~target:8000 () in
+        let k = Resample.Config.latency cfg in
+        let proto = Resample.Config.prototype Nx.float64 cfg in
+        equal ~msg:"prototype length" int ((2 * k * 320) + 1) (Nx.dim 0 proto) )
   ; test "the prototype is linear-phase and sums to L" (fun () ->
-        let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
+        (* a single-stage plan (x2, FFT-executed — the executor cannot touch the
+           designed filter): symmetry is exact by construction *)
+        let cfg = Resample.Config.create ~sample_rate:22050 ~target:44100 () in
         let h = Nx.to_array (Resample.Config.prototype Nx.float64 cfg) in
         let n = Array.length h in
         for i = 0 to (n / 2) - 1 do
@@ -57,8 +62,8 @@ let geometry_tests =
             failf "prototype asymmetric at %d" i
         done ;
         let sum = Array.fold_left ( +. ) 0. h in
-        if Float.abs (sum -. 160.) > 1e-9 then
-          failf "prototype sums to %.17g, expected 160" sum ;
+        if Float.abs (sum -. 2.) > 1e-9 then
+          failf "prototype sums to %.17g, expected 2" sum ;
         (* the center tap is the peak *)
         let peak = ref 0 in
         Array.iteri (fun i v -> if v > h.(!peak) then peak := i) h ;
@@ -73,9 +78,12 @@ let geometry_tests =
   ; test "wide-ratio plans cascade with exact composed latency" (fun () ->
         (* the planner's decompositions at `High, pinned like the tier ladder:
            the composite delay is K1 + K2*M1/L1, integral by the plan-time
-           rounding of K2 onto stage 1's grid, and output_latency stays the
-           exact rational latency*L/M. Near-unity pairs and the plain octave
-           stay single-stage — the shipped designs, bit for bit. *)
+           rounding of K2 onto stage 1's grid (44.1 -> 16 k rounds K2 from 199
+           to 320 for exactly this), and output_latency stays the exact rational
+           latency*L/M. Near-unity pairs stay single-stage — the shipped design,
+           bit for bit; the plain octave keeps its single stage and its latency
+           too (the FFT executor runs the same filter, so the accessors cannot
+           move). *)
         List.iter
           (fun (sample_rate, target, latency) ->
             let cfg = Resample.Config.create ~sample_rate ~target () in
@@ -83,15 +91,63 @@ let geometry_tests =
               ~msg:(Printf.sprintf "%d->%d latency" sample_rate target)
               int latency
               (Resample.Config.latency cfg) )
-          [ (44100, 16000, 303)
-          ; (16000, 44100, 114)
-          ; (48000, 8000, 644)
-          ; (8000, 48000, 108)
-          ; (44100, 22050, 190) (* single: an octave has no factor to strip *)
-          ; (44100, 48000, 95) (* single: near-unity, the shipped design *) ] ;
+          [ (44100, 16000, 453)
+          ; (16000, 44100, 105)
+          ; (48000, 8000, 622)
+          ; (8000, 48000, 105)
+          ; (44100, 22050, 190) (* single stage: same filter, FFT-executed *)
+          ; (44100, 48000, 105)
+            (* near-unity: the measured decision rule takes the x2-first
+               FFT-executed shape (the recorded gate in resample.ml) *)
+          ; (48000, 44100, 113) ] ;
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:16000 () in
-        equal ~msg:"cascade output latency, exact rational" rate_t (r 16160 147)
+        equal ~msg:"cascade output latency, exact rational" rate_t (r 24160 147)
           (Resample.Config.output_latency cfg) )
+  ; test "pp pins the plans of record" (fun () ->
+        (* the executor tag and block length are observable only here, so the
+           shipped plans — stage shapes, filter lengths, transform lengths and
+           latencies — are pinned as exact strings. A cost-model or block-rule
+           change that moves any plan fails this test and must be re-blessed
+           deliberately. *)
+        List.iter
+          (fun (sample_rate, target, expected) ->
+            let cfg = Resample.Config.create ~sample_rate ~target () in
+            equal
+              ~msg:(Printf.sprintf "%d->%d" sample_rate target)
+              string expected
+              (Format.asprintf "%a" Resample.Config.pp cfg) )
+          [ ( 44100
+            , 48000
+            , "resample(44100 -> 48000 Hz, quality=high, L/M=160/147, \
+               stages=2/1:401(ols,N=2048) >> 80/147:21, latency=105)" )
+          ; ( 48000
+            , 44100
+            , "resample(48000 -> 44100 Hz, quality=high, L/M=147/160, \
+               stages=2/1:437(ols,N=4096) >> 147/320:17, latency=113)" )
+          ; ( 44100
+            , 16000
+            , "resample(44100 -> 16000 Hz, quality=high, L/M=160/441, \
+               stages=320/441:25 >> 1/2:641(ols,N=4096), latency=453)" )
+          ; ( 16000
+            , 44100
+            , "resample(16000 -> 44100 Hz, quality=high, L/M=441/160, \
+               stages=2/1:401(ols,N=2048) >> 441/320:21, latency=105)" )
+          ; ( 8000
+            , 48000
+            , "resample(8000 -> 48000 Hz, quality=high, L/M=6/1, \
+               stages=2/1:401(ols,N=2048) >> 3/1:21, latency=105)" )
+          ; ( 48000
+            , 8000
+            , "resample(48000 -> 8000 Hz, quality=high, L/M=1/6, stages=1/3:51 \
+               >> 1/2:399(ols,N=2048), latency=622)" )
+          ; ( 44100
+            , 22050
+            , "resample(44100 -> 22050 Hz, quality=high, L/M=1/2, \
+               taps=381(ols,N=2048), latency=190)" )
+          ; ( 22050
+            , 44100
+            , "resample(22050 -> 44100 Hz, quality=high, L/M=2/1, \
+               taps=381(ols,N=2048), latency=95)" ) ] )
   ; test "identity configuration designs nothing" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:48000 ~target:48000 () in
         equal ~msg:"latency" int 0 (Resample.Config.latency cfg) ;
