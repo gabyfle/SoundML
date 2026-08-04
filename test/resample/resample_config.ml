@@ -70,6 +70,28 @@ let geometry_tests =
         let p2 = Resample.Config.prototype Nx.float64 cfg in
         if Float.equal (Nx.item [0] p2) 42. then
           fail "mutating the returned prototype leaked into the config" )
+  ; test "wide-ratio plans cascade with exact composed latency" (fun () ->
+        (* the planner's decompositions at `High, pinned like the tier ladder:
+           the composite delay is K1 + K2*M1/L1, integral by the plan-time
+           rounding of K2 onto stage 1's grid, and output_latency stays the
+           exact rational latency*L/M. Near-unity pairs and the plain octave
+           stay single-stage — the shipped designs, bit for bit. *)
+        List.iter
+          (fun (sample_rate, target, latency) ->
+            let cfg = Resample.Config.create ~sample_rate ~target () in
+            equal
+              ~msg:(Printf.sprintf "%d->%d latency" sample_rate target)
+              int latency
+              (Resample.Config.latency cfg) )
+          [ (44100, 16000, 303)
+          ; (16000, 44100, 114)
+          ; (48000, 8000, 644)
+          ; (8000, 48000, 108)
+          ; (44100, 22050, 190) (* single: an octave has no factor to strip *)
+          ; (44100, 48000, 95) (* single: near-unity, the shipped design *) ] ;
+        let cfg = Resample.Config.create ~sample_rate:44100 ~target:16000 () in
+        equal ~msg:"cascade output latency, exact rational" rate_t (r 16160 147)
+          (Resample.Config.output_latency cfg) )
   ; test "identity configuration designs nothing" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:48000 ~target:48000 () in
         equal ~msg:"latency" int 0 (Resample.Config.latency cfg) ;
