@@ -88,10 +88,10 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   `bench/run_io_ceiling.sh` before porting any multiplier to another
   machine):
 
-  - **Small reads (1 s files)**: per-file wall 0.95–1.04x the C ceiling on
-    every family (budget 1.25x) — 2.4–3.3x faster than
+  - **Small reads (1 s files)**: per-file wall 0.95–1.07x the C ceiling on
+    every family, both sessions (budget 1.25x) — 2.2–3.3x faster than
     `librosa.load(sr=None, mono=False)` on WAV PCM, 1.7x on wav-float32,
-    1.4x on FLAC, 1.1x on Ogg.
+    1.4–1.5x on FLAC, 1.1x on Ogg.
   - **Bulk reads (30 s files)**: at the C ceiling on FLAC (1.02x), Ogg
     (1.01x) and every mono cell (0.95–1.10x). The stereo WAV cells pay the
     planar-materialization pass — `data` is C-contiguous
@@ -106,23 +106,34 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
     (float32) against our 1.24 ms / 0.51 ms — 2.0–3.3x in our favor on the
     same delivered layout.
   - **Many small files (1000 x 1 s, total wall)**: the reused-destination
-    loop runs 1.02–1.06x the C many-files ceiling (budget 1.15x); the
-    allocating loop runs 1.07–1.28x (OCaml GC churn on 88 KB tensors) and
-    is still 2.06x (wav-pcm16), 1.37x (wav-float32), 1.35x (FLAC) faster
-    than the librosa loop (floors 1.9x / 1.3x / 1.1x).
-  - **Header probes**: `info` at 1.00–1.13x the C open ceiling (budget
-    1.2x) on every family.
-  - **Writes**: FLAC 1.07x and Ogg 1.00x the C chunked-write ceiling
-    (encoder-bound; parity is the claim, budget 1.1x). The WAV cells are
-    disk-noise-dominated in this session (the reference volume ran at 98%
-    capacity; the C ceiling's own write minima moved 3–6x against the
-    recon-era numbers, medians swinging further): measured minima land
-    0.86–1.18x the no-clipping C ceiling. Two structural facts hold
-    regardless: `SFC_SET_CLIPPING` — the pinned saturation policy, byte-
-    compared against python-soundfile by the goldens — costs +27% on the
-    float-to-PCM conversion (measured directly), and against
-    python-soundfile (which also clips) our pcm16/pcm24 writes are
-    1.6–1.8x faster with float32/FLAC/Ogg at parity.
+    loop runs 1.00–1.06x the C many-files ceiling (budget 1.15x, both
+    sessions); the allocating loop runs 1.07–1.28x (OCaml GC churn on
+    88 KB tensors). Its librosa multiple is librosa-side session-sensitive:
+    the recording session measured 2.06x (wav-pcm16), 1.37x (wav-float32),
+    1.35x (FLAC); an independent verification session on the same host
+    (fresh corpus, adjacent min-of-12 runs) measured 1.85x / 1.30x / 1.33x
+    — librosa's loop itself moved 70.2–76.7 ms between sessions, so the
+    wav-pcm16 cell dips below its 1.9x floor when librosa runs fast
+    (f32/FLAC hold their 1.3x / 1.1x floors in both). The form the C gate
+    attaches to — the reused-destination loop — passes its budget in every
+    session.
+  - **Header probes**: `info` at 1.00–1.14x the C open ceiling (budget
+    1.2x) on every family, both sessions.
+  - **Writes**: FLAC 0.95–1.07x and Ogg 0.99–1.00x the C chunked-write
+    ceiling across both sessions (encoder-bound; parity is the claim,
+    budget 1.1x). The WAV cells are disk-noise-dominated on this host (the
+    reference volume ran at 98% capacity in both sessions): write minima
+    swing 2–3x between adjacent runs of the identical binary on every
+    party — ours, the C ceiling and python-soundfile alike (e.g. our
+    float32 cell measured 4.2 and 7.6 ms in back-to-back min-of-12 runs;
+    the C pcm16 ceiling moved 8.3 → 13.4 ms between sessions) — so no
+    stable WAV-write multiplier exists here; measured ratios scatter
+    0.67–1.79x around the no-clipping C ceiling with no consistent
+    direction. Two structural facts hold regardless: `SFC_SET_CLIPPING` —
+    the pinned saturation policy, byte-compared against python-soundfile
+    by the goldens — costs +27% on the float-to-PCM conversion (measured
+    directly with a C probe), and FLAC/Ogg writes sit at parity with
+    python-soundfile.
   - **Fused resampled read**: `read ~sample_rate` within 1.004x (44.1→16 k)
     and 1.045x (44.1→48 k) of reading natively and applying
     `Resample.apply` afterwards (budget 1.05x, min-of-N; the thumper

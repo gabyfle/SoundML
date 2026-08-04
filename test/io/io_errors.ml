@@ -125,7 +125,32 @@ let matrix_tests =
            attempted *)
         expect_error ~msg:"read"
           (function Io {op= "read"; _} -> true | _ -> false)
-          (read Nx.float64 "corpus/malformed/liar_int64.flac") ) ]
+          (read Nx.float64 "corpus/malformed/liar_int64.flac") )
+  ; test "Io: a header rate no resampler plan can reach" (fun () ->
+        (* the fmt chunk claims INT32_MAX Hz — libsndfile opens it and native
+           reads decode fine, but a resampled face must refuse the pair as a
+           typed error, never let [Config.create]'s raise escape: the caller's
+           16000 was valid, the file's 2147483647 was not *)
+        let path = "corpus/malformed/liar_rate.wav" in
+        ( match read Nx.float32 path with
+        | Ok audio ->
+            equal ~msg:"native rate" int 0x7FFFFFFF audio.sample_rate
+        | Error e ->
+            failf "native read: %a" pp_error e ) ;
+        let refused ~msg outcome =
+          expect_error ~msg
+            (function Io {op= "open"; _} -> true | _ -> false)
+            outcome
+        in
+        refused ~msg:"read" (read ~sample_rate:16000 Nx.float32 path) ;
+        refused ~msg:"fold"
+          (fold ~sample_rate:16000 Nx.float64 path ~init:() ~f:(fun () _ -> ())) ;
+        refused ~msg:"Reader.open_"
+          ( match Reader.open_ ~sample_rate:16000 Nx.float32 path with
+          | Ok r ->
+              Reader.close r ; Ok ()
+          | Error e ->
+              Error e ) ) ]
 
 (* {2 The unknown-length stream} *)
 
@@ -166,6 +191,7 @@ let malformed_files =
   ; "liar_int32.wav"
   ; "liar_channels0.wav"
   ; "liar_channels65535.wav"
+  ; "liar_rate.wav"
   ; "liar_frames.flac"
   ; "liar_int64.flac" ]
 

@@ -34,22 +34,28 @@
    locals before the lock is reacquired, and no OCaml value is touched in
    between. No OCaml callback is reachable from any I/O path.
 
-   Decode is single-copy (the design's §3 account): a mono destination is
-   decoded into directly, 65536 frames per sf_readf call; a multichannel
-   destination goes through one cache-resident staging block —
-   clamp(262144 / (channels * elt_size), 4096, 65536) frames, at most 512 KB
+   Decode is single-copy: a mono destination is decoded into directly, 65536
+   frames per sf_readf call; a multichannel destination goes through one
+   staging block — clamp(262144 / (channels * elt_size), 4096, 65536) frames
    — whose deinterleave (or downmix) pass is the only full-size copy beyond
-   libsndfile's own decode write. Writes mirror the same staging for the
-   planar-to-interleaved pass and never hand libsndfile more than 65536
-   frames per sf_writef call, unconditionally: a single multi-megaframe
-   Ogg/Vorbis write segfaults libsndfile 1.2.2 (measured threshold 2.2 M
-   frames), and the cap is a structural loop bound, not an advisory.
+   libsndfile's own decode write. The block is <= 256 KB while the byte
+   budget sets the count (up to 64 bytes per frame: 16 channels of float32,
+   8 of float64); past that the 4096-frame floor dominates and the block
+   grows linearly with the channel count, to 32 MB at libsndfile's
+   1024-channel cap with float64 — allocation overflow- and failure-checked
+   (SOUNDML_IO_ERR_STAGING), never assumed cache-resident. Writes mirror the
+   same staging for the planar-to-interleaved pass and never hand libsndfile
+   more than 65536 frames per sf_writef call, unconditionally: a single
+   multi-megaframe Ogg/Vorbis write segfaults libsndfile 1.2.2 (measured
+   threshold 2.2 M frames), and the cap is a structural loop bound, not an
+   advisory.
 
    Size arithmetic is overflow-checked with __builtin_mul_overflow /
    __builtin_add_overflow at every site; staging is freed on every path. */
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,7 +77,9 @@
    libsndfile an unbounded count). */
 #define SOUNDML_IO_CALL_FRAMES ((int64_t) 65536)
 
-/* Staging block budget in bytes: L2-resident on every current target. */
+/* Staging block byte budget. Sets the block's frame count only down to the
+   4096-frame floor of soundml_io_block_frames — beyond 64 bytes per frame
+   the floor wins and the block outgrows this budget (see the overview). */
 #define SOUNDML_IO_STAGING_BYTES ((int64_t) 262144)
 
 /* Decode/encode layout modes. Kept in sync with the OCaml side
@@ -93,6 +101,18 @@
 /* Stub-level failure reported in the error slot of a read/write result when
    the failure is the stub's own (staging allocation), not libsndfile's. */
 #define SOUNDML_IO_ERR_STAGING (-1)
+
+/* libsndfile's failed-open error state — sf_error(NULL) / sf_strerror(NULL)
+   — is one process-global that every sf_open writes (clearing it on success,
+   setting it on failure). The runtime lock is released around opens, so two
+   threads opening concurrently would race on it and cross-attribute
+   failures: measured on libsndfile 1.2.2, a garbage file's failed open can
+   report "No Error." or another thread's message. Every sf_open and its
+   error capture therefore run under this one mutex; the critical section is
+   bounded by the open itself (~20-250 us — header I/O), the errno-based
+   filesystem probe is per-thread and stays outside, and decode/encode never
+   touch the global, so reads and writes stay fully parallel. */
+static pthread_mutex_t soundml_io_open_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int soundml_io_classify_errno(int err) {
   switch (err) {
@@ -176,10 +196,14 @@ CAMLprim value soundml_io_open_read(value v_path) {
   char details[256] = {0};
 
   caml_release_runtime_system();
+  pthread_mutex_lock(&soundml_io_open_mutex);
   file = sf_open(path, SFM_READ, &info);
   if (file == NULL) {
     sf_err = sf_error(NULL);
     snprintf(details, sizeof details, "%s", sf_strerror(NULL));
+  }
+  pthread_mutex_unlock(&soundml_io_open_mutex);
+  if (file == NULL) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd >= 0)
       close(fd);
@@ -233,10 +257,14 @@ CAMLprim value soundml_io_open_write(value v_path, value v_format,
   char details[256] = {0};
 
   caml_release_runtime_system();
+  pthread_mutex_lock(&soundml_io_open_mutex);
   file = sf_open(path, SFM_WRITE, &info);
   if (file == NULL) {
     sf_err = sf_error(NULL);
     snprintf(details, sizeof details, "%s", sf_strerror(NULL));
+  }
+  pthread_mutex_unlock(&soundml_io_open_mutex);
+  if (file == NULL) {
     /* O_EXCL so the probe never clobbers an existing file: if creation
        succeeds the filesystem was fine (remove the probe artifact), and
        EEXIST means the same. */

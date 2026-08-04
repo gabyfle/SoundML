@@ -377,6 +377,14 @@ let check_quality op quality sample_rate =
         ( op
         ^ ": ?quality without ?sample_rate changes nothing (a resampling \
            quality needs a resampling)" )
+  | Some (`Custom _ as q), Some _ ->
+      (* [`Custom] bounds are [Resample.Config.create]'s to judge; judging them
+         here, against a fixed always-plannable pair, keeps the caller/file
+         boundary sharp: after this, an [Invalid_argument] out of the real pair
+         can only be the file's native rate — a file fact, typed like every
+         other file defect ([make_state]). *)
+      ignore
+        (Soundml.Resample.Config.create ~quality:q ~sample_rate:2 ~target:1 ())
   | _ ->
       ()
 
@@ -455,34 +463,41 @@ let read_mode ~mono ~channels =
 
 (* Decode a stream whose header cannot say its length: chunked to EOF,
    collecting per-block planar pieces (channel stride [block]) and concatenating
-   once — the documented transient for this degenerate case only. *)
+   once — the documented transient for this degenerate case only. EOF is a short
+   delivery {e without} a stub-level error: a staging-allocation failure travels
+   back as [Error details] — it is the stub's own near-OOM condition, never the
+   stream's end. A libsndfile decode error at the tail keeps EOF semantics (the
+   pinned truncated-Ogg outcome: whatever decoded is the data). *)
 let read_to_eof kind h ~mode ~channels ~channels_out =
   let block = 65536 in
   let rec grow acc total =
     let piece = Nx_buffer.create kind (channels_out * block) in
     let ba = Nx_buffer.to_bigarray1 piece in
-    let delivered, _err, _details =
-      stub_readf h ba mode 0 block block channels
-    in
-    let acc = if delivered > 0 then (piece, delivered) :: acc else acc in
-    if delivered < block then (List.rev acc, total + delivered)
-    else grow acc (total + delivered)
+    let delivered, err, details = stub_readf h ba mode 0 block block channels in
+    if err = soundml_io_err_staging then Error details
+    else
+      let acc = if delivered > 0 then (piece, delivered) :: acc else acc in
+      if delivered < block then Ok (List.rev acc, total + delivered)
+      else grow acc (total + delivered)
   in
-  let pieces, total = grow [] 0 in
-  let dst = Nx_buffer.create kind (channels_out * total) in
-  let dst_ba = Nx_buffer.to_bigarray1 dst in
-  let pos = ref 0 in
-  List.iter
-    (fun (piece, n) ->
-      let piece_ba = Nx_buffer.to_bigarray1 piece in
-      for c = 0 to channels_out - 1 do
-        Bigarray.Array1.blit
-          (Bigarray.Array1.sub piece_ba (c * block) n)
-          (Bigarray.Array1.sub dst_ba ((c * total) + !pos) n)
-      done ;
-      pos := !pos + n )
-    pieces ;
-  (dst, total)
+  match grow [] 0 with
+  | Error details ->
+      Error details
+  | Ok (pieces, total) ->
+      let dst = Nx_buffer.create kind (channels_out * total) in
+      let dst_ba = Nx_buffer.to_bigarray1 dst in
+      let pos = ref 0 in
+      List.iter
+        (fun (piece, n) ->
+          let piece_ba = Nx_buffer.to_bigarray1 piece in
+          for c = 0 to channels_out - 1 do
+            Bigarray.Array1.blit
+              (Bigarray.Array1.sub piece_ba (c * block) n)
+              (Bigarray.Array1.sub dst_ba ((c * total) + !pos) n)
+          done ;
+          pos := !pos + n )
+        pieces ;
+      Ok (dst, total)
 
 (* {1 The reader core}
 
@@ -505,15 +520,15 @@ let planar_array1 t =
     (Nx.offset t) (Nx.numel t)
 
 (* The decode block feeding the resampler, in frames. Unlike the native staging
-   (stub-local, L2-resident: the deinterleave is a pure layout pass), the kernel
-   amortizes per-step dispatch and — on FFT-executed plans — stacks more
-   transform lines the longer its chunks are, so the fused path stages a few
-   megabytes rather than a quarter of one: measured on the reference host, 30 s
-   stereo float32 through the near-unity 44.1 -> 48 kHz plan runs 1.5x its
-   offline decomposition at 32768-frame blocks and within 1-3% at this size (the
-   44.1 -> 16 kHz cascade likewise). Clamped to the advertised length so short
-   files never over-stage; still O(1) in file length — the native-rate signal
-   never exists as a whole buffer. *)
+   (stub-local, L2-resident at typical channel counts: the deinterleave is a
+   pure layout pass), the kernel amortizes per-step dispatch and — on
+   FFT-executed plans — stacks more transform lines the longer its chunks are,
+   so the fused path stages a few megabytes rather than a quarter of one:
+   measured on the reference host, 30 s stereo float32 through the near-unity
+   44.1 -> 48 kHz plan runs 1.5x its offline decomposition at 32768-frame blocks
+   and within 1-3% at this size (the 44.1 -> 16 kHz cascade likewise). Clamped
+   to the advertised length so short files never over-stage; still O(1) in file
+   length — the native-rate signal never exists as a whole buffer. *)
 let decode_block_frames ~channels ~elt ~advertised =
   let budget = 4194304 / (channels * elt) in
   let block = Stdlib.min 1048576 (Stdlib.max 4096 budget) in
@@ -575,62 +590,93 @@ let ensure_open st op =
 let truncated_at_eof st =
   st.native.Info.frames > 0 && st.src_pos < st.native.Info.frames
 
+(* The typed refusal of [make_state]'s resampler construction, carried by a
+   control-flow exception so the happy path allocates exactly what the
+   plain-state constructor did (the io alloc gates are word-exact). *)
+exception Open_refused of error
+
 let make_state (type a) (dt : (float, a) Nx.dtype) path h ~frames ~channels
-    ~sample_rate:native_rate ~code ~mono ~target ~quality : a state =
+    ~sample_rate:native_rate ~code ~mono ~target ~quality :
+    (a state, error) result =
   let mode, channels_out = read_mode ~mono ~channels in
   let kind = kind_of_dtype dt in
   let native =
     info_of_header ~frames ~channels ~sample_rate:native_rate ~code
   in
-  let resampler, target_rate =
-    match target with
-    | Some target when target <> native_rate ->
-        (* [Config.create] validates the pair and may raise; the handle must not
-           leak with the exception *)
-        let config =
-          try
-            Resample.Config.create ?quality ~sample_rate:native_rate ~target ()
-          with e ->
+  match
+    let resampler, target_rate =
+      match target with
+      | Some target when target <> native_rate -> (
+        (* Every caller-side input to [Config.create] was validated before the
+           open ([check_sample_rate], [check_quality]), so an [Invalid_argument]
+           out of the real pair can only be the file's native rate — a header
+           fact, typed like every other file defect. The handle must not leak
+           with any exception. *)
+        match
+          Resample.Config.create ?quality ~sample_rate:native_rate ~target ()
+        with
+        | exception Invalid_argument msg ->
+            let (_ : int * string) = stub_close h in
+            (* strip [Config.create]'s own prefix; the op slot carries it *)
+            let details =
+              let prefix = "create: " in
+              let n = String.length prefix in
+              if String.length msg > n && String.sub msg 0 n = prefix then
+                String.sub msg n (String.length msg - n)
+              else msg
+            in
+            raise_notrace (Open_refused (Io {path; op= "open"; details}))
+        | exception e ->
             let (_ : int * string) = stub_close h in
             raise e
-        in
-        let decode_block =
-          decode_block_frames ~channels:channels_out ~elt:(elt_size dt)
-            ~advertised:frames
-        in
-        let kernel =
-          Resample.Kernel.prepare config dt ~channels:channels_out
-            ~max_block:decode_block
-        in
-        let stage = Nx_buffer.create kind (channels_out * decode_block) in
-        ( Some
+        | config -> (
+          match
+            let decode_block =
+              decode_block_frames ~channels:channels_out ~elt:(elt_size dt)
+                ~advertised:frames
+            in
+            let kernel =
+              Resample.Kernel.prepare config dt ~channels:channels_out
+                ~max_block:decode_block
+            in
+            let stage = Nx_buffer.create kind (channels_out * decode_block) in
             { config
             ; kernel
             ; stage_ba= Nx_buffer.to_bigarray1 stage
             ; stage_t= Nx.of_buffer stage ~shape:[|channels_out; decode_block|]
             ; decode_block }
-        , target )
-    | _ ->
-        (None, native_rate)
-  in
-  { handle= h
-  ; path
-  ; dt
-  ; kind
-  ; native
-  ; mode
-  ; channels
-  ; channels_out
-  ; target_rate
-  ; resampler
-  ; carry= Queue.create ()
-  ; carry_len= 0
-  ; src_pos= 0
-  ; out_served= 0
-  ; closed= false
-  ; decoder_eof= false
-  ; flushed= false
-  ; finished= false }
+          with
+          | rs ->
+              (Some rs, target)
+          | exception e ->
+              let (_ : int * string) = stub_close h in
+              raise e ) )
+      | _ ->
+          (None, native_rate)
+    in
+    { handle= h
+    ; path
+    ; dt
+    ; kind
+    ; native
+    ; mode
+    ; channels
+    ; channels_out
+    ; target_rate
+    ; resampler
+    ; carry= Queue.create ()
+    ; carry_len= 0
+    ; src_pos= 0
+    ; out_served= 0
+    ; closed= false
+    ; decoder_eof= false
+    ; flushed= false
+    ; finished= false }
+  with
+  | st ->
+      Ok st
+  | exception Open_refused e ->
+      Error e
 
 let open_state op ?sample_rate ?quality ?(mono = false) dt path =
   check_dtype op dt ;
@@ -640,9 +686,8 @@ let open_state op ?sample_rate ?quality ?(mono = false) dt path =
   | Error e ->
       Error (read_open_error path e)
   | Ok (h, frames, channels, native_rate, code, _seekable) ->
-      Ok
-        (make_state dt path h ~frames ~channels ~sample_rate:native_rate ~code
-           ~mono ~target:sample_rate ~quality )
+      make_state dt path h ~frames ~channels ~sample_rate:native_rate ~code
+        ~mono ~target:sample_rate ~quality
 
 (* {2 The carry} *)
 
@@ -691,32 +736,45 @@ let drop_from_carry st n =
 
 (* One decode block: stage, feed the kernel, enqueue what it emits. Respects the
    header's frame count as the length authority (the same authority that sizes
-   {!read}'s destination); a short read below it is decoder EOF. *)
+   {!read}'s destination); a short read below it is decoder EOF. A stub-level
+   staging failure is a typed [Io] — never EOF, never [Truncated]: the file did
+   nothing wrong, the allocator did. *)
 let decode_step st rs =
   let advertised = st.native.Info.frames in
   let want =
     if advertised > 0 then Stdlib.min rs.decode_block (advertised - st.src_pos)
     else rs.decode_block
   in
-  if want = 0 then st.decoder_eof <- true
+  if want = 0 then begin
+    st.decoder_eof <- true ;
+    Ok ()
+  end
   else begin
-    let got, _err, _details =
+    let got, err, details =
       stub_readf st.handle rs.stage_ba st.mode 0 rs.decode_block want
         st.channels
     in
-    if got > 0 then begin
-      let chunk =
-        if got = rs.decode_block then rs.stage_t
-        else Nx.shrink [|(0, st.channels_out); (0, got)|] rs.stage_t
-      in
-      ( match Resample.Kernel.step rs.kernel chunk with
-      | Some piece ->
-          enqueue_piece st piece
-      | None ->
-          () ) ;
-      st.src_pos <- st.src_pos + got
-    end ;
-    if got < want then st.decoder_eof <- true
+    if err = soundml_io_err_staging then begin
+      st.decoder_eof <- true ;
+      st.finished <- true ;
+      Error (Io {path= st.path; op= "read"; details})
+    end
+    else begin
+      if got > 0 then begin
+        let chunk =
+          if got = rs.decode_block then rs.stage_t
+          else Nx.shrink [|(0, st.channels_out); (0, got)|] rs.stage_t
+        in
+        ( match Resample.Kernel.step rs.kernel chunk with
+        | Some piece ->
+            enqueue_piece st piece
+        | None ->
+            () ) ;
+        st.src_pos <- st.src_pos + got
+      end ;
+      if got < want then st.decoder_eof <- true ;
+      Ok ()
+    end
   end
 
 (* Decoder EOF, resolved exactly once: a broken header claim wins over the flush
@@ -829,9 +887,7 @@ let read_chunk_resampled (type a) (st : a state) rs ~frames out :
   let rec fill () =
     if st.carry_len >= frames then Ok ()
     else if st.decoder_eof then resolve_eof st rs
-    else begin
-      decode_step st rs ; fill ()
-    end
+    else match decode_step st rs with Error e -> Error e | Ok () -> fill ()
   in
   match fill () with
   | Error e ->
@@ -959,9 +1015,12 @@ let seek_state st ~frame =
                     Error e
                 | Ok () ->
                     advance ()
-            else begin
-              decode_step st rs ; advance ()
-            end
+            else
+              match decode_step st rs with
+              | Error e ->
+                  Error e
+              | Ok () ->
+                  advance ()
           in
           let start = if frame < st.out_served then restart () else Ok () in
           match start with
@@ -997,14 +1056,17 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
       | None -> (
           if advertised = 0 then
             (* unknown length (or genuinely empty): decode to EOF *)
-            let dst, total =
+            match
               read_to_eof st.kind st.handle ~mode:st.mode ~channels:st.channels
                 ~channels_out:st.channels_out
-            in
-            finish
-              (Ok
-                 { data= Nx.of_buffer dst ~shape:[|st.channels_out; total|]
-                 ; sample_rate= st.target_rate } )
+            with
+            | Error details ->
+                finish (Error (Io {path; op= "read"; details}))
+            | Ok (dst, total) ->
+                finish
+                  (Ok
+                     { data= Nx.of_buffer dst ~shape:[|st.channels_out; total|]
+                     ; sample_rate= st.target_rate } )
           else if
             not
               (destination_admissible ~path ~frames:advertised
@@ -1029,9 +1091,12 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                documented transient for this degenerate case only *)
             let rec pump () =
               if st.decoder_eof then resolve_eof st rs
-              else begin
-                decode_step st rs ; pump ()
-              end
+              else
+                match decode_step st rs with
+                | Error e ->
+                    Error e
+                | Ok () ->
+                    pump ()
             in
             match pump () with
             | Error e ->
@@ -1090,9 +1155,12 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                           Error e
                       | Ok () ->
                           pump ()
-                  else begin
-                    decode_step st rs ; pump ()
-                  end
+                  else
+                    match decode_step st rs with
+                    | Error e ->
+                        Error e
+                    | Ok () ->
+                        pump ()
                 in
                 match pump () with
                 | Error e ->

@@ -224,6 +224,43 @@ let matrix_tests =
     ; lossless_case `Aiff `Pcm_16 Nx.float64 ~channels:1 ~frames:65537
     ; lossless_case `Caf `Float32 Nx.float32 ~channels:2 ~frames:65537
     ; lossless_case `Flac `Pcm_16 Nx.float64 ~channels:1 ~frames:65537 ]
+  (* the tiny lengths on every other lossless container (the headline grid runs
+     them on WAV): empty and near-empty files exercise the header-only and
+     single-frame paths. The FLAC empty cell is excluded — libsndfile writes a
+     0-byte file no decoder recognizes; pinned below as documented
+     python-soundfile parity. *)
+  @ List.concat_map
+      (fun frames ->
+        [ lossless_case `Aiff `Pcm_16 Nx.float64 ~channels:2 ~frames
+        ; lossless_case `Caf `Pcm_16 Nx.float64 ~channels:2 ~frames ] )
+      [0; 1; 3]
+  @ List.map
+      (fun frames -> lossless_case `Flac `Pcm_16 Nx.float64 ~channels:2 ~frames)
+      [1; 3]
+  @ [ test "an empty flac writes 0 bytes and reads back Unrecognized_format"
+        (fun () ->
+          (* libsndfile 1.2.2 emits nothing for a 0-frame FLAC stream and the
+             resulting empty file is unreadable — by libsndfile itself and by
+             python-soundfile 0.14.0, which writes the identical 0-byte file.
+             Pinned as upstream parity; documented on {!write}. *)
+          let path = temp_path ".flac" in
+          ( match
+              write path {data= Nx.zeros Nx.float32 [|2; 0|]; sample_rate= 22050}
+            with
+          | Ok () ->
+              ()
+          | Error e ->
+              failf "write: %a" pp_error e ) ;
+          equal ~msg:"a 0-frame flac is a 0-byte file" int 0
+            (In_channel.with_open_bin path In_channel.length |> Int64.to_int) ;
+          ( match read Nx.float32 path with
+          | Error (Unrecognized_format _) ->
+              ()
+          | Ok _ ->
+              fail "a 0-byte flac decoded"
+          | Error e ->
+              failf "read: expected Unrecognized_format, got %a" pp_error e ) ;
+          Sys.remove path ) ]
 
 (* {2 Write-input forms} *)
 

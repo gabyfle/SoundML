@@ -167,10 +167,13 @@ val read :
 
     [Invalid_argument] on preconditions: [dt] neither float32 nor float64
     ([Resample.Kernel]'s own restriction), [sample_rate < 1], [quality]
-    without [sample_rate]. Everything the filesystem or the file does wrong
-    is a typed [error]: a header that advertises more frames than decode
-    delivers is {!Truncated} (never zero-filled, never partially returned);
-    an unknown-length stream decodes chunked to EOF. *)
+    without [sample_rate], an invalid [`Custom] quality spec. Everything the
+    filesystem or the file does wrong is a typed [error]: a header that
+    advertises more frames than decode delivers is {!Truncated} (never
+    zero-filled, never partially returned); an unknown-length stream decodes
+    chunked to EOF; a header whose native rate the resampler cannot plan
+    against [sample_rate] (a hostile fmt chunk's 2 GHz, say) is {!Io} at
+    open — the caller's ask was valid, the file's claim was not. *)
 
 val fold :
      ?block:int
@@ -303,6 +306,12 @@ val write : ?format:Format.t -> string -> 'a audio -> (unit, error) result
     Durability: [write] returns after [sf_close] (libsndfile buffers
     flushed to the OS); it does not fsync — the same close-to-close
     contract python-soundfile has.
+
+    One upstream asymmetry, pinned rather than papered over: a 0-frame FLAC
+    write succeeds but produces a 0-byte file that no decoder recognizes —
+    libsndfile 1.2.2 emits nothing for an empty FLAC stream, and
+    python-soundfile writes the identical 0-byte file. Every other
+    container round-trips empty data exactly.
 
     Raises [Invalid_argument] if [a.sample_rate < 1], [a.data] has rank 0
     or rank > 2, or its dtype is neither float32 nor float64. Everything

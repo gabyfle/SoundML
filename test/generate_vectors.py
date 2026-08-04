@@ -1590,6 +1590,11 @@ class IoVectorGenerator:
             patched_wav([(22, "<H", 0xFFFF)]),
             "fmt chunk claims 65535 channels",
         )
+        emit(
+            "liar_rate.wav",
+            patched_wav([(24, "<I", 0x7FFFFFFF)]),
+            "fmt chunk claims a 2147483647 Hz sample rate (INT32_MAX)",
+        )
 
         flac = bytearray(bases["flac"])
         # STREAMINFO: the big-endian 64-bit word at bytes 18..26 packs

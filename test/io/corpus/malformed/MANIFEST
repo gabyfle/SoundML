@@ -21,5 +21,6 @@ liar_datasize.wav	44144 bytes	RIFF and data sizes inflated 10x (44100 -> 441000)
 liar_int32.wav	44144 bytes	data size 0x7FFFFFFF (INT32_MAX), RIFF size to match
 liar_channels0.wav	44144 bytes	fmt chunk claims 0 channels
 liar_channels65535.wav	44144 bytes	fmt chunk claims 65535 channels
+liar_rate.wav	44144 bytes	fmt chunk claims a 2147483647 Hz sample rate (INT32_MAX)
 liar_frames.flac	32949 bytes	STREAMINFO total samples inflated 1000x (22050 -> 22050000)
 liar_int64.flac	32949 bytes	STREAMINFO total samples at the 36-bit maximum (68719476735)
