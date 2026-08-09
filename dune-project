@@ -21,7 +21,7 @@
 
 (pin
  (url
-  "git+https://github.com/raven-ml/raven.git#5f9ff1a397b915b5854670940bba1f3fa11c01f6")
+  "git+https://github.com/gabyfle/raven.git#cec410b0bbde98fe94c0b1ac3717211659d00910")
  (package
   (name nx)))
 

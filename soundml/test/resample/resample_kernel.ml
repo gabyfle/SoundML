@@ -122,12 +122,12 @@ let latency_tests =
           testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
         in
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
-        equal ~msg:"input domain" int 105 (Resample.Config.latency cfg) ;
+        equal ~msg:"input domain" int 95 (Resample.Config.latency cfg) ;
         equal ~msg:"output domain, exact rational" rate_t
-          {Pipeline.Rate.num= 800; den= 7}
+          {Pipeline.Rate.num= 15200; den= 147}
           (Resample.Config.output_latency cfg) ;
         equal ~msg:"stage latency in input items" rate_t
-          {Pipeline.Rate.num= 105; den= 1}
+          {Pipeline.Rate.num= 95; den= 1}
           (Pipeline.latency (Resample.stage cfg)) ) ]
 
 (* {2 An independent reference evaluation of the geometry} *)
@@ -329,14 +329,14 @@ let error_tests =
             ignore (Resample.Kernel.step k (Nx.zeros Nx.float64 [||])) ) )
   ; test "draining consumes the tail; reset restores the initial state"
       (fun () ->
-        (* 44.1 -> 48 k is FFT-executed: the chunk must complete a block (fed >=
-           N - 2K = 1848 at the shipped plan) for the step itself to emit — the
-           sequencing under test needs both a step and a drain emission *)
+        (* 44.1 -> 48 k is GEMM-executed: the chunk must complete a call (fed >=
+           R*M + K = 16412 at the shipped plan) for the step itself to emit —
+           the sequencing under test needs both a step and a drain emission *)
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
         let k =
-          Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:2048
+          Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:32768
         in
-        let x = signal Nx.float64 2048 in
+        let x = signal Nx.float64 32768 in
         let stepped = Resample.Kernel.step k x in
         let drained = Resample.Kernel.flush k in
         is_true ~msg:"emitted" (Option.is_some stepped && Option.is_some drained) ;
