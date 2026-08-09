@@ -28,39 +28,39 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   executor; the streaming kernel across chunk sizes (the 1024 row keeps the
   per-chunk dispatch overhead honest); the resample-then-STFT stage next to
   the same computation hand-written; the identity-rate passthrough; and
-  `Config.create`, priced separately: the OLS plans design far smaller
-  banks, so creation costs a fraction of the one-second conversion it
-  configures (0.1-0.6x) — build once and reuse is still the documented
+  `Config.create`, priced separately: a phase-rich plan designs one long
+  prototype, so creation costs several times the one-second conversion it
+  configures (4-13x) — build once and reuse is the documented
   contract. The Python twin has the fair-fight rows: librosa `soxr_hq` (the
   spec the default preset is designed to) and torchaudio at its published
   `kaiser_best` triple and its defaults.
 
   The measured position, both sides on the maintainer machine in one
-  session (arm64, min-of-N, python-soxr 1.1.0 driving the maintained
-  libsoxr fork): at equal spec on 30-second clips, `soxr_hq` converts
-  2.0-2.2x faster at both dtypes (44.1 ↔ 48 kHz about 2.1x,
-  44.1 → 16 kHz 2.0x — previously 2.0-3.0x). The planner executes its
-  sharp stages by the same overlap-save FFT convolution libsoxr uses,
-  through nx's transforms; the spectrum shaping between the forward and
-  inverse transforms (periodic tiling with its Hermitian mirror, the
-  alias fold, the filter product) runs as one fused pass per transform
-  line, outputs are written in place into the preallocated result, and
-  stacked transform lines are spread across cores in proportion to
-  per-line transform work. The residual gap is arithmetic, not
-  dispatch: the FFT execution rate (libsoxr's hand-vectorized
-  single-precision butterflies against nx's double-interior transforms)
-  plus the tap loop of the direct polyphase stage. The float64 rows are
-  not an equal-precision comparison: soxr HQ runs single-precision
+  session (arm64, min-of-N over five interleaved alternations,
+  python-soxr 1.1.0 driving the maintained libsoxr fork): on one-second
+  clips the near-unity pair is at parity — 44.1 → 48 kHz runs 0.99x
+  `soxr_hq` at float32 and 0.97x at float64 — and 44.1 → 16 kHz runs
+  1.19x (float32) and 1.28x (float64). On 30-second clips `soxr_hq` is
+  1.11x faster at 44.1 → 48 kHz float32, 1.02x at float64, and
+  1.64x / 1.38x at 44.1 → 16 kHz. The phase-rich plans run as one
+  banded matrix product per fixed group of phase cycles, through the
+  platform BLAS; the remaining plans execute their sharp stage by the
+  same overlap-save FFT convolution libsoxr uses, through nx's
+  transforms, with the spectrum shaping between the forward and inverse
+  transforms (periodic tiling with its Hermitian mirror, the alias fold,
+  the filter product) as one fused pass per transform line, outputs
+  written in place into the preallocated result, and stacked transform
+  lines spread across cores in proportion to per-line transform work.
+  The residual gap on the wide ratios is arithmetic: the matrix product
+  spends 1 + M/T times an output's taps on its window, where libsoxr
+  splits the same conversion into two cheaper stages. The float64 rows
+  are not an equal-precision comparison: soxr HQ runs single-precision
   internally regardless of I/O dtype, while SoundML float64 is a genuine
-  double-precision path — the FFT executor's double interior is native
-  there, so float64 runs within a few percent of float32. On one-second
-  clips the same session measures `soxr_hq` 2.3-2.5x faster at both
-  dtypes: the fixed per-call cost is now small against the transform
-  work, so short clips sit near the steady-state ratio instead of far
-  above it. Streaming throughput is still not monotonic in chunk size
-  (the committed 16 384-chunk row runs slower than the 4 096 one on the
-  near-unity pair); the baseline records it as the documented price of
-  the plan. SoundML runs faster than torchaudio at its published
+  double-precision path — both block-shaped executors carry a double
+  interior, so float64 runs within a few percent of float32. Streaming
+  through the matrix product improves with chunk size on the near-unity
+  pair (the 16 384-chunk row is the fastest of the three); the baseline
+  records it. SoundML runs faster than torchaudio at its published
   `kaiser_best` settings and behind torchaudio's faster, lower-spec
   defaults. None of the references carries the bit-exact
   partition-invariance law that is this resampler's defining contract,

@@ -99,12 +99,12 @@ module Config : sig
       reads it sequentially; configs are cheap to share, and one config serves
       any
       number of {!apply} calls and prepared kernels. Construction is {e not}
-      free: filter design measures about 0.1 ms at [`High] 44.1 → 48 kHz —
-      the FFT-executed plans design far smaller banks than the retired
-      single-stage ones — up to ~0.6x the cost of resampling one second of
-      float32 audio on the wider ratios, so corpus jobs should still build
-      the config once and reuse it — the flat [Soundml.resample] convenience
-      rebuilds it on every call. *)
+      free, and it dominates short conversions: designing the one long
+      prototype of a phase-rich plan measures about 1.4 ms at [`High]
+      44.1 → 48 kHz and 3.8 ms at [`High] 44.1 → 16 kHz — several times the
+      cost of resampling one second of float32 audio through it — so corpus
+      jobs must build the config once and reuse it; the flat
+      [Soundml.resample] convenience rebuilds it on every call. *)
   type t
 
   val create : ?quality:quality -> sample_rate:int -> target:int -> unit -> t

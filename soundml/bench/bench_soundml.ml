@@ -22,10 +22,10 @@
    float32 across chunk sizes (the 1024 row keeps the per-chunk dispatch
    overhead honest); the stage inside a resample-then-STFT front next to the
    same computation hand-written; the identity-rate passthrough; and
-   [Config.create] itself, priced separately: the OLS plans design far smaller
-   banks, so creation now costs a fraction of the one-second conversion it
-   configures (0.1-0.6x, from ~2x before) — reuse is still the documented
-   contract, and this row keeps the design cost visible.
+   [Config.create] itself, priced separately: a phase-rich plan designs one long
+   prototype, so creation costs several times the one-second conversion it
+   configures (4-13x) — reuse is the documented contract, and this row keeps the
+   design cost visible.
 
    The committed baseline gates drift (the suite budgets below), not absolute
    throughput: the resample rows record what the executor delivers on the
