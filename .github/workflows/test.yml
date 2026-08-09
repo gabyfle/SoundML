@@ -32,11 +32,10 @@ jobs:
       - run: pip install --upgrade pip
       - run: pip install numpy librosa==0.11.0
 
-      # temporary, waiting for the conf-soxr package to be published to opam repo
-      - name: Install libsndfile, libsamplerate, librubberband and libsoxr
+      - name: Install libsndfile
         run: |
             sudo apt-get update
-            sudo apt-get install -y pkg-config libsndfile-dev libsamplerate0-dev librubberband-dev libsoxr-dev
+            sudo apt-get install -y pkg-config libsndfile-dev
         shell: bash
 
       - name: Install FFmpeg CLI (to generate test data)

@@ -17,13 +17,12 @@
 > The project is being rebuilt from the ground up and is not yet ready for use.
 > The public API is being redesigned and nothing here is stable.
 
-SoundML is distributed as three opam packages:
+SoundML is distributed as two opam packages:
 
 | Package | Contents |
 | --- | --- |
 | `soundml` | the core library; depends on `nx` only |
 | `soundml-io` | audio-file decoding and encoding, resampling |
-| `soundml-rubberband` | time stretching and pitch shifting |
 
 ## Planned Features
  - A fast I/O for interacting with audio files
@@ -49,7 +48,7 @@ $ curl -fsSL https://get.dune.build/install | sh
 plus the system libraries the satellite packages bind to. On Debian and Ubuntu:
 
 ```console
-$ sudo apt-get install pkg-config libsndfile-dev libsamplerate0-dev librubberband-dev libsoxr-dev
+$ sudo apt-get install pkg-config libsndfile-dev
 ```
 
 Then, from the root of the repository:

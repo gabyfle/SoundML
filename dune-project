@@ -72,26 +72,3 @@
   (yojson :with-test))
  (tags
   (sound audio file-io)))
-
-(package
- (name soundml-rubberband)
- (allow_empty)
- (synopsis "Rubber Band time and pitch effects for SoundML")
- (description
-  "SoundML Rubber Band provides offline time stretching and pitch shifting over SoundML audio values.")
- (depends
-  (ocaml
-   (>= 5.5.0))
-  dune
-  (soundml
-   (= :version))
-  (nx
-   (= dev))
-  (conf-c++ :build)
-  (conf-pkg-config :build)
-  (conf-rubberband :build)
-  (dune-configurator :build)
-  (odoc :with-doc)
-  (windtrap :with-test))
- (tags
-  (sound audio time-stretching pitch-shifting)))
