@@ -21,7 +21,7 @@
 
 (pin
  (url
-  "git+https://github.com/raven-ml/raven.git#5f9ff1a397b915b5854670940bba1f3fa11c01f6")
+  "git+file:///Users/gabriel.santamaria/Documents/SoundML/.raven-migration#nx-resample-perf")
  (package
   (name nx)))
 
