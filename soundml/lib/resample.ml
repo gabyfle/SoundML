@@ -1571,9 +1571,9 @@ module Kernel = struct
      samples into a GEMM stage, executes every call that completes — in order,
      exactly once each, always the same [R; P] by [P; L] product — and writes
      this call's [n_out] outputs per channel into [y] at [y_off], channel stride
-     [y_stride]. Like [ols_run], [n_out] falls short of what the executed
-     calls make available only on the truncating drain, where the surplus is
-     exactly the beyond-[output_frames] tail. *)
+     [y_stride]. Like [ols_run], [n_out] falls short of what the executed calls
+     make available only on the truncating drain, where the surplus is exactly
+     the beyond-[output_frames] tail. *)
   let gemm_run k st gs ~src ~n ~n_out ~y_off ~y_stride y =
     let sp = st.sp in
     let ch = k.channels in
