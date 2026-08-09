@@ -19,7 +19,7 @@
 
 (pin
  (url
-  "git+https://github.com/gabyfle/raven.git#69aa608f93ae6583a4d9f8d69c233c9f66bc0920")
+  "git+https://github.com/raven-ml/raven.git#5f9ff1a397b915b5854670940bba1f3fa11c01f6")
  (package
   (name nx)))
 
