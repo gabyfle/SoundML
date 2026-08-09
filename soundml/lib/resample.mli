@@ -39,12 +39,12 @@
     feature with different state.
 
     {!Config.create} plans each conversion as one polyphase stage or a
-    cascade of two, decided by a deterministic cost search at creation. Wide
-    ratios (44.1 → 16 kHz, 48 ↔ 8 kHz, …) run a wide-transition stage and a
-    sharp stage ordered so the sharp filter sits at the lowest rate in the
-    chain; near-unity ratios (44.1 ↔ 48 kHz) admit no useful all-FIR split
-    and instead oversample by two through the FFT-executed sharp stage below,
-    then descend by a cheap rational stage. Each cascade stage is designed
+    cascade of two, decided by a deterministic cost search at creation. Ratios
+    whose rate span is wide against their phase count (48 ↔ 8 kHz, 8 → 48 kHz,
+    …) run a wide-transition stage and a sharp stage ordered so the sharp
+    filter sits at the lowest rate in the chain; phase-rich ratios
+    (44.1 ↔ 48 kHz, 44.1 ↔ 16 kHz, …) keep one stage — no split pays there.
+    Each cascade stage is designed
     6 dB past the tier's attenuation (two error sources, amplitude-summed),
     so the composite meets the tier spec everywhere; every contract above —
     exact rational rate, integral compensated latency, exact output length,
@@ -52,14 +52,18 @@
     is an internal choice, invisible in this API except through
     {!Config.latency} and {!Config.pp}.
 
-    For most conversions the planner additionally executes the sharp stage by
-    FFT convolution on a fixed block grid (overlap-save) — the same filter,
-    the same exact accessors, the same partition law, chosen only when it is
-    strictly cheaper. FFT-executed plans change the {e cadence} of streaming:
-    output leaves in block-sized bursts, and the first samples emerge after
-    roughly one block (about the class of soxr's DFT stages, 1-4 k source
-    samples, {!Config.pp} names the block length) instead of after the group
-    delay. Offline {!apply} is unaffected. *)
+    A stage is executed by dense dot products, by FFT convolution on a fixed
+    block grid (overlap-save) where an integer factor makes the
+    frequency-domain arithmetic collapse, or — for a phase-rich single stage —
+    as one banded matrix product per fixed group of phase cycles. The filter,
+    the exact accessors and the partition law are the same in every case; the
+    choice is the planner's, and {!Config.pp} names it. Both block-shaped
+    executors change the {e cadence} of streaming: output leaves in bursts, and
+    the first samples emerge after roughly one block (about the class of soxr's
+    DFT stages, 1-4 k source samples, {!Config.pp} names the length) or one
+    matrix-product group (a few thousand to a few tens of thousands of source
+    samples) instead of after the group delay. Offline {!apply} is
+    unaffected. *)
 
 (** The type for custom filter specifications. [attenuation] is the stop-band
     rejection target in dB; [passband] is the flat-to-0-dB bandwidth preserved,
@@ -140,11 +144,11 @@ module Config : sig
       integral: each prototype length is rounded up to [2*K*L + 1] so the
       linear-phase delay [K] lands on that stage's input grid, and a cascade
       composes [K1 + K2 * M1 / L1] with [K2] rounded onto stage 1's grid at
-      design time. [0] for the identity. At [`High] 44.1 → 48 kHz, [K = 105]
-      (~2.4 ms); at [`High] 44.1 → 16 kHz, [K = 453] (~10.3 ms).
-      The executor never moves this number: an FFT-executed stage runs the
-      same filter with the same delay — only the streaming {e cadence}
-      changes (see the module overview and {!Kernel.step}). *)
+      design time. [0] for the identity. At [`High] 44.1 → 48 kHz, [K = 95]
+      (~2.2 ms); at [`High] 44.1 → 16 kHz, [K = 261] (~5.9 ms).
+      The executor never moves this number: an FFT-executed or GEMM-executed
+      stage runs the same filter with the same delay — only the streaming
+      {e cadence} changes (see the module overview and {!Kernel.step}). *)
 
   val output_latency : t -> Pipeline.Rate.t
   (** [output_latency c] is the group delay in output samples, exact:
@@ -206,13 +210,16 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     operations end to end, it is differentiable and device-eligible wherever
     those operations are.
 
-    It is numerically {e distinct} from {!apply}: the matrix product sums each
-    output in a different order than the executor — the fixed dot product of
-    a direct stage, the FFT-convolution roundings of an FFT-executed one — so
-    the two surfaces agree only to within a small multiple of
+    It is numerically {e distinct} from {!apply}: this matrix product sums each
+    output in its own order, against whatever the plan's executors sum in —
+    the fixed dot product of a direct stage, the FFT-convolution roundings of
+    an FFT-executed one, the platform matrix product over the plan's own row
+    blocking and float64 interior for a GEMM-executed one — so the two
+    surfaces agree only to within a small multiple of
     [peak * 2{^-52}] (float64; [peak * 2{^-23}] at float32, [peak] the
     largest output magnitude) — a divergence that grows with the reduced
-    filter's length and is {e never} zero by contract. The tested bounds: 16
+    filter's length and that nothing here promises to be zero. The tested
+    bounds: 16
     such units on broadband noise across presets and dtypes at the common
     conversions (150-800-tap filters; re-measured with the FFT-executed
     plans, the worst observed stays at 10-11 units — an FFT-executed float32
@@ -235,12 +242,12 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     in place. When bit-stability across
     partitionings matters, use {!apply} or {!Kernel}; when differentiability
     or device eligibility matters, use this. The offline-float64-throughput
-    case for the dense form is gone on FFT-executed plans — there [apply]
-    runs a float64 interior that outpaces the GEMM twin (measured: 1.6x at
-    [`High] 44.1 → 48 kHz on one-second float64 clips) — and survives only
-    on plans that stay entirely on the direct executor, where the platform
-    GEMM still multiplies wide float64 far faster than the executor's
-    scalar-width lanes.
+    case for the dense form is gone wherever [apply] itself leaves the dot
+    products: an FFT-executed stage runs a float64 interior that outpaces this
+    surface, and a GEMM-executed stage is already the same matrix product over
+    the same bank. It survives on plans that stay entirely on the direct
+    executor, where the platform GEMM still multiplies wide float64 far faster
+    than the executor's scalar-width lanes.
 
     For the identity configuration it returns [x] itself, like {!apply}.
 
@@ -278,10 +285,11 @@ module Kernel : sig
       for cascade plans, the fixed stage-1 → stage-2 hand-off buffer — a
       direct {!step} allocates exactly the output tensor. An FFT-executed
       stage keeps a per-channel block carry ([N] samples) here instead of the
-      history, and its {!step} additionally allocates bounded per-block
-      transform transients on top of the output — gated by the allocation
-      tests, and collapsing back to output-only when the tensor library
-      grows destination passing.
+      history, a GEMM-executed stage a per-channel window carry and the one
+      gather its calls reuse, and their {!step} additionally allocates bounded
+      per-block transform or per-call product transients on top of the output —
+      gated by the allocation tests, and collapsing back to output-only when
+      the tensor library grows destination passing.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
       [dtype] is neither float32 nor float64 — the two sample types the
@@ -294,10 +302,11 @@ module Kernel : sig
       [chunk] nor kernel state. For direct plans at most
       [ceil (len * L / M) + s] samples are returned for a length-[len] chunk,
       where [s] is a small plan-alignment constant: [1] for single-stage
-      plans, at most [1 + L2/M2] for cascades. For FFT-executed plans,
-      "computable" means completed blocks: steps inside a block return
-      [None] and boundary crossings emit the whole block — burst emission is
-      normal operation and identical across partitionings.
+      plans, at most [1 + L2/M2] for cascades. For FFT-executed and
+      GEMM-executed plans, "computable" means completed blocks or completed
+      matrix-product calls: steps inside one return [None] and boundary
+      crossings emit the whole run — burst emission is normal operation and
+      identical across partitionings.
 
       Raises [Invalid_argument] if [chunk] is longer than [max_block], if a
       leading axis disagrees with [channels], or if [k] was drained by
@@ -323,7 +332,8 @@ val stage : Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
     [L / M] (44100 → 48000 threads through as exactly 48000) and widens the
     per-chunk bound to cover the plan's worst step and drain —
     [ceil (bound * L / M) + 1] for direct single-stage plans, at least one
-    full block for FFT-executed plans. [prepare] validates that the incoming
+    full block for FFT-executed plans and one full call for GEMM-executed
+    ones. [prepare] validates that the incoming
     format's items per second equal [sample_rate] and raises
     [Invalid_argument] otherwise — at prepare time, never mid-stream.
 
