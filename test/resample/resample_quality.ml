@@ -92,7 +92,7 @@ let spectrum x =
   let w = kaiser 30. n in
   let prod = Array.init n (fun i -> w.(i) *. cut.(i)) in
   Nx.to_array
-    (Nx.Complex.abs Nx.float64
+    (Nx.magnitude Nx.float64
        (Nx.rfft Nx.complex128 (Nx.create Nx.float64 [|n|] prod)) )
 
 let peak_index mags =
@@ -332,7 +332,7 @@ let sweep_worst s p ~sr ~target c =
     let frame = Array.init sweep_nfft (fun i -> w.(i) *. y.(!start + i)) in
     let mags =
       Nx.to_array
-        (Nx.Complex.abs Nx.float64
+        (Nx.magnitude Nx.float64
            (Nx.rfft Nx.complex128 (Nx.create Nx.float64 [|sweep_nfft|] frame)) )
     in
     let peak = ref 0. and alias = ref 0. in

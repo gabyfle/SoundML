@@ -361,7 +361,7 @@ let resample_stage_benchmarks () =
         Soundml.Resample.apply identity clip_id ) ]
 
 let () =
-  Nx.Rng.run ~seed:42
+  Nx.Rng.with_key (Nx.Rng.key 42)
   @@ fun () ->
   Thumper.run "soundml"
     ~budgets:
