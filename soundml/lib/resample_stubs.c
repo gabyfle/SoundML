@@ -36,12 +36,15 @@
    line, in a fixed arithmetic order that does not depend on how many lines
    the call carries.
 
-   Floating-point discipline: the dot-product loop alone is allowed to
-   reassociate and contract (multiply-add), scoped with a pragma on clang and a
-   function attribute on GCC; any other compiler gets the ordered loop — a
-   performance fallback, never a correctness one. The emitted reduction order
-   is fixed per build, so chunk-invariance survives. This is not -ffast-math:
-   no flush-to-zero, no no-NaN assumptions, nothing outside this one loop.
+   Floating-point discipline: the dot product is an explicit fixed-shape
+   reduction — the accumulator lanes, the tap-to-lane rule and the lane-combine
+   tree are all written out below, and contraction is off for the whole file
+   (`#pragma STDC FP_CONTRACT OFF`), so no compiler is asked to pick a
+   summation order or to fuse a multiply into an add. The arithmetic a build
+   emits is therefore the arithmetic the source spells out, identical at every
+   optimization level, and every operation is a correctly rounded IEEE-754
+   multiply or add. Nothing here is -ffast-math: no reassociation, no
+   flush-to-zero, no no-NaN assumptions.
 
    The runtime lock is released around the bulk work (an offline apply pushes a
    whole file as one chunk); every pointer is extracted before the release and
@@ -56,23 +59,25 @@
 #include <caml/mlvalues.h>
 #include <caml/threads.h>
 
-#if defined(__clang__)
-#define SOUNDML_ASSOC_FN
-#define SOUNDML_ASSOC_LOOP _Pragma("clang fp reassociate(on) contract(fast)")
-#elif defined(__GNUC__)
-#define SOUNDML_ASSOC_FN                                              \
-  __attribute__((optimize("-fassociative-math", "-fno-signed-zeros", \
-                          "-fno-trapping-math")))
-#define SOUNDML_ASSOC_LOOP
-#else
-#define SOUNDML_ASSOC_FN
-#define SOUNDML_ASSOC_LOOP
-#endif
+#pragma STDC FP_CONTRACT OFF
 
-/* One instantiation per sample type. `dot` carries the scoped floating-point
-   pragma (the extra braces are required: the pragma must open a compound
-   statement); `run` walks channels serially so the bank and the scratch lane
-   stay cache-hot across channels.
+/* The lane count of the dot product's body: taps are dealt to
+   SOUNDML_DOT_LANES independent accumulators, which is what lets a build issue
+   the products in parallel without any freedom over the summation order. */
+#define SOUNDML_DOT_LANES 8
+
+/* One instantiation per sample type. `dot` is the fixed-shape reduction (see
+   the floating-point discipline above); `run` walks channels serially so the
+   bank and the scratch lane stay cache-hot across channels.
+
+   The reduction, spelled out: the leading `taps % 8` taps are summed into four
+   lanes, tap i into lane `i % 4`; the whole groups of eight behind them are
+   summed into eight lanes, the tap at offset j of a group into lane j. The two
+   groups are then folded by fixed trees — the eight body lanes pairwise, `((b0
+   + b1) + (b2 + b3))` for the leading four — and the two subtotals added, body
+   first. Every lane is a chain of correctly rounded multiplies and adds, and
+   the tree bounds the rounding error below a left-to-right sum of the same
+   products.
 
    Geometry, in scratch coordinates: scratch[s] is input sample
    `total_fed - 2K + s`. Output i (absolute) reads the taps window starting at
@@ -92,14 +97,23 @@
    the summation order are identical in both layouts, so the choice cannot
    move a bit. Rows are stored reversed, so the window is read forward. */
 #define SOUNDML_RESAMPLE_KERNEL(SUFFIX, T)                                   \
-  static SOUNDML_ASSOC_FN T soundml_resample_dot_##SUFFIX(                   \
-      const T *restrict x, const T *restrict h, int64_t taps) {              \
-    {                                                                        \
-      SOUNDML_ASSOC_LOOP                                                     \
-      T acc = (T)0;                                                          \
-      for (int64_t i = 0; i < taps; i++) acc += x[i] * h[i];                 \
-      return acc;                                                            \
+  static T soundml_resample_dot_##SUFFIX(const T *restrict x,                \
+                                         const T *restrict h,                \
+                                         int64_t taps) {                     \
+    T body[SOUNDML_DOT_LANES], lead[4];                                      \
+    int64_t i, j;                                                            \
+    const int64_t rem = taps % SOUNDML_DOT_LANES;                            \
+    for (j = 0; j < 4; j++) lead[j] = (T)0;                                  \
+    for (j = 0; j < SOUNDML_DOT_LANES; j++) body[j] = (T)0;                  \
+    for (i = 0; i < rem; i++) lead[i % 4] += x[i] * h[i];                    \
+    for (; i + SOUNDML_DOT_LANES <= taps; i += SOUNDML_DOT_LANES)            \
+      for (j = 0; j < SOUNDML_DOT_LANES; j++)                                \
+        body[j] += x[i + j] * h[i + j];                                      \
+    for (j = SOUNDML_DOT_LANES / 2; j >= 1; j /= 2) {                        \
+      int64_t q;                                                             \
+      for (q = 0; q < j; q++) body[q] = body[q] + body[q + j];               \
     }                                                                        \
+    return body[0] + ((lead[0] + lead[1]) + (lead[2] + lead[3]));            \
   }                                                                          \
   static void soundml_resample_run_##SUFFIX(                                 \
       const T *restrict bank, T *restrict hist, T *restrict scratch,         \
