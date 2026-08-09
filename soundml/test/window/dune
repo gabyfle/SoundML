@@ -1,0 +1,7 @@
+(test
+ (name test_window)
+ (package soundml)
+ (modules test_window)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

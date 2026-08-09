@@ -1,0 +1,27 @@
+(executable
+ (name bench_io)
+ (modules bench_io)
+ (libraries soundml soundml_io io_bench_corpus nx thumper))
+
+; The io corpus generator is shared between the thumper rows and the
+; dev/profile drivers (the gate runner), so all measured parties read
+; identical bytes.
+
+(library
+ (name io_bench_corpus)
+ (wrapped false)
+ (modules io_corpus)
+ (libraries soundml_io nx nx.buffer))
+
+; Not attached to runtest on purpose: run with `dune build @bench`
+; (or `dune exec soundml-io/bench/bench_io.exe`).
+
+(rule
+ (alias bench)
+ ; Serialize bench rules across the workspace: concurrent suites contend
+ ; for cores and distort measurements.
+ (locks %{project_root}/bench)
+ (action
+  (progn
+   (run %{exe:bench_io.exe} --quick)
+   (diff? soundml_io.thumper soundml_io.thumper.corrected))))

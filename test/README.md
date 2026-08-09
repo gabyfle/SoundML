@@ -7,7 +7,9 @@ computation to scipy, so those vectors are equally scipy's).
 
 ## Golden vectors
 
-The golden vectors live under `test/vectors/<suite>/*.json` and are
+The golden vectors live beside the suite that replays them —
+`soundml/test/<suite>/vectors/*.json` and `soundml-io/test/vectors/*.json` —
+and are
 **committed to the repository**: running the test suite requires no Python.
 Each file records the exact reference versions it was generated with, and
 each case carries its generator parameters, the expected shape, and the
@@ -18,7 +20,7 @@ The OCaml side of the harness is the `tutils` library in `test/support/`:
 elementwise parity with per-dtype tolerances — float64 near-exact
 (`1e-12` relative), float32 at `1e-6` relative. New modules (mel, STFT,
 ...) plug into the same pattern: add a generator class to
-`generate_vectors.py`, commit the vectors it writes, and load them through
+`dev/generate_vectors.py`, commit the vectors it writes, and load them through
 `Tutils.Golden` from a Windtrap suite.
 
 Current suites:
@@ -88,15 +90,18 @@ Current suites:
 
 ## Regenerating the vectors
 
-Rerun `generate_vectors.py` only to regenerate the goldens, from an
+Rerun `dev/generate_vectors.py` only to regenerate the goldens, from an
 environment with the pinned reference versions:
 
 ```sh
-cd test
+cd dev
 python3 -m venv .venv
-.venv/bin/pip install librosa==0.11.0
+.venv/bin/pip install librosa==0.11.0 soundfile
 .venv/bin/python generate_vectors.py
 ```
+
+The SoXR quality oracle (`soundml/test/resample/vectors/soxr_reference.json`)
+is regenerated separately by `dev/soxr_reference.py` (needs `soxr`).
 
 The script refuses to run against any librosa other than 0.11.x and stamps
 the exact `python`/`numpy`/`scipy`/`librosa` versions into every file it
@@ -104,5 +109,6 @@ writes.
 
 ## Audio fixtures
 
-`generate_audio.sh` synthesizes small audio files with FFmpeg for the I/O
-tests that need real files on disk.
+The committed io corpus (`soundml-io/test/corpus/`, malformed variants
+pinned by its `MANIFEST`) is written by the io generator class in
+`dev/generate_vectors.py`.

@@ -1,0 +1,7 @@
+(test
+ (name test_features_onset)
+ (package soundml)
+ (modules onset_goldens onset_props onset_law test_features_onset)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

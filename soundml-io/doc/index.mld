@@ -1,0 +1,8 @@
+{0 soundml-io}
+
+Audio-file input and output for {{:../soundml/index.html}SoundML}, on
+libsndfile: decode any supported container to an [Nx] tensor, encode one
+back, stream through a bounded-memory {!Soundml_io.Reader}, and fuse
+resampling into the read.
+
+The entry point is {!Soundml_io}.

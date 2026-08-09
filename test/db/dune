@@ -1,7 +1,0 @@
-(test
- (name test_db)
- (package soundml)
- (modules test_golden test_props test_stage accept_value_stage test_db)
- (libraries nx soundml tutils windtrap yojson)
- (deps
-  (glob_files ../vectors/db/*.json)))
