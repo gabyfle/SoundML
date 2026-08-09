@@ -32,8 +32,7 @@ build: [
     name
     "-j"
     jobs
-    "@install"
-    "@runtest" {with-test}
+    "@runtest/soundml-io" {with-test}
     "@doc" {with-doc}
   ]
 ]
