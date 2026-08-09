@@ -1050,8 +1050,9 @@ end
    every extent against the arrays it was actually handed, and releases the
    runtime lock around the bulk work (hence no [@@noalloc]). Argument order:
    bank, history, scratch, input, output, n, n_out, channels, K, L, M, row0, s0,
-   visit (the bank's layout: visit order when true, phase-major when false),
-   is_flush. *)
+   y_off and y_stride (the destination window: channel [c]'s run of [n_out]
+   samples starts at [y_off + c*y_stride]), visit (the bank's layout: visit
+   order when true, phase-major when false), is_flush. *)
 external resample_step_c :
      (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
   -> (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
@@ -1066,9 +1067,27 @@ external resample_step_c :
   -> int
   -> int
   -> int
+  -> int
+  -> int
   -> bool
   -> bool
   -> unit = "soundml_resample_step_bc" "soundml_resample_step"
+
+(* The block identity of an overlap-save stage, between the two transforms:
+   spectra [lines; N/2 + 1] and the plan spectrum in, the half grid of the
+   length-[W] inverse transform out ([W] is [N*L] for a ×L stage, [N/M] for a ÷M
+   one, [N] otherwise). Argument order: spectra, plan spectrum, destination,
+   lines, N, L, M. Every line is shaped from its own line alone, in an order
+   independent of the line count. *)
+external resample_shape_c :
+     (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> int
+  -> int
+  -> int
+  -> int
+  -> unit = "soundml_resample_shape_bc" "soundml_resample_shape"
 
 (* [stage_out_bound sp ~n] dominates the number of stage outputs any single call
    can emit for a feed of [n] samples, including the drain (which is the [n = 0]
@@ -1202,7 +1221,7 @@ module Kernel = struct
               ; hist
               ; scratch=
                   array1_of
-                    (Nx.zeros dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
+                    (Nx.empty dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
               }
         | Some o ->
             let carry_t = Nx.zeros dtype [|channels; o.on|] in
@@ -1222,7 +1241,7 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s|]
-        ; mid= array1_of (Nx.zeros dtype [|0|])
+        ; mid= array1_of (Nx.empty dtype [|0|])
         ; drained= false
         ; leading= [|channels|] }
     | [s1; s2] ->
@@ -1234,26 +1253,27 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s1; mk cap s2|]
-        ; mid= array1_of (Nx.zeros dtype [|channels * cap|])
+        ; mid= array1_of (Nx.empty dtype [|channels * cap|])
         ; drained= false
         ; leading= [|channels|] }
     | _ ->
         assert false
 
-  (* [direct_run k st dx ~n ~n_out ~is_flush x y] drives the C executor for one
-     stage over [n] stage-input samples ([x] when streaming, virtual zeros when
-     draining), writing [n_out] freshly computed planar outputs into [y]. The
-     state of the first output [i = emitted] is exact integer arithmetic: [t = i
-     * M], bank row [i mod L] in visit order (the executor reconstructs the
-     phase [t mod L] from it; in phase-major layout it recomputes the row too),
-     window start [t / L + K - fed] in scratch coordinates. Advances [emitted];
-     the caller advances [fed] — a drain feeds no real samples. *)
-  let direct_run k st dx ~n ~n_out ~is_flush x y =
+  (* [direct_run k st dx ~n ~n_out ~y_off ~y_stride ~is_flush x y] drives the C
+     executor for one stage over [n] stage-input samples ([x] when streaming,
+     virtual zeros when draining), writing [n_out] freshly computed outputs per
+     channel into [y] at [y_off], channel stride [y_stride]. The state of the
+     first output [i = emitted] is exact integer arithmetic: [t = i * M], bank
+     row [i mod L] in visit order (the executor reconstructs the phase [t mod L]
+     from it; in phase-major layout it recomputes the row too), window start [t
+     / L + K - fed] in scratch coordinates. Advances [emitted]; the caller
+     advances [fed] — a drain feeds no real samples. *)
+  let direct_run k st dx ~n ~n_out ~y_off ~y_stride ~is_flush x y =
     let t = st.emitted * st.sp.sm in
     let row0 = st.emitted mod st.sp.sl in
     let s0 = (t / st.sp.sl) + st.sp.sk - st.fed in
     resample_step_c dx.bank dx.hist dx.scratch x y n n_out k.channels st.sp.sk
-      st.sp.sl st.sp.sm row0 s0 dx.visit is_flush ;
+      st.sp.sl st.sp.sm row0 s0 y_off y_stride dx.visit is_flush ;
     st.emitted <- st.emitted + n_out
 
   type 'a feed_src =
@@ -1261,14 +1281,15 @@ module Kernel = struct
       (* packed planar source and its per-channel stride *)
     | Silence
 
-  (* [ols_run k st os ~src ~n ~n_out y] feeds [n] stage-input samples into an
-     OLS stage, executes every block that completes — in order, exactly once
-     each, always the same call shape — and writes this call's [n_out] planar
-     outputs into [y] (channel stride [n_out]). The one caller-visible asymmetry
-     against [direct_run]: [n_out] may be smaller than what the executed blocks
-     make available only on the truncating drain, where the surplus is exactly
-     the beyond-[output_frames] tail and is discarded. *)
-  let ols_run k st os ~src ~n ~n_out y =
+  (* [ols_run k st os ~src ~n ~n_out ~y_off ~y_stride y] feeds [n] stage-input
+     samples into an OLS stage, executes every block that completes — in order,
+     exactly once each, always the same call shape — and writes this call's
+     [n_out] outputs per channel into [y] at [y_off], channel stride [y_stride].
+     The one caller-visible asymmetry against [direct_run]: [n_out] may be
+     smaller than what the executed blocks make available only on the truncating
+     drain, where the surplus is exactly the beyond-[output_frames] tail and is
+     discarded. *)
+  let ols_run k st os ~src ~n ~n_out ~y_off ~y_stride y =
     let sp = st.sp and o = os.op in
     let ch = k.channels in
     let kk = sp.sk in
@@ -1312,69 +1333,23 @@ module Kernel = struct
               (Bigarray.Array1.sub av ((c * alen) + pend) n)
               0.
       done ;
-      let bins = (o.on / 2) + 1 in
       let w = if sp.sl > 1 then o.on * sp.sl else o.on / sp.sm in
-      (* [transform_spec x] is the block identity from the half spectrum on:
-         multiply/fold against the plan spectrum -> [irfft] at the kernel dtype
-         (last axis [w]). Leading axes are transform lines; per-line
-         independence is the standing probe's guarantee, and every arithmetic op
-         is elementwise with a fixed evaluation order.
+      (* [transform_spec x] is the block identity from the half spectrum on: the
+         plan spectrum applied on the inverse transform's half grid -> [irfft]
+         at the kernel dtype (last axis [w]). Leading axes are transform lines,
+         shaped one from the other's data alone.
 
          The spectrum reaches it two ways — one block's [rfft], or one batched
          [rfft] over many gathered blocks — and the two agree bit for bit. *)
       let transform_spec x =
-        let last_axis x = Nx.ndim x - 1 in
-        let sub_last x lo hi =
-          Nx.shrink
-            (Array.init (Nx.ndim x) (fun i ->
-                 if i = last_axis x then (lo, hi) else (0, Nx.dim i x) ) )
-            x
+        let lead_shape = Array.sub (Nx.shape x) 0 (Nx.ndim x - 1) in
+        let lines = Array.fold_left ( * ) 1 lead_shape in
+        let shaped =
+          Nx.empty Nx.complex128 (Array.append lead_shape [|(w / 2) + 1|])
         in
-        let mirror x =
-          (* the Hermitian interior, reversed and conjugated: bins [1 .. N/2 -
-             1] of the half spectrum extend it to the full N grid *)
-          Nx.conjugate (Nx.flip ~axes:[last_axis x] (sub_last x 1 (bins - 1)))
-        in
-        if sp.sl > 1 then begin
-          (* interpolate ×F: the zero-stuffed block's length-[N*F] spectrum is
-             the periodic extension of [x] — build its half grid by tiling the
-             full-grid extension, multiply, invert *)
-          let full = Nx.concatenate ~axis:(-1) [x; mirror x] in
-          let rec rep j acc =
-            if j = 0 then acc else rep (j - 1) (full :: acc)
-          in
-          let parts =
-            if sp.sl mod 2 = 0 then rep (sp.sl / 2) [sub_last x 0 1]
-            else rep ((sp.sl - 1) / 2) [x]
-          in
-          let ext = Nx.concatenate ~axis:(-1) parts in
-          Nx.irfft k.dtype ~n:w (Nx.mul ext os.ohs)
-        end
-        else if sp.sm > 1 then begin
-          (* decimate ÷F: multiply on the half grid, extend to the full [N]
-             grid, alias-fold onto the [N/F] grid — every term kept, summed in
-             one fixed order — and invert. The 1/F fold weight lives in the plan
-             spectrum. *)
-          let p = Nx.mul x os.ohs in
-          let pfull = Nx.concatenate ~axis:(-1) [p; mirror p] in
-          let lead_shape = Array.sub (Nx.shape pfull) 0 (Nx.ndim pfull - 1) in
-          let pr = Nx.reshape (Array.append lead_shape [|sp.sm; w|]) pfull in
-          let slice r =
-            Nx.shrink
-              (Array.init (Nx.ndim pr) (fun i ->
-                   if i = Nx.ndim pr - 2 then (r, r + 1) else (0, Nx.dim i pr) )
-              )
-              pr
-          in
-          let acc = ref (slice 0) in
-          for r = 1 to sp.sm - 1 do
-            acc := Nx.add !acc (slice r)
-          done ;
-          let folded = !acc in
-          let half = sub_last folded 0 ((w / 2) + 1) in
-          Nx.irfft k.dtype ~n:w half
-        end
-        else Nx.irfft k.dtype ~n:w (Nx.mul x os.ohs)
+        resample_shape_c (array1_of x) (array1_of os.ohs) (array1_of shaped)
+          lines o.on sp.sl sp.sm ;
+        Nx.irfft k.dtype ~n:w shaped
       in
       let transform v = transform_spec (Nx.rfft Nx.complex128 v) in
       (* [framed_spec ~j0 t0] is the half spectrum of the [t0] overlap-save
@@ -1411,7 +1386,9 @@ module Kernel = struct
             for c = 0 to ch - 1 do
               Bigarray.Array1.blit
                 (Bigarray.Array1.sub r_arr ((((c * stack) + j) * w) + pos) cnt)
-                (Bigarray.Array1.sub y ((c * n_out) + (i0 - st.emitted)) cnt)
+                (Bigarray.Array1.sub y
+                   (y_off + (c * y_stride) + (i0 - st.emitted))
+                   cnt )
             done ;
             out_pos := !out_pos + cnt
           end
@@ -1455,29 +1432,34 @@ module Kernel = struct
       st.emitted <- st.emitted + n_out
     end
 
-  (* [feed k st ~n ~n_out x y] advances stage [st] over [n] real samples read
-     planar from [x] (per-channel stride [n]), emitting [n_out] outputs into
-     [y]; [feed0] is the no-emission instance (the call still threads state).
-     [drain] extends the stage with virtual silence and emits its remaining
+  (* [feed k st ~n ~n_out ~y_off ~y_stride x y] advances stage [st] over [n]
+     real samples read planar from [x] (per-channel stride [n]), emitting
+     [n_out] outputs per channel into [y] at [y_off], channel stride [y_stride];
+     [feed0] is the no-emission instance (the call still threads state). [drain]
+     extends the stage with virtual silence and emits its remaining
      [n_out]-sample tail. *)
-  let feed k st ~n ~n_out x y =
+  let feed k st ~n ~n_out ~y_off ~y_stride x y =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n ~n_out ~is_flush:false x y
+        direct_run k st d ~n ~n_out ~y_off ~y_stride ~is_flush:false x y
     | Ox os ->
-        ols_run k st os ~src:(From (x, n)) ~n ~n_out y
+        ols_run k st os ~src:(From (x, n)) ~n ~n_out ~y_off ~y_stride y
 
   let feed0 k st ~n x =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n ~n_out:0 ~is_flush:false x d.scratch
+        direct_run k st d ~n ~n_out:0 ~y_off:0 ~y_stride:0 ~is_flush:false x
+          d.scratch
     | Ox os ->
-        ols_run k st os ~src:(From (x, n)) ~n ~n_out:0 os.carry
+        ols_run k st os
+          ~src:(From (x, n))
+          ~n ~n_out:0 ~y_off:0 ~y_stride:0 os.carry
 
-  let drain k st ~n_out y =
+  let drain k st ~n_out ~y_off ~y_stride y =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n:st.sp.sk ~n_out ~is_flush:true d.hist y
+        direct_run k st d ~n:st.sp.sk ~n_out ~y_off ~y_stride ~is_flush:true
+          d.hist y
     | Ox os ->
         (* exactly enough virtual zeros to complete the blocks that cover the
            remaining outputs — a function of totals alone *)
@@ -1488,7 +1470,94 @@ module Kernel = struct
           incr b
         done ;
         let zeros = (!b * o.ob) + o.on - (2 * st.sp.sk) - o.odelta - st.fed in
-        ols_run k st os ~src:Silence ~n:zeros ~n_out y
+        ols_run k st os ~src:Silence ~n:zeros ~n_out ~y_off ~y_stride y
+
+  (* [outputs k n] is what a [n]-sample chunk emits per channel, and
+     [drain_outputs k] what the tail behind it does. Both are functions of the
+     stage states and the plan alone — no executor runs — so a destination can
+     be sized, and placed, before any sample moves. *)
+  let outputs k n =
+    match k.st with
+    | [|s|] ->
+        avail s (s.fed + n) - s.emitted
+    | [|s1; s2|] ->
+        let n1 = avail s1 (s1.fed + n) - s1.emitted in
+        avail s2 (s2.fed + n1) - s2.emitted
+    | _ ->
+        assert false
+
+  let drain_outputs k =
+    match k.st with
+    | [|s|] ->
+        ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted
+    | [|s1; s2|] ->
+        ceil_pos (s1.fed * k.cfg.l) k.cfg.m - s2.emitted
+    | _ ->
+        assert false
+
+  (* [run k chunk ~n ~y_off ~y_stride y] pushes [n] samples through the plan,
+     writing the [outputs k n] results per channel into [y] at [y_off], channel
+     stride [y_stride]. A cascade lands stage 1 in the hand-off buffer: its
+     output sequence is partition-independent (stage 1 is chunk-invariant), and
+     stage 2 is invariant to how that sequence reaches it — the composite keeps
+     the law by composition, not by re-proof. *)
+  let run k chunk ~n ~y_off ~y_stride y =
+    let x = array1_of chunk in
+    match k.st with
+    | [|s|] ->
+        let n_out = avail s (s.fed + n) - s.emitted in
+        if n_out = 0 then feed0 k s ~n x
+        else feed k s ~n ~n_out ~y_off ~y_stride x y ;
+        s.fed <- s.fed + n
+    | [|s1; s2|] ->
+        let n1 = avail s1 (s1.fed + n) - s1.emitted in
+        if n1 = 0 then feed0 k s1 ~n x
+        else feed k s1 ~n ~n_out:n1 ~y_off:0 ~y_stride:n1 x k.mid ;
+        s1.fed <- s1.fed + n ;
+        if n1 > 0 then begin
+          let n2 = avail s2 (s2.fed + n1) - s2.emitted in
+          if n2 = 0 then feed0 k s2 ~n:n1 k.mid
+          else feed k s2 ~n:n1 ~n_out:n2 ~y_off ~y_stride k.mid y ;
+          s2.fed <- s2.fed + n1
+        end
+    | _ ->
+        assert false
+
+  (* [drain_run k ~y_off ~y_stride y] writes the [drain_outputs k] tail. A
+     cascade drains in stage order and truncates: stage 1 flushes its exact ceil
+     tail into the hand-off buffer, the tail streams through stage 2, stage 2
+     flushes its own tail — and the composite stream is cut to [output_frames].
+     The cut only ever lands in this drain: [ceil (ceil (n*L1/M1) * L2/M2) >=
+     ceil (n*L/M)] (the stage rationals multiply to exactly [L/M]), and
+     mid-stream emission never passes the composite ceil because [K1*L >= M] —
+     checked at create — keeps [emitted <= fed*L/M + 1 - K1*L/M], and an OLS
+     stage withholds at least as much (a block only emits outputs whose full
+     lookahead lies inside it). Both counts are functions of the totals alone,
+     so the cut is partition-independent. *)
+  let drain_run k ~y_off ~y_stride y =
+    match k.st with
+    | [|s|] ->
+        let n_out = ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted in
+        if n_out > 0 then drain k s ~n_out ~y_off ~y_stride y
+    | [|s1; s2|] ->
+        let keep = ceil_pos (s1.fed * k.cfg.l) k.cfg.m - s2.emitted in
+        if keep > 0 then begin
+          let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
+          if n1 > 0 then drain k s1 ~n_out:n1 ~y_off:0 ~y_stride:n1 k.mid ;
+          let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
+          if n2a = 0 then begin
+            if n1 > 0 then
+              (* thread the tail into stage-2 state: the stage-2 drain below
+                 still reads it *)
+              feed0 k s2 ~n:n1 k.mid
+          end
+          else feed k s2 ~n:n1 ~n_out:n2a ~y_off ~y_stride k.mid y ;
+          s2.fed <- s2.fed + n1 ;
+          let n2b = keep - n2a in
+          if n2b > 0 then drain k s2 ~n_out:n2b ~y_off:(y_off + n2a) ~y_stride y
+        end
+    | _ ->
+        assert false
 
   let step k chunk =
     if k.drained then
@@ -1512,118 +1581,30 @@ module Kernel = struct
            (if k.channels = 1 then "channel" else "channels") ) ;
     k.leading <- lead ;
     if n = 0 then None
-    else begin
-      let x = array1_of chunk in
-      match k.st with
-      | [|s|] ->
-          let n_out = avail s (s.fed + n) - s.emitted in
-          let out =
-            if n_out = 0 then begin
-              (* nothing computable yet: the call only threads the state *)
-              feed0 k s ~n x ; None
-            end
-            else begin
-              let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-              feed k s ~n ~n_out x (array1_of out) ;
-              Some out
-            end
-          in
-          s.fed <- s.fed + n ;
-          out
-      | [|s1; s2|] ->
-          (* stage 1 lands in the hand-off buffer. Its output sequence is
-             partition-independent (stage 1 is chunk-invariant), and stage 2 is
-             invariant to how that sequence reaches it — the composite keeps the
-             law by composition, not by re-proof *)
-          let n1 = avail s1 (s1.fed + n) - s1.emitted in
-          if n1 = 0 then feed0 k s1 ~n x else feed k s1 ~n ~n_out:n1 x k.mid ;
-          s1.fed <- s1.fed + n ;
-          if n1 = 0 then None
-          else begin
-            let n2 = avail s2 (s2.fed + n1) - s2.emitted in
-            let out =
-              if n2 = 0 then begin
-                feed0 k s2 ~n:n1 k.mid ; None
-              end
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2|]) in
-                feed k s2 ~n:n1 ~n_out:n2 k.mid (array1_of out) ;
-                Some out
-              end
-            in
-            s2.fed <- s2.fed + n1 ;
-            out
-          end
-      | _ ->
-          assert false
-    end
+    else
+      let n_out = outputs k n in
+      if n_out = 0 then begin
+        (* nothing computable yet: the call only threads the state *)
+        run k chunk ~n ~y_off:0 ~y_stride:0 k.mid ;
+        None
+      end
+      else begin
+        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
+        run k chunk ~n ~y_off:0 ~y_stride:n_out (array1_of out) ;
+        Some out
+      end
 
   let flush k =
     if k.drained then None
     else begin
       k.drained <- true ;
-      match k.st with
-      | [|s|] ->
-          let n_out = ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted in
-          if n_out = 0 then None
-          else begin
-            let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-            drain k s ~n_out (array1_of out) ;
-            Some out
-          end
-      | [|s1; s2|] ->
-          (* drain in stage order, then truncate: stage 1 flushes its exact ceil
-             tail into the hand-off buffer, the tail streams through stage 2,
-             stage 2 flushes its own tail — and the composite stream is cut to
-             [output_frames]. The cut only ever lands in this drain: [ceil (ceil
-             (n*L1/M1) * L2/M2) >= ceil (n*L/M)] (the stage rationals multiply
-             to exactly [L/M]), and mid-stream emission never passes the
-             composite ceil because [K1*L >= M] — checked at create — keeps
-             [emitted <= fed*L/M + 1 - K1*L/M], and an OLS stage withholds at
-             least as much (a block only emits outputs whose full lookahead lies
-             inside it). Both counts are functions of the totals alone, so the
-             cut is partition-independent. *)
-          let total = ceil_pos (s1.fed * k.cfg.l) k.cfg.m in
-          let keep = total - s2.emitted in
-          if keep = 0 then None
-          else begin
-            let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
-            if n1 > 0 then drain k s1 ~n_out:n1 k.mid ;
-            let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
-            let piece_a =
-              if n2a = 0 then begin
-                if n1 > 0 then
-                  (* thread the tail into stage-2 state: the stage-2 drain below
-                     still reads it *)
-                  feed0 k s2 ~n:n1 k.mid ;
-                None
-              end
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2a|]) in
-                feed k s2 ~n:n1 ~n_out:n2a k.mid (array1_of out) ;
-                Some out
-              end
-            in
-            s2.fed <- s2.fed + n1 ;
-            let n2b = keep - n2a in
-            let piece_b =
-              if n2b = 0 then None
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2b|]) in
-                drain k s2 ~n_out:n2b (array1_of out) ;
-                Some out
-              end
-            in
-            match (piece_a, piece_b) with
-            | None, None ->
-                None
-            | (Some _ as one), None | None, (Some _ as one) ->
-                one
-            | Some a, Some b ->
-                Some (Nx.concatenate ~axis:(-1) [a; b])
-          end
-      | _ ->
-          assert false
+      let n_out = drain_outputs k in
+      if n_out = 0 then None
+      else begin
+        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
+        drain_run k ~y_off:0 ~y_stride:n_out (array1_of out) ;
+        Some out
+      end
     end
 
   let reset k =
@@ -1657,16 +1638,16 @@ let apply c x =
       Nx.zeros (Nx.dtype x) (Array.append lead [|total|])
     else begin
       let k = Kernel.prepare c (Nx.dtype x) ~channels ~max_block:n in
-      (* sequence step before flush *)
-      let stepped = Kernel.step k x in
-      let drained = Kernel.flush k in
-      match Option.to_list stepped @ Option.to_list drained with
-      | [] ->
-          Nx.zeros (Nx.dtype x) (Array.append lead [|total|])
-      | [one] ->
-          one
-      | many ->
-          Nx.concatenate ~axis:(-1) many
+      (* the whole conversion is one step and its drain, both writing their own
+         run of the result: the offline call owns the destination, so the two
+         land in place instead of being joined afterwards *)
+      let out = Nx.empty (Nx.dtype x) (Array.append lead [|total|]) in
+      let y = array1_of out in
+      let stepped = Kernel.outputs k n in
+      Kernel.run k x ~n ~y_off:0 ~y_stride:total y ;
+      assert (Kernel.drain_outputs k = total - stepped) ;
+      Kernel.drain_run k ~y_off:stepped ~y_stride:total y ;
+      out
     end
 
 (* {1 Offline, tensor formulation}
