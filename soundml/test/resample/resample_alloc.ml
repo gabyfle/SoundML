@@ -88,12 +88,12 @@ let ols_promoted_budget = 60.
 let ols_cfg () = Resample.Config.create ~sample_rate:8000 ~target:48000 ()
 
 (* GEMM-executed plans (the `High 44.1 -> 16 k plan of record is one phase-rich
-   stage) allocate one product result per executed call, and one small view per
-   gathered block-row, on top of the output tensor — the gather, the window lane
-   and the carry are prepared once and reused, so nothing here grows with the
-   signal or with the history. [apply] on a one-second clip runs the whole
-   conversion as one call: ~3.6k minor and ~120 promoted words per call, fixed
-   in the input length; budgets are ~2x the measured figures. *)
+   stage) allocate one product result per executed call, and one or two small
+   views per gathered block-row, on top of the output tensor — the gather and
+   the carry are prepared once and reused, so nothing here grows with the
+   history. [apply] on a one-second clip runs the conversion as a fixed handful
+   of calls: ~3.5k minor and ~30 promoted words per call; budgets sit well over
+   the measured figures, the same discipline as the rows above. *)
 let gemm_apply_minor_budget = 8000.
 
 let gemm_apply_promoted_budget = 300.

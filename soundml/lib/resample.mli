@@ -61,9 +61,8 @@
     executors change the {e cadence} of streaming: output leaves in bursts, and
     the first samples emerge after roughly one block (about the class of soxr's
     DFT stages, 1-4 k source samples, {!Config.pp} names the length) or one
-    matrix-product group (a few thousand to a few tens of thousands of source
-    samples) instead of after the group delay. Offline {!apply} is
-    unaffected. *)
+    matrix-product group (about 16 k source samples) instead of after the group
+    delay. Offline {!apply} is unaffected. *)
 
 (** The type for custom filter specifications. [attenuation] is the stop-band
     rejection target in dB; [passband] is the flat-to-0-dB bandwidth preserved,
@@ -214,7 +213,7 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     output in its own order, against whatever the plan's executors sum in —
     the fixed dot product of a direct stage, the FFT-convolution roundings of
     an FFT-executed one, the platform matrix product over the plan's own row
-    blocking and float64 interior for a GEMM-executed one — so the two
+    blocking for a GEMM-executed one — so the two
     surfaces agree only to within a small multiple of
     [peak * 2{^-52}] (float64; [peak * 2{^-23}] at float32, [peak] the
     largest output magnitude) — a divergence that grows with the reduced
@@ -241,12 +240,12 @@ val apply_gemm : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     {!apply} — a flag that changes bits would fork the library's one resampler
     in place. When bit-stability across
     partitionings matters, use {!apply} or {!Kernel}; when differentiability
-    or device eligibility matters, use this. The offline-float64-throughput
-    case for the dense form is gone wherever [apply] itself leaves the dot
-    products: an FFT-executed stage runs a float64 interior that outpaces this
-    surface, and a GEMM-executed stage is already the same matrix product over
-    the same bank. It survives on plans that stay entirely on the direct
-    executor, where the platform GEMM still multiplies wide float64 far faster
+    or device eligibility matters, use this. The offline-throughput case for
+    the dense form is gone wherever [apply] itself leaves the dot products: an
+    FFT-executed stage runs a float64 interior that outpaces this surface, and
+    a GEMM-executed stage is already the same matrix product over the same bank
+    in the same precision. It survives on plans that stay entirely on the
+    direct executor, where the platform GEMM still multiplies wide far faster
     than the executor's scalar-width lanes.
 
     For the identity configuration it returns [x] itself, like {!apply}.

@@ -410,15 +410,18 @@ type ols_plan =
    A phase-rich stage is one banded matrix product. Block-row [r] holds the [L]
    outputs of one phase cycle — outputs [r*L .. r*L + L - 1] — and reads the [P
    = 2K + 1 + floor((L-1)*M/L)] consecutive stage inputs starting at [r*M - K]
-   (zeros outside the extent), so a run of block-rows gathered as [gemm_rows; P]
-   times the [P; L] arrangement of the bank ([gemm_bank] with [blocks = 1]) is
-   [gemm_rows*L] outputs. Every call carries exactly [gemm_rows] block-rows:
-   call [b] covers stage inputs [b*B - K, (b+1)*B + K) with [B = gemm_rows*M],
-   the streaming state carries that span, and the drain completes the calls
-   covering the output total with virtual zeros — the final call zero-pads its
-   trailing rows, so the product shape is a plan constant. Interior arithmetic
-   is float64 whatever the kernel dtype: a call widens its window once, gathers
-   its block-rows out of it, and narrows the product on the way out.
+   (zeros outside the extent), so a run of block-rows gathered as [R; P] times
+   the [P; L] arrangement of the bank ([gemm_bank] with [blocks = 1]) is [R*L]
+   outputs — already the outputs in order, which is why the product's own layout
+   is the emitted run. Every call carries exactly the [R] block-rows
+   [gemm_rows_of] gives the stage: call [b] covers stage inputs [b*B - K,
+   (b+1)*B + K) with [B = R*M], the streaming state carries that span, and the
+   drain completes the calls covering the output total with virtual zeros — the
+   final call zero-pads its trailing rows, so the product shape is a plan
+   constant. Interior arithmetic is the kernel dtype: a call gathers its
+   block-rows straight out of the carry and the input, and the product lands in
+   the kernel's own precision, the same arithmetic the dot-product executor
+   carries.
 
    The reduction of a single output is the length-[P] row times the banded
    column, in whatever order the platform's matrix product blocks it. That order
@@ -428,11 +431,18 @@ type ols_plan =
    totals alone, so the emitted sequence is invariant under every input
    partitioning, exactly as for the other two executors. *)
 
-(* The block-rows one call carries. Plan geometry, never probed: it fixes the
-   product's batch extent, hence the emission granularity ([gemm_rows*M] stage
-   inputs) and the per-call gather transient. Two or more, so that the product
-   never degenerates to a matrix-vector shape. *)
-let gemm_rows = 100
+(* The stage inputs one call spans. A call is the stage's emission unit, so its
+   size is fixed here in stage-input samples: one call's worth of signal is then
+   the same duration whatever the stage's factors, and the product it drives is
+   wide enough to carry the gather that feeds it. Frozen plan geometry like
+   [l1_edge_bytes], never probed. *)
+let gemm_span = 16384
+
+(* The block-rows one call carries — as many phase cycles as [gemm_span] holds,
+   at least two so the product never degenerates to a matrix-vector shape. It
+   fixes the product's batch extent, hence the emission granularity ([R*M] stage
+   inputs) and the per-call gather transient. *)
+let gemm_rows_of ~m = Stdlib.max 2 (gemm_span / m)
 
 (* The stages the matrix product takes: at least this many phases — the product
    is [L] columns wide, and a narrow one leaves the machine idle between
@@ -1167,7 +1177,8 @@ let stage_out_bound sp ~n =
   | Sdirect ->
       ceil_pos (Stdlib.max n sp.sk * sp.sl) sp.sm + 1
   | Sgemm _ ->
-      let per_call = gemm_rows * sp.sl and b = gemm_rows * sp.sm in
+      let rows = gemm_rows_of ~m:sp.sm in
+      let per_call = rows * sp.sl and b = rows * sp.sm in
       let calls_step = ((Stdlib.max 1 n - 1) / b) + 2 in
       let calls_drain = (sp.sk / b) + 2 in
       Stdlib.max calls_step calls_drain * per_call
@@ -1203,53 +1214,18 @@ module Kernel = struct
              before the stream *)
     ; mutable oblocks: int (* blocks executed so far *) }
 
-  (* [widen dt] moves a run of samples from a kernel-dtype array into the
-     float64 window the matrix product reads: a blit at float64, an
-     element-wise conversion at float32. Resolved once, at [prepare]; a call
-     widens its whole window once and gathers its block-rows from it, so the
-     conversion runs over stage inputs rather than over gathered elements. *)
-  let widen : type a.
-         (float, a) Nx.dtype
-      -> (float, a, Bigarray.c_layout) Bigarray.Array1.t
-      -> int
-      -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
-      -> int
-      -> int
-      -> unit = function
-    | Nx.Float64 ->
-        fun src s dst d len ->
-          Bigarray.Array1.blit
-            (Bigarray.Array1.sub src s len)
-            (Bigarray.Array1.sub dst d len)
-    | Nx.Float32 ->
-        fun src s dst d len ->
-          for i = 0 to len - 1 do
-            Bigarray.Array1.unsafe_set dst (d + i)
-              (Bigarray.Array1.unsafe_get src (s + i))
-          done
-    | _ ->
-        assert false
-
   type 'a gemm_state =
-    { gg: (float, Nx.float64_elt) Nx.t
-          (* the config's [P; L] bank arrangement, forced once per kernel *)
+    { gg: (float, 'a) Nx.t
+          (* the config's [P; L] bank arrangement at the kernel dtype, forced
+             and cast once per kernel *)
+    ; gr: int (* the block-rows one call carries *)
     ; gp: int (* P: the stage inputs one block-row reads *)
-    ; gb: int (* B = gemm_rows * M: the stage inputs one call advances *)
+    ; gb: int (* B = gr * M: the stage inputs one call advances *)
     ; gspan: int (* B + 2K: the stage inputs one call reads *)
-    ; ga: (float, Nx.float64_elt) Nx.t
-          (* the [gemm_rows; P] gather, the product's left operand; one call's
-             worth, reused by every call *)
-    ; gaa: (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
-    ; gwin_t: (float, Nx.float64_elt) Nx.t
-          (* one call's window at float64, [B + 2K]; keeps [gwin] alive *)
-    ; gwin: (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
-    ; gwiden:
-           (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-        -> int
-        -> (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
-        -> int
-        -> int
-        -> unit
+    ; ga: (float, 'a) Nx.t
+          (* the [gr; P] gather, the product's left operand; one call's worth,
+             reused by every call *)
+    ; gaa: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
     ; gcarry_t: (float, 'a) Nx.t (* [channels; B + 2K] — keeps [gcarry] alive *)
     ; gcarry: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
           (* the window tail: stage inputs [next call window start .. fed),
@@ -1315,13 +1291,13 @@ module Kernel = struct
 
   (* The GEMM availability arithmetic, the same shape: call [b] reads stage
      inputs [b*B - K, (b+1)*B + K), so it is executable once [fed >= (b+1)*B +
-     K], and every executed call emits its whole [gemm_rows*L] run. Emission
-     therefore stays [K*L/M] outputs behind the direct executor's, which is what
-     keeps the composite truncation inside the drain. *)
+     K], and every executed call emits its whole [R*L] run. Emission therefore
+     stays [K*L/M] outputs behind the direct executor's, which is what keeps the
+     composite truncation inside the drain. *)
   let gemm_calls sp gs fed =
     if fed < gs.gb + sp.sk then 0 else (fed - sp.sk) / gs.gb
 
-  let gemm_avail sp gs fed = gemm_calls sp gs fed * gemm_rows * sp.sl
+  let gemm_avail sp gs fed = gemm_calls sp gs fed * gs.gr * sp.sl
 
   (* [avail st fed] is the stage-output count computable at [fed] input samples:
      the direct kernel emits as soon as an output's window closes, the OLS and
@@ -1353,20 +1329,18 @@ module Kernel = struct
         match sp.sexec with
         | Sgemm bank ->
             let p_len = (2 * sp.sk) + 1 + ((sp.sl - 1) * sp.sm / sp.sl) in
-            let span = (gemm_rows * sp.sm) + (2 * sp.sk) in
-            let ga = Nx.empty Nx.float64 [|gemm_rows; p_len|] in
-            let gwin_t = Nx.empty Nx.float64 [|span|] in
+            let rows = gemm_rows_of ~m:sp.sm in
+            let span = (rows * sp.sm) + (2 * sp.sk) in
+            let ga = Nx.empty dtype [|rows; p_len|] in
             let gcarry_t = Nx.zeros dtype [|channels; span|] in
             Gx
-              { gg= Lazy.force bank
+              { gg= Nx.cast dtype (Lazy.force bank)
+              ; gr= rows
               ; gp= p_len
-              ; gb= gemm_rows * sp.sm
+              ; gb= rows * sp.sm
               ; gspan= span
               ; ga
               ; gaa= array1_of ga
-              ; gwin_t
-              ; gwin= array1_of gwin_t
-              ; gwiden= widen dtype
               ; gcarry_t
               ; gcarry= array1_of gcarry_t
               ; gcalls= 0 }
@@ -1595,9 +1569,9 @@ module Kernel = struct
 
   (* [gemm_run k st gs ~src ~n ~n_out ~y_off ~y_stride y] feeds [n] stage-input
      samples into a GEMM stage, executes every call that completes — in order,
-     exactly once each, always the same [gemm_rows; P] by [P; L] product — and
-     writes this call's [n_out] outputs per channel into [y] at [y_off], channel
-     stride [y_stride]. Like [ols_run], [n_out] falls short of what the executed
+     exactly once each, always the same [R; P] by [P; L] product — and writes
+     this call's [n_out] outputs per channel into [y] at [y_off], channel stride
+     [y_stride]. Like [ols_run], [n_out] falls short of what the executed
      calls make available only on the truncating drain, where the surplus is
      exactly the beyond-[output_frames] tail. *)
   let gemm_run k st gs ~src ~n ~n_out ~y_off ~y_stride y =
@@ -1609,26 +1583,38 @@ module Kernel = struct
        start, then everything fed past the current call's window start *)
     let pend = st.fed + kk - (gs.gcalls * gs.gb) in
     let alen = pend + n in
-    (* [window c j] lays call [j]'s whole window — channel [c]'s stage inputs
-       [j*B, j*B + B + 2K) — into the float64 lane, the carry first and this
-       call's samples behind it. Every block-row of the call is then a
-       contiguous run of that lane. *)
-    let window c j =
+    (* [gather c j] lays call [j]'s block-rows into the product's left operand:
+       channel [c]'s stage inputs [j*B, j*B + B + 2K), cut into the [R] windows
+       of [P] samples advancing [M] that the rows read. Window offsets below
+       [held] are still in the carry, the rest are in this call's input, so a
+       row crossing that point is two runs and every other row is one. *)
+    let gather c j =
       let off = j * gs.gb in
       let held = Stdlib.min span (Stdlib.max 0 (pend - off)) in
-      if held > 0 then gs.gwiden gs.gcarry ((c * span) + off) gs.gwin 0 held ;
-      let rest = span - held in
-      if rest > 0 then
-        let s0 = off + held - pend in
-        match src with
-        | From (s, stride) ->
-            gs.gwiden s ((c * stride) + s0) gs.gwin held rest
-        | Silence ->
-            Bigarray.Array1.fill (Bigarray.Array1.sub gs.gwin held rest) 0.
+      for r = 0 to gs.gr - 1 do
+        let w = r * sp.sm and dst = r * gs.gp in
+        let kept = Stdlib.min gs.gp (Stdlib.max 0 (held - w)) in
+        if kept > 0 then
+          Bigarray.Array1.blit
+            (Bigarray.Array1.sub gs.gcarry ((c * span) + off + w) kept)
+            (Bigarray.Array1.sub gs.gaa dst kept) ;
+        let rest = gs.gp - kept in
+        if rest > 0 then
+          let into = Bigarray.Array1.sub gs.gaa (dst + kept) rest in
+          match src with
+          | From (s, stride) ->
+              Bigarray.Array1.blit
+                (Bigarray.Array1.sub s
+                   ((c * stride) + off + w + kept - pend)
+                   rest )
+                into
+          | Silence ->
+              Bigarray.Array1.fill into 0.
+      done
     in
     let t = if alen < span then 0 else ((alen - span) / gs.gb) + 1 in
     if t > 0 then begin
-      let per_call = gemm_rows * sp.sl in
+      let per_call = gs.gr * sp.sl in
       let out_pos = ref 0 in
       for j = 0 to t - 1 do
         let b = gs.gcalls + j in
@@ -1637,13 +1623,8 @@ module Kernel = struct
         if cnt > 0 then begin
           let pos = i0 - (b * per_call) in
           for c = 0 to ch - 1 do
-            window c j ;
-            for r = 0 to gemm_rows - 1 do
-              Bigarray.Array1.blit
-                (Bigarray.Array1.sub gs.gwin (r * sp.sm) gs.gp)
-                (Bigarray.Array1.sub gs.gaa (r * gs.gp) gs.gp)
-            done ;
-            let res = array1_of (Nx.cast k.dtype (Nx.matmul gs.ga gs.gg)) in
+            gather c j ;
+            let res = array1_of (Nx.matmul gs.ga gs.gg) in
             Bigarray.Array1.blit
               (Bigarray.Array1.sub res pos cnt)
               (Bigarray.Array1.sub y
@@ -1722,7 +1703,7 @@ module Kernel = struct
     | Gx gs ->
         (* exactly enough virtual zeros to complete the calls that cover the
            remaining outputs — a function of totals alone *)
-        let per_call = gemm_rows * st.sp.sl in
+        let per_call = gs.gr * st.sp.sl in
         let target = st.emitted + n_out in
         let b = ref gs.gcalls in
         while (!b + 1) * per_call < target do
@@ -2050,11 +2031,11 @@ let stage_kernel s chunk =
    stages at least one full block and for GEMM-executed stages at least one full
    call — a step that completes blocks or calls emits them whole, burst emission
    being those executors' cadence. The GEMM cadence is the coarsest of the
-   three: one call spans [gemm_rows*M] stage inputs, so a stage emits nothing
-   until that many have arrived and then emits [gemm_rows*L] outputs at once. A
-   cascade compounds the two per-stage bounds, and its drain — stage-1 tail
-   through stage 2 plus stage-2's own tail, delivered as one chunk — can exceed
-   both, so it enters the max explicitly. *)
+   three: one call spans [R*M] stage inputs, so a stage emits nothing until that
+   many have arrived and then emits [R*L] outputs at once. A cascade compounds
+   the two per-stage bounds, and its drain — stage-1 tail through stage 2 plus
+   stage-2's own tail, delivered as one chunk — can exceed both, so it enters
+   the max explicitly. *)
 let stage_bound cfg b =
   match cfg.stages with
   | [s] ->

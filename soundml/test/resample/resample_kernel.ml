@@ -330,14 +330,13 @@ let error_tests =
   ; test "draining consumes the tail; reset restores the initial state"
       (fun () ->
         (* 44.1 -> 48 k is GEMM-executed: the chunk must complete a call (fed >=
-           gemm_rows*M + K = 14795 at the shipped plan) for the step itself to
-           emit — the sequencing under test needs both a step and a drain
-           emission *)
+           R*M + K = 16412 at the shipped plan) for the step itself to emit —
+           the sequencing under test needs both a step and a drain emission *)
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
         let k =
-          Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:16384
+          Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:32768
         in
-        let x = signal Nx.float64 16384 in
+        let x = signal Nx.float64 32768 in
         let stepped = Resample.Kernel.step k x in
         let drained = Resample.Kernel.flush k in
         is_true ~msg:"emitted" (Option.is_some stepped && Option.is_some drained) ;
