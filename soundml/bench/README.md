@@ -36,31 +36,32 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   `kaiser_best` triple and its defaults.
 
   The measured position, both sides on the maintainer machine in one
-  session (arm64, min-of-N over five interleaved alternations,
-  python-soxr 1.1.0 driving the maintained libsoxr fork): on one-second
-  clips the near-unity pair is at parity — 44.1 → 48 kHz runs 0.99x
-  `soxr_hq` at float32 and 0.97x at float64 — and 44.1 → 16 kHz runs
-  1.19x (float32) and 1.28x (float64). On 30-second clips `soxr_hq` is
-  1.11x faster at 44.1 → 48 kHz float32, 1.02x at float64, and
-  1.64x / 1.38x at 44.1 → 16 kHz. The phase-rich plans run as one
-  banded matrix product per fixed group of phase cycles, through the
-  platform BLAS; the remaining plans execute their sharp stage by the
-  same overlap-save FFT convolution libsoxr uses, through nx's
+  session (arm64, min-of-N over six interleaved alternations,
+  python-soxr 1.1.0 driving the maintained libsoxr fork): at float32
+  SoundML converts faster at both clip lengths — 0.44x `soxr_hq` on
+  one-second 44.1 → 48 kHz and 0.42x on 30-second, 0.52x and 0.61x at
+  44.1 → 16 kHz. At float64 the near-unity pair is ahead as well (0.89x
+  one-second, 0.83x 30-second), and 44.1 → 16 kHz runs 1.22x at both
+  lengths. The phase-rich plans run as one banded matrix product per
+  fixed group of phase cycles, through the platform BLAS, in the
+  kernel's own precision; the remaining plans execute their sharp stage
+  by the same overlap-save FFT convolution libsoxr uses, through nx's
   transforms, with the spectrum shaping between the forward and inverse
   transforms (periodic tiling with its Hermitian mirror, the alias fold,
   the filter product) as one fused pass per transform line, outputs
   written in place into the preallocated result, and stacked transform
   lines spread across cores in proportion to per-line transform work.
-  The residual gap on the wide ratios is arithmetic: the matrix product
-  spends 1 + M/T times an output's taps on its window, where libsoxr
-  splits the same conversion into two cheaper stages. The float64 rows
-  are not an equal-precision comparison: soxr HQ runs single-precision
-  internally regardless of I/O dtype, while SoundML float64 is a genuine
-  double-precision path — both block-shaped executors carry a double
-  interior, so float64 runs within a few percent of float32. Streaming
-  through the matrix product improves with chunk size on the near-unity
-  pair (the 16 384-chunk row is the fastest of the three); the baseline
-  records it. SoundML runs faster than torchaudio at its published
+  The residual float64 gap on the wide ratio is arithmetic: the matrix
+  product spends 1 + M/T times an output's taps on its window and runs
+  at the platform's double-precision GEMM rate, where libsoxr splits the
+  same conversion into stages of far fewer multiplies per output. The
+  float64 rows are not an equal-precision comparison either: soxr HQ
+  runs single-precision internally regardless of I/O dtype, while
+  SoundML float64 is a genuine double-precision path, which is why the
+  float32 and float64 columns separate here and barely move for soxr.
+  Streaming through the matrix product improves with chunk size on the
+  near-unity pair (the 16 384-chunk row is the fastest of the three);
+  the baseline records it. SoundML runs faster than torchaudio at its published
   `kaiser_best` settings and behind torchaudio's faster, lower-spec
   defaults. None of the references carries the bit-exact
   partition-invariance law that is this resampler's defining contract,
