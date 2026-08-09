@@ -37,43 +37,35 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
 
   The measured position, both sides on the maintainer machine in one
   session (arm64, min-of-N, python-soxr 1.1.0 driving the maintained
-  libsoxr fork): at equal spec on 30-second clips at float32, `soxr_hq`
-  converts 2.0-3.0x faster (44.1 ↔ 48 kHz about 3.0x/2.5x, 44.1 → 16 kHz
-  2.9x, 48 → 8 kHz 2.0x — previously 3.5-4.7x). The planner now executes
-  its sharp stages by the same overlap-save FFT convolution libsoxr uses,
-  through nx's transforms; the residual gap is the FFT execution rate
-  (libsoxr's hand-vectorized single-precision butterflies against nx's
-  double-interior transforms), an upstream lever, not an architectural
-  one. The float64 rows are not an equal-precision comparison: soxr HQ
-  runs single-precision internally regardless of I/O dtype, while SoundML
-  float64 is a genuine double-precision path — and the FFT executor's
-  double interior is native there, so float64 now runs within a few
-  percent of float32 (2.5-3.2x from soxr's single-precision engine).
-  On one-second clips every FFT-executed pair pays its block-transform
-  dispatch at float32: 1.3-2x slower than the retired all-FIR executor
-  there, worst on the 48 → 8 kHz `Fast and the near-unity pairs; the
-  float64 rows pay it too under the thumper batch protocol (flat to
-  1.4x, the `Best rows already 1.2-1.3x faster), while single-shot
-  profile runs measure one-second float64 at or above the retired
-  kernel — the crossover to the FFT win sits between one and thirty
-  seconds. The streaming surface pays a second, related
-  price at float32: at chunks of a few thousand samples the near-unity
-  and /F-last FFT-executed pairs stream 1.2-1.6x slower than the pre-FFT
-  kernel (float64 streaming improves everywhere, and sub-64-sample
-  chunks — dispatch-dominated on both executors — do not regress),
-  because a step stacks only the few blocks its chunk completes where
-  the offline call stacks hundreds of transform lines. Streaming
-  throughput is also not monotonic in chunk size (the committed
-  16 384-chunk row runs slower than the 4 096 one on the near-unity
-  pair): a few-line stacked-transform inefficiency in the upstream
-  transforms, a known upstream item, not a SoundML-side lever. The
-  baseline records all of these as the documented price of the plan.
-  SoundML runs 1.2-3x faster than
-  torchaudio at its published `kaiser_best` settings and behind
-  torchaudio's faster, lower-spec defaults. None of the references
-  carries the bit-exact partition-invariance law that is this resampler's
-  defining contract, and none exposes an incremental kernel with exact
-  rational latency accounting.
+  libsoxr fork): at equal spec on 30-second clips, `soxr_hq` converts
+  2.0-2.2x faster at both dtypes (44.1 ↔ 48 kHz about 2.1x,
+  44.1 → 16 kHz 2.0x — previously 2.0-3.0x). The planner executes its
+  sharp stages by the same overlap-save FFT convolution libsoxr uses,
+  through nx's transforms; the spectrum shaping between the forward and
+  inverse transforms (periodic tiling with its Hermitian mirror, the
+  alias fold, the filter product) runs as one fused pass per transform
+  line, outputs are written in place into the preallocated result, and
+  stacked transform lines are spread across cores in proportion to
+  per-line transform work. The residual gap is arithmetic, not
+  dispatch: the FFT execution rate (libsoxr's hand-vectorized
+  single-precision butterflies against nx's double-interior transforms)
+  plus the tap loop of the direct polyphase stage. The float64 rows are
+  not an equal-precision comparison: soxr HQ runs single-precision
+  internally regardless of I/O dtype, while SoundML float64 is a genuine
+  double-precision path — the FFT executor's double interior is native
+  there, so float64 runs within a few percent of float32. On one-second
+  clips the same session measures `soxr_hq` 2.3-2.5x faster at both
+  dtypes: the fixed per-call cost is now small against the transform
+  work, so short clips sit near the steady-state ratio instead of far
+  above it. Streaming throughput is still not monotonic in chunk size
+  (the committed 16 384-chunk row runs slower than the 4 096 one on the
+  near-unity pair); the baseline records it as the documented price of
+  the plan. SoundML runs faster than torchaudio at its published
+  `kaiser_best` settings and behind torchaudio's faster, lower-spec
+  defaults. None of the references carries the bit-exact
+  partition-invariance law that is this resampler's defining contract,
+  and none exposes an incremental kernel with exact rational latency
+  accounting.
 
 - `io` — `Soundml_io` decode and encode over a deterministic corpus the
   suite generates with soundml-io's own writer (`soundml-io/bench/io_corpus.ml`; the C
