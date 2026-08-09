@@ -79,11 +79,10 @@ let ext () =
       let f () =
         (* the ÷F extension: mirror the interior bins with conjugation *)
         let interior = Nx.shrink [|(0, 1); (1, bins - 1)|] x in
-        Nx.concatenate ~axis:(-1)
-          [x; Nx.Complex.conj (Nx.flip ~axes:[-1] interior)]
+        Nx.concatenate ~axis:(-1) [x; Nx.conjugate (Nx.flip ~axes:[-1] interior)]
       in
       let tmin, tmed = time f in
       Printf.printf "EXT\t%d\t%.1f\t%.1f\n" len (tmin *. 1e6) (tmed *. 1e6) )
     lengths
 
-let () = Nx.Rng.run ~seed:42 @@ fun () -> fft () ; mul () ; ext ()
+let () = Nx.Rng.with_key (Nx.Rng.key 42) @@ fun () -> fft () ; mul () ; ext ()

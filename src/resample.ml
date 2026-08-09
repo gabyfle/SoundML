@@ -243,13 +243,12 @@ let l1_edge_bytes = 128 * 1024
    chunk, as extra transform lines) instead of a per-block loop. Admitted only
    under the standing byte-identity probe (test/resample/resample_fft_probe.ml):
    nx's FFT transforms lines independently through one plan per (length, sign),
-   so batched equals single bit for bit — verified green on the pinned nx, both
-   dtypes, every plannable length, lines 1-64 [measured 2026-08-04]. If the
-   probe ever fails on a backend, flip this to [false]: every face then presents
-   the per-block [channels; N] call shape and the partition law holds
-   structurally, at batching-throughput cost. The law never rests on this switch
-   — with it on, all shapes produce identical bits; with it off, the shape is
-   unique. *)
+   so batched equals single bit for bit — verified green over both dtypes, every
+   plannable length, lines 1-64 [measured 2026-08-04]. If the probe ever fails
+   on a backend, flip this to [false]: every face then presents the per-block
+   [channels; N] call shape and the partition law holds structurally, at
+   batching-throughput cost. The law never rests on this switch — with it on,
+   all shapes produce identical bits; with it off, the shape is unique. *)
 let ols_batch = true
 
 (* The stacked-transform tile: at most this many transform lines ([channels *
@@ -300,8 +299,8 @@ let ols_geom ~rate ~l ~m ~k =
 
 (* The executor cost model's rate constants, in nanoseconds, measured with
    bench/profile/profile_fft.ml on the reference machine (Apple M4 Pro, quiet
-   host, pinned nx) at the batched steady state — the condition offline [apply]
-   and >= 4096-sample streaming chunks actually run. Measured [2026-08-04]: rfft
+   host) at the batched steady state — the condition offline [apply] and >=
+   4096-sample streaming chunks actually run. Measured [2026-08-04]: rfft
    complex128 1.7-2.0 ns/element across N in [512, 16384] (batched lines), irfft
    1.9-2.2, complex multiply 0.5-0.7 ns/bin (bandwidth-class through Nx.mul),
    spectrum extension ~0.5 ns/bin plus op dispatch — and cross-checked against
@@ -1315,12 +1314,15 @@ module Kernel = struct
       done ;
       let bins = (o.on / 2) + 1 in
       let w = if sp.sl > 1 then o.on * sp.sl else o.on / sp.sm in
-      (* [transform v] is the block identity: real (last axis [N]) -> [rfft
-         complex128] -> multiply/fold against the plan spectrum -> [irfft] at
-         the kernel dtype (last axis [w]). Leading axes are transform lines;
-         per-line independence is the standing probe's guarantee, and every
-         arithmetic op is elementwise with a fixed evaluation order. *)
-      let transform v =
+      (* [transform_spec x] is the block identity from the half spectrum on:
+         multiply/fold against the plan spectrum -> [irfft] at the kernel dtype
+         (last axis [w]). Leading axes are transform lines; per-line
+         independence is the standing probe's guarantee, and every arithmetic op
+         is elementwise with a fixed evaluation order.
+
+         The spectrum reaches it two ways — one block's [rfft], or one batched
+         [rfft] over many gathered blocks — and the two agree bit for bit. *)
+      let transform_spec x =
         let last_axis x = Nx.ndim x - 1 in
         let sub_last x lo hi =
           Nx.shrink
@@ -1331,10 +1333,8 @@ module Kernel = struct
         let mirror x =
           (* the Hermitian interior, reversed and conjugated: bins [1 .. N/2 -
              1] of the half spectrum extend it to the full N grid *)
-          Nx.Complex.conj
-            (Nx.flip ~axes:[last_axis x] (sub_last x 1 (bins - 1)))
+          Nx.conjugate (Nx.flip ~axes:[last_axis x] (sub_last x 1 (bins - 1)))
         in
-        let x = Nx.rfft Nx.complex128 v in
         if sp.sl > 1 then begin
           (* interpolate ×F: the zero-stuffed block's length-[N*F] spectrum is
              the periodic extension of [x] — build its half grid by tiling the
@@ -1376,6 +1376,25 @@ module Kernel = struct
         end
         else Nx.irfft k.dtype ~n:w (Nx.mul x os.ohs)
       in
+      let transform v = transform_spec (Nx.rfft Nx.complex128 v) in
+      (* [framed_spec ~j0 t0] is the half spectrum of the [t0] overlap-save
+         blocks starting at block [j0]: the blocks are gathered into a
+         contiguous [ch; t0; on] scratch and carried by one batched transform.
+         The gather moves exactly the bytes a strided read would have moved, and
+         the batch is bit-identical to the per-block loop under the standing
+         probe. *)
+      let framed_spec ~j0 t0 =
+        let f = Nx.empty k.dtype [|ch; t0; o.on|] in
+        let fa = array1_of f in
+        for c = 0 to ch - 1 do
+          for j = 0 to t0 - 1 do
+            Bigarray.Array1.blit
+              (Bigarray.Array1.sub av ((c * alen) + ((j0 + j) * o.ob)) o.on)
+              (Bigarray.Array1.sub fa (((c * t0) + j) * o.on) o.on)
+          done
+        done ;
+        Nx.rfft Nx.complex128 f
+      in
       (* emit: block [b]'s run extends the output to [ols_hi b]; copy each
          block's contiguous kept span to its place in [y] *)
       let out_pos = ref 0 in
@@ -1407,19 +1426,14 @@ module Kernel = struct
         if t <= tile then
           (* the common shape — every step and every clip under ~15 s mono: one
              stack, no tiling views, exactly the pre-tiling call *)
-          let wins = Nx.sliding_window_view ~window:o.on ~step:o.ob av_t in
-          emit (array1_of (transform wins)) ~stack:t ~j0:0
+          emit (array1_of (transform_spec (framed_spec ~j0:0 t))) ~stack:t ~j0:0
         else begin
           let j0 = ref 0 in
           while !j0 < t do
             let tsz = Stdlib.min tile (t - !j0) in
-            let sub =
-              Nx.shrink
-                [|(0, ch); (!j0 * o.ob, ((!j0 + tsz - 1) * o.ob) + o.on)|]
-                av_t
-            in
-            let wins = Nx.sliding_window_view ~window:o.on ~step:o.ob sub in
-            emit (array1_of (transform wins)) ~stack:tsz ~j0:!j0 ;
+            emit
+              (array1_of (transform_spec (framed_spec ~j0:!j0 tsz)))
+              ~stack:tsz ~j0:!j0 ;
             j0 := !j0 + tsz
           done
         end
