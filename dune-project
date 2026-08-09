@@ -4,6 +4,8 @@
 
 (generate_opam_files true)
 
+(opam_file_location inside_opam_directory)
+
 (implicit_transitive_deps false)
 
 (source
@@ -34,6 +36,7 @@
 
 (package
  (name soundml)
+ (dir soundml)
  (synopsis "An OCaml library to embed sound processing in your applications")
  (description
   "SoundML is a library built on top of Raven's Nx package to analyse sound files. It can read and write audio, extract features from audio files, and much more.")
@@ -52,6 +55,7 @@
 
 (package
  (name soundml-io)
+ (dir soundml-io)
  (synopsis "Audio-file I/O for SoundML")
  (description
   "SoundML I/O decodes and encodes audio with libsndfile. Load-time resampling is Soundml.Resample, fed at decode time.")

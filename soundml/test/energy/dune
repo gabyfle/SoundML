@@ -1,0 +1,7 @@
+(test
+ (name test_features_energy)
+ (package soundml)
+ (modules energy_goldens energy_props energy_law test_features_energy)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

@@ -1,7 +1,0 @@
-(test
- (name test_stft)
- (package soundml)
- (modules stft_goldens stft_grid stft_law stft_alloc test_stft)
- (libraries nx soundml tutils windtrap yojson)
- (deps
-  (glob_files ../vectors/stft/*.json)))
