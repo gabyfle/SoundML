@@ -153,8 +153,8 @@ let reduce_zcr ~frame_length ~threshold patches =
 (* {1 The batched frame computation} *)
 
 (* Upper bound on the framed scratch materialized per reduction call, in
-   scalars; framing is blocked to this budget because this nx revision has no
-   strided sliding-window view (see the header note in stft.ml). *)
+   scalars; framing is blocked to this budget because each block is gathered
+   rather than viewed, so the budget caps the transient. *)
 let block_elements = 65536
 
 (* [analyse ~frame_length ~hop ~reduce samples count] is frames [0, count) of

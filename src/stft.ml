@@ -19,22 +19,24 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(* Internals, on the pinned nx revision's capabilities:
+(* Internals:
 
-   - Framing is [Nx.sliding_window_view]: a zero-copy strided view of the padded
-   stream. One analysis call is one window multiply and one batched [rfft]; no
+   - Framing and transform are one [Nx.stft]: the padded stream is windowed
+   through a strided frame view and carried by a single batched [rfft], so no
    framed scratch is ever gathered.
 
    - The windowed product is computed in double, exactly as librosa's: librosa
    0.11 multiplies the frames by its float64 window (promoting float32 audio)
-   and transforms in double, rounding once into the complex storage. [Nx.rfft]
-   takes the output dtype first, so the caller's witness supplies that storage
-   natively — no boundary cast of the spectrum.
+   and transforms in double, rounding once into the complex storage. The double
+   promotion is applied to the stream, not the frames — widening is exact, so
+   the product is unchanged, and it costs one cast per sample instead of one per
+   framed position. [Nx.rfft] takes the output dtype first, so the caller's
+   witness supplies that storage natively — no boundary cast of the spectrum.
 
-   - Complex magnitudes are [Nx.Complex.abs], dtype-first, landing directly in
-   the caller's float dtype. The real-valued conveniences pick the complex
-   storage matching the input's component width ([spectrum_witness]), which is
-   librosa's [dtype_r2c] pairing. *)
+   - Complex magnitudes are [Nx.magnitude], dtype-first, landing directly in the
+   caller's float dtype. The real-valued conveniences pick the complex storage
+   matching the input's component width ([spectrum_witness]), which is librosa's
+   [dtype_r2c] pairing. *)
 
 module Config = struct
   type t =
@@ -324,19 +326,21 @@ let to_double : type b. (float, b) Nx.t -> (float, Nx.float64_elt) Nx.t =
 
 (* [analyse c cdtype samples count] is frames [0, count) of the padded-stream
    segment [samples], shaped [[...; bins; count]]; [samples] must span at least
-   [(count - 1) * hop + fft_size] positions. Framing is one zero-copy strided
-   view, the analysis one double-precision window multiply (see the header note)
-   and one batched [rfft] straight into the caller's witness dtype; per-frame
-   work never routes through per-frame Nx calls. *)
+   [(count - 1) * hop + fft_size] positions. Shrinking to exactly that span is
+   what fixes the frame count: [Nx.stft] frames every whole window the axis
+   holds, so a longer segment would analyse past [count]. The analysis is one
+   double-precision window multiply (see the header note) and one batched [rfft]
+   straight into the caller's witness dtype; per-frame work never routes through
+   per-frame Nx calls. *)
 let analyse (c : Config.t) cdtype samples count =
   let fft = c.fft_size and hop = c.hop in
   let span = ((count - 1) * hop) + fft in
   let samples =
     if last_dim samples = span then samples else shrink_last samples 0 span
   in
-  let frames = Nx.sliding_window_view ~window:fft ~step:hop samples in
-  let product = Nx.mul (to_double frames) c.analysis_window in
-  Nx.swapaxes (-1) (-2) (Nx.rfft cdtype ~axis:(-1) product)
+  Nx.swapaxes (-1) (-2)
+    (Nx.stft cdtype ~window:fft ~step:hop ~win:c.analysis_window
+       (to_double samples) )
 
 (* {1 The streaming kernel} *)
 
@@ -641,9 +645,9 @@ let transform_range cdtype c ~p0 ~p1 x =
     analyse c cdtype seg (p1 - p0)
 
 (* [magnitude_pow dtype power z] is [|z| ^ power] in [dtype]: one dtype-first
-   [Nx.Complex.abs], one power. *)
+   [Nx.magnitude], one power. *)
 let magnitude_pow dtype power z =
-  let m = Nx.Complex.abs dtype z in
+  let m = Nx.magnitude dtype z in
   if Float.equal power 2. then Nx.square m
   else if Float.equal power 1. then m
   else Nx.pow_s m power
