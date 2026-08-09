@@ -23,8 +23,7 @@
     Offline functions are the one-chunk instance of the same kernels; the two
     cannot disagree. See {!Pipeline}.
 
-    Audio-file I/O and Rubber Band effects ship separately as [soundml-io] and
-    [soundml-rubberband]. *)
+    Audio-file I/O ships separately as [soundml-io]. *)
 
 (** Streaming and offline chunk pipelines: one pipeline value drives both the
     offline driver {!Pipeline.run} and the online driver {!Pipeline.Stream}. *)
