@@ -22,10 +22,10 @@
    float32 across chunk sizes (the 1024 row keeps the per-chunk dispatch
    overhead honest); the stage inside a resample-then-STFT front next to the
    same computation hand-written; the identity-rate passthrough; and
-   [Config.create] itself, priced separately: the OLS plans design far smaller
-   banks, so creation now costs a fraction of the one-second conversion it
-   configures (0.1-0.6x, from ~2x before) — reuse is still the documented
-   contract, and this row keeps the design cost visible.
+   [Config.create] itself, priced separately: a phase-rich plan designs one long
+   prototype, so creation costs several times the one-second conversion it
+   configures (4-13x) — reuse is the documented contract, and this row keeps the
+   design cost visible.
 
    The committed baseline gates drift (the suite budgets below), not absolute
    throughput: the resample rows record what the executor delivers on the
@@ -150,12 +150,11 @@ let resample_gemm_benchmarks () =
     [("44k1-48k", 44100, 48000); ("44k1-16k", 44100, 16000)]
 
 let resample_stream_benchmarks () =
-  (* every streaming cadence: 44.1 -> 48 k feeds the near-unity FFT-executed
-     plan (block bursts), 48 -> 8 k the /F-last FFT-executed class — the two
-     shapes whose float32 streaming pays the FFT executor's few-line stacking
-     price, so both stay ratcheted — and 11.025 -> 8 k the direct dot-product
-     kernel; the 1024 rows keep each executor's per-chunk overhead story
-     honest *)
+  (* every streaming cadence: 44.1 -> 48 k feeds the near-unity GEMM-executed
+     plan (call-sized bursts), 48 -> 8 k the /F-last FFT-executed class — whose
+     float32 streaming pays the FFT executor's few-line stacking price, so it
+     stays ratcheted — and 11.025 -> 8 k the direct dot-product kernel; the 1024
+     rows keep each executor's per-chunk overhead story honest *)
   let one (name, sample_rate, target, chunk_sizes) =
     let clip = Nx.rand Nx.float32 [|sample_rate|] in
     let cfg = Soundml.Resample.Config.create ~sample_rate ~target () in

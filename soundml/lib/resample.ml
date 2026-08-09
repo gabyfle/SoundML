@@ -36,18 +36,20 @@
    [Kernel.prepare] hands the executor whichever layout its instantiated bank
    wants.
 
-   Each stage runs one of two executors, decided by the cost model at
-   [Config.create]. The C executor (resample_stubs.c) computes each output as
-   one dot product over [history ++ chunk] with a fixed summation order; the OLS
-   executor (the [ols_*] machinery below) runs integer-factor sharp stages as
-   overlap-save FFT convolution on a fixed, config-derived block grid. Either
-   way, offline equals streaming bit for bit on every partitioning — the
-   pipeline law is structural, not tested-in. A cascade chains two such
-   executors: stage 1 is chunk-invariant, so the sample sequence entering stage
-   2 does not depend on the input partitioning, and stage 2 is invariant to how
-   that sequence is partitioned — the same argument, applied twice, makes the
-   composite chunk-invariant. OCaml orchestrates at chunk granularity only:
-   exact integer phase and grid state, no float accumulator anywhere. *)
+   Each stage runs one of three executors, decided at [Config.create]. The C
+   executor (resample_stubs.c) computes each output as one dot product over
+   [history ++ chunk] with a fixed summation order; the OLS executor (the
+   [ols_*] machinery below) runs integer-factor sharp stages as overlap-save FFT
+   convolution on a fixed, config-derived block grid; the GEMM executor (the
+   [gemm_*] machinery below) runs a phase-rich single stage as one banded matrix
+   product per fixed group of block-rows. Whichever it is, offline equals
+   streaming bit for bit on every partitioning — the pipeline law is structural,
+   not tested-in. A cascade chains two such executors: stage 1 is
+   chunk-invariant, so the sample sequence entering stage 2 does not depend on
+   the input partitioning, and stage 2 is invariant to how that sequence is
+   partitioned — the same argument, applied twice, makes the composite
+   chunk-invariant. OCaml orchestrates at chunk granularity only: exact integer
+   phase and grid state, no float accumulator anywhere. *)
 
 type spec = {attenuation: float; passband: float}
 
@@ -403,6 +405,53 @@ type ols_plan =
            (pre-scaled by 1/F, the alias-fold weight) for ÷F. Forced on the
            first prepared kernel; not domain-safe, like [sgemm] *) }
 
+(* {1 The GEMM executor plan}
+
+   A phase-rich stage is one banded matrix product. Block-row [r] holds the [L]
+   outputs of one phase cycle — outputs [r*L .. r*L + L - 1] — and reads the [P
+   = 2K + 1 + floor((L-1)*M/L)] consecutive stage inputs starting at [r*M - K]
+   (zeros outside the extent), so a run of block-rows gathered as [R; P] times
+   the [P; L] arrangement of the bank ([gemm_bank] with [blocks = 1]) is [R*L]
+   outputs — already the outputs in order, which is why the product's own layout
+   is the emitted run. Every call carries exactly the [R] block-rows
+   [gemm_rows_of] gives the stage: call [b] covers stage inputs [b*B - K,
+   (b+1)*B + K) with [B = R*M], the streaming state carries that span, and the
+   drain completes the calls covering the output total with virtual zeros — the
+   final call zero-pads its trailing rows, so the product shape is a plan
+   constant. Interior arithmetic is the kernel dtype: a call gathers its
+   block-rows straight out of the carry and the input, and the product lands in
+   the kernel's own precision, the same arithmetic the dot-product executor
+   carries.
+
+   The reduction of a single output is the length-[P] row times the banded
+   column, in whatever order the platform's matrix product blocks it. That order
+   is a property of the build, not of the call: with the row count and both
+   extents fixed by the plan, every output of a given absolute index is produced
+   by a call whose shape and content are functions of the plan constants and the
+   totals alone, so the emitted sequence is invariant under every input
+   partitioning, exactly as for the other two executors. *)
+
+(* The stage inputs one call spans. A call is the stage's emission unit, so its
+   size is fixed here in stage-input samples: one call's worth of signal is then
+   the same duration whatever the stage's factors, and the product it drives is
+   wide enough to carry the gather that feeds it. Frozen plan geometry like
+   [l1_edge_bytes], never probed. *)
+let gemm_span = 16384
+
+(* The block-rows one call carries — as many phase cycles as [gemm_span] holds,
+   at least two so the product never degenerates to a matrix-vector shape. It
+   fixes the product's batch extent, hence the emission granularity ([R*M] stage
+   inputs) and the per-call gather transient. *)
+let gemm_rows_of ~m = Stdlib.max 2 (gemm_span / m)
+
+(* The stages the matrix product takes: at least this many phases — the product
+   is [L] columns wide, and a narrow one leaves the machine idle between
+   reductions — together with a window no wider than twice the filter, [M <= 2K
+   + 1], which bounds the arithmetic a block-row spends against the [2K + 1]
+   multiplies an output needs. Everything else keeps the dot products or the
+   transforms. *)
+let gemm_min_phases = 64
+
 (* One polyphase stage of a plan: factors [sl / sm], group delay [sk] in
    stage-input samples, the designed filter in its three layouts, and the
    executor choice. *)
@@ -419,11 +468,18 @@ type stage_plan =
         (* [P; sl], built on the first [apply_gemm] and shared by every later
            call on this config; forcing is not domain-safe, like every other
            piece of state in this module *)
-  ; sols: ols_plan option
-        (* [Some] when the cost model executes this stage by overlap-save;
-           [None] is the C dot-product kernel. The filter, the accessors and the
-           law are identical either way — the tag is visible only through
+  ; sexec: stage_exec
+        (* which executor runs this stage. The filter, the accessors and the law
+           are identical whichever it is — the tag is visible only through
            [Config.pp] and the streaming emission cadence *) }
+
+and stage_exec =
+  | Sdirect  (** the C dot-product kernel *)
+  | Sols of ols_plan  (** overlap-save on the block grid of [ols_geom] *)
+  | Sgemm of (float, Nx.float64_elt) Nx.t Lazy.t
+      (** the banded matrix product, over the [P; L] arrangement of the bank
+          ([gemm_bank] with [blocks = 1]); forced on the first prepared kernel,
+          and not domain-safe, like [sgemm] *)
 
 type config =
   { sample_rate: int
@@ -742,7 +798,11 @@ let gemm_block = 64
 
 let gemm_blocks l = Stdlib.max 1 (gemm_block / l)
 
-let make_stage ?ols ~l ~m ~k ~fc ~beta () =
+(* The executor a plan assigns a stage, before the stage is designed: the OLS
+   variant carries the block geometry [ols_geom] returned. *)
+type exec_spec = Xdirect | Xols of (int * int * int) | Xgemm
+
+let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
   let h = design_prototype ~l ~k ~fc ~beta in
   let taps = (2 * k) + 1 in
   let b = bank_of_prototype ~l ~k h in
@@ -755,21 +815,25 @@ let make_stage ?ols ~l ~m ~k ~fc ~beta () =
   ; sbank= bank
   ; svisit= visit_bank ~l ~m ~taps bank
   ; sgemm= lazy (gemm_bank ~l ~m ~k ~blocks:(gemm_blocks l) (Nx.to_array bank))
-  ; sols=
-      Option.map
-        (fun (n, b, delta) ->
-          { on= n
-          ; ob= b
-          ; odelta= delta
-          ; oh=
-              lazy
-                (let len = if l > 1 then n * l else n in
-                 let padded = Nx.pad [|(0, len - Array.length h)|] 0. proto in
-                 let spec = Nx.rfft Nx.complex128 padded in
-                 if m > 1 then
-                   Nx.mul_s spec {Complex.re= 1. /. Float.of_int m; im= 0.}
-                 else spec ) } )
-        ols }
+  ; sexec=
+      ( match exec with
+      | Xdirect ->
+          Sdirect
+      | Xgemm ->
+          Sgemm (lazy (gemm_bank ~l ~m ~k ~blocks:1 (Nx.to_array bank)))
+      | Xols (n, b, delta) ->
+          Sols
+            { on= n
+            ; ob= b
+            ; odelta= delta
+            ; oh=
+                lazy
+                  (let len = if l > 1 then n * l else n in
+                   let padded = Nx.pad [|(0, len - Array.length h)|] 0. proto in
+                   let spec = Nx.rfft Nx.complex128 padded in
+                   if m > 1 then
+                     Nx.mul_s spec {Complex.re= 1. /. Float.of_int m; im= 0.}
+                   else spec ) } ) }
 
 module Config = struct
   type t = config
@@ -819,7 +883,7 @@ module Config = struct
             ; sbank= Nx.create Nx.float64 [|1; 1|] [|1.|]
             ; svisit= Nx.create Nx.float64 [|1; 1|] [|1.|]
             ; sgemm= lazy (Nx.create Nx.float64 [|1; 1|] [|1.|])
-            ; sols= None } ] }
+            ; sexec= Sdirect } ] }
     else begin
       let width = (1. -. passband) /. Float.of_int (Stdlib.max l m) in
       let ntaps = kaiser_numtaps attenuation width in
@@ -831,6 +895,23 @@ module Config = struct
       let k_single = Stdlib.max 1 (Float.to_int k_f) in
       let cost_single =
         if single_fits then bank_cost l k_single else Float.infinity
+      in
+      let single exec =
+        let fc = (1. +. passband) /. (2. *. Float.of_int (Stdlib.max l m)) in
+        let beta = kaiser_beta attenuation in
+        { sample_rate
+        ; target
+        ; quality
+        ; l
+        ; m
+        ; latency= k_single
+        ; stages= [make_stage ~exec ~l ~m ~k:k_single ~fc ~beta ()] }
+      in
+      (* The one stage runs as a matrix product when the ratio is phase-rich
+         against a narrow window: no split can beat it there, and the plan keeps
+         the single stage's latency and prototype exactly. *)
+      let gemm_single =
+        single_fits && l >= gemm_min_phases && m <= (2 * k_single) + 1
       in
       (* A pure ×F or ÷F conversion may run its one stage — the same designed
          filter, so the same latency and accessors to the bit — by overlap-save
@@ -851,19 +932,10 @@ module Config = struct
       let cost_bar =
         match single_ols with Some (c, _) -> c | None -> cost_single
       in
-      let single ols =
-        let fc = (1. +. passband) /. (2. *. Float.of_int (Stdlib.max l m)) in
-        let beta = kaiser_beta attenuation in
-        { sample_rate
-        ; target
-        ; quality
-        ; l
-        ; m
-        ; latency= k_single
-        ; stages= [make_stage ?ols ~l ~m ~k:k_single ~fc ~beta ()] }
-      in
+      let of_geom = function None -> Xdirect | Some g -> Xols g in
       match
-        plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar
+        if gemm_single then None
+        else plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar
       with
       | Some (_, g1, g2, beta) ->
           (* the two invariants the kernel composition rests on, restated as
@@ -873,12 +945,12 @@ module Config = struct
           assert (g2.gk * g1.gm mod g1.gl = 0) ;
           assert (g1.gk * l >= m) ;
           let s1 =
-            make_stage ?ols:g1.gols ~l:g1.gl ~m:g1.gm ~k:g1.gk ~fc:g1.gfc ~beta
-              ()
+            make_stage ~exec:(of_geom g1.gols) ~l:g1.gl ~m:g1.gm ~k:g1.gk
+              ~fc:g1.gfc ~beta ()
           in
           let s2 =
-            make_stage ?ols:g2.gols ~l:g2.gl ~m:g2.gm ~k:g2.gk ~fc:g2.gfc ~beta
-              ()
+            make_stage ~exec:(of_geom g2.gols) ~l:g2.gl ~m:g2.gm ~k:g2.gk
+              ~fc:g2.gfc ~beta ()
           in
           { sample_rate
           ; target
@@ -908,11 +980,13 @@ module Config = struct
                      " hint: near-unity conversion is clock-drift correction, \
                       which the fixed-ratio resampler does not do"
                    else "" ) ) ;
-          match single_ols with
-          | Some (_, geom) ->
-              single (Some geom)
-          | None ->
-              single None )
+          if gemm_single then single Xgemm
+          else
+            match single_ols with
+            | Some (_, geom) ->
+                single (Xols geom)
+            | None ->
+                single Xdirect )
     end
 
   let sample_rate c = c.sample_rate
@@ -999,15 +1073,18 @@ module Config = struct
           Stdlib.Format.fprintf fmt "custom(%g dB, %g)" attenuation passband
     in
     (* A stage prints the filter length its executor touches per output — [2K +
-       1] for the direct dot product, the whole [2*K*L + 1] prototype for an OLS
-       stage (frequency-domain convolution runs the full filter) — and OLS
-       stages name their transform length: the executed FFT is [N*F] points for
-       ×F interpolators and [N] points for ÷F decimators. *)
+       1] for the direct dot product and for the matrix product's banded column,
+       the whole [2*K*L + 1] prototype for an OLS stage (frequency-domain
+       convolution runs the full filter) — and names the executor where it is
+       not the dot product: OLS stages add their transform length, [N*F] points
+       for ×F interpolators and [N] points for ÷F decimators. *)
     let stage_taps fmt s =
-      match s.sols with
-      | None ->
+      match s.sexec with
+      | Sdirect ->
           Stdlib.Format.fprintf fmt "%d" ((2 * s.sk) + 1)
-      | Some o ->
+      | Sgemm _ ->
+          Stdlib.Format.fprintf fmt "%d(gemm)" ((2 * s.sk) + 1)
+      | Sols o ->
           Stdlib.Format.fprintf fmt "%d(ols,N=%d)"
             ((2 * s.sk * s.sl) + 1)
             (o.on * s.sl)
@@ -1050,8 +1127,9 @@ end
    every extent against the arrays it was actually handed, and releases the
    runtime lock around the bulk work (hence no [@@noalloc]). Argument order:
    bank, history, scratch, input, output, n, n_out, channels, K, L, M, row0, s0,
-   visit (the bank's layout: visit order when true, phase-major when false),
-   is_flush. *)
+   y_off and y_stride (the destination window: channel [c]'s run of [n_out]
+   samples starts at [y_off + c*y_stride]), visit (the bank's layout: visit
+   order when true, phase-major when false), is_flush. *)
 external resample_step_c :
      (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
   -> (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
@@ -1066,20 +1144,45 @@ external resample_step_c :
   -> int
   -> int
   -> int
+  -> int
+  -> int
   -> bool
   -> bool
   -> unit = "soundml_resample_step_bc" "soundml_resample_step"
 
+(* The block identity of an overlap-save stage, between the two transforms:
+   spectra [lines; N/2 + 1] and the plan spectrum in, the half grid of the
+   length-[W] inverse transform out ([W] is [N*L] for a ×L stage, [N/M] for a ÷M
+   one, [N] otherwise). Argument order: spectra, plan spectrum, destination,
+   lines, N, L, M. Every line is shaped from its own line alone, in an order
+   independent of the line count. *)
+external resample_shape_c :
+     (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> (Complex.t, Bigarray.complex64_elt, Bigarray.c_layout) Bigarray.Array1.t
+  -> int
+  -> int
+  -> int
+  -> int
+  -> unit = "soundml_resample_shape_bc" "soundml_resample_shape"
+
 (* [stage_out_bound sp ~n] dominates the number of stage outputs any single call
    can emit for a feed of [n] samples, including the drain (which is the [n = 0]
    instance: the direct executor drains its [K]-sample lookahead, the OLS
-   executor its buffered carry plus one padded block). Sizes the hand-off
-   buffer, the downstream scratch and the advisory pipeline bound. *)
+   executor its buffered carry plus one padded block, the GEMM executor the
+   calls its remaining outputs fall in). Sizes the hand-off buffer, the
+   downstream scratch and the advisory pipeline bound. *)
 let stage_out_bound sp ~n =
-  match sp.sols with
-  | None ->
+  match sp.sexec with
+  | Sdirect ->
       ceil_pos (Stdlib.max n sp.sk * sp.sl) sp.sm + 1
-  | Some o ->
+  | Sgemm _ ->
+      let rows = gemm_rows_of ~m:sp.sm in
+      let per_call = rows * sp.sl and b = rows * sp.sm in
+      let calls_step = ((Stdlib.max 1 n - 1) / b) + 2 in
+      let calls_drain = (sp.sk / b) + 2 in
+      Stdlib.max calls_step calls_drain * per_call
+  | Sols o ->
       let per_block = if sp.sl > 1 then o.ob * sp.sl else o.ob / sp.sm in
       let blocks_step = ((Stdlib.max 1 n - 1) / o.ob) + 2 in
       let blocks_drain = (((2 * sp.sk) + o.odelta) / o.ob) + 2 in
@@ -1111,7 +1214,29 @@ module Kernel = struct
              before the stream *)
     ; mutable oblocks: int (* blocks executed so far *) }
 
-  type 'a exec_state = Dx of 'a direct_state | Ox of 'a ols_state
+  type 'a gemm_state =
+    { gg: (float, 'a) Nx.t
+          (* the config's [P; L] bank arrangement at the kernel dtype, forced
+             and cast once per kernel *)
+    ; gr: int (* the block-rows one call carries *)
+    ; gp: int (* P: the stage inputs one block-row reads *)
+    ; gb: int (* B = gr * M: the stage inputs one call advances *)
+    ; gspan: int (* B + 2K: the stage inputs one call reads *)
+    ; ga: (float, 'a) Nx.t
+          (* the [gr; P] gather, the product's left operand; one call's worth,
+             reused by every call *)
+    ; gaa: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+    ; gcarry_t: (float, 'a) Nx.t (* [channels; B + 2K] — keeps [gcarry] alive *)
+    ; gcarry: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+          (* the window tail: stage inputs [next call window start .. fed),
+             planar per channel; starts as the [K] virtual zeros before the
+             stream *)
+    ; mutable gcalls: int (* calls executed so far *) }
+
+  type 'a exec_state =
+    | Dx of 'a direct_state
+    | Ox of 'a ols_state
+    | Gx of 'a gemm_state
 
   type 'a stage_state =
     { sp: stage_plan
@@ -1164,15 +1289,27 @@ module Kernel = struct
     let nb = ols_blocks sp o fed in
     if nb = 0 then 0 else ols_hi sp o (nb - 1) + 1
 
+  (* The GEMM availability arithmetic, the same shape: call [b] reads stage
+     inputs [b*B - K, (b+1)*B + K), so it is executable once [fed >= (b+1)*B +
+     K], and every executed call emits its whole [R*L] run. Emission therefore
+     stays [K*L/M] outputs behind the direct executor's, which is what keeps the
+     composite truncation inside the drain. *)
+  let gemm_calls sp gs fed =
+    if fed < gs.gb + sp.sk then 0 else (fed - sp.sk) / gs.gb
+
+  let gemm_avail sp gs fed = gemm_calls sp gs fed * gs.gr * sp.sl
+
   (* [avail st fed] is the stage-output count computable at [fed] input samples:
-     the direct kernel emits as soon as an output's window closes, the OLS
-     executor when the block containing it completes. *)
+     the direct kernel emits as soon as an output's window closes, the OLS and
+     GEMM executors when the block or call containing it completes. *)
   let avail st fed =
     match st.ex with
     | Dx _ ->
         ready st.sp fed
     | Ox os ->
         ols_avail st.sp os.op fed
+    | Gx gs ->
+        gemm_avail st.sp gs fed
 
   let prepare cfg dtype ~channels ~max_block =
     check_dtype "prepare" dtype ;
@@ -1189,8 +1326,25 @@ module Kernel = struct
            max_block ) ;
     let mk max_in sp =
       let ex =
-        match sp.sols with
-        | None ->
+        match sp.sexec with
+        | Sgemm bank ->
+            let p_len = (2 * sp.sk) + 1 + ((sp.sl - 1) * sp.sm / sp.sl) in
+            let rows = gemm_rows_of ~m:sp.sm in
+            let span = (rows * sp.sm) + (2 * sp.sk) in
+            let ga = Nx.empty dtype [|rows; p_len|] in
+            let gcarry_t = Nx.zeros dtype [|channels; span|] in
+            Gx
+              { gg= Nx.cast dtype (Lazy.force bank)
+              ; gr= rows
+              ; gp= p_len
+              ; gb= rows * sp.sm
+              ; gspan= span
+              ; ga
+              ; gaa= array1_of ga
+              ; gcarry_t
+              ; gcarry= array1_of gcarry_t
+              ; gcalls= 0 }
+        | Sdirect ->
             let hist = array1_of (Nx.zeros dtype [|channels * 2 * sp.sk|]) in
             let elt = Bigarray.kind_size_in_bytes (Bigarray.Array1.kind hist) in
             let visit = sp.sl * ((2 * sp.sk) + 1) * elt > l1_edge_bytes in
@@ -1202,9 +1356,9 @@ module Kernel = struct
               ; hist
               ; scratch=
                   array1_of
-                    (Nx.zeros dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
+                    (Nx.empty dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
               }
-        | Some o ->
+        | Sols o ->
             let carry_t = Nx.zeros dtype [|channels; o.on|] in
             Ox
               { op= o
@@ -1222,7 +1376,7 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s|]
-        ; mid= array1_of (Nx.zeros dtype [|0|])
+        ; mid= array1_of (Nx.empty dtype [|0|])
         ; drained= false
         ; leading= [|channels|] }
     | [s1; s2] ->
@@ -1234,26 +1388,27 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s1; mk cap s2|]
-        ; mid= array1_of (Nx.zeros dtype [|channels * cap|])
+        ; mid= array1_of (Nx.empty dtype [|channels * cap|])
         ; drained= false
         ; leading= [|channels|] }
     | _ ->
         assert false
 
-  (* [direct_run k st dx ~n ~n_out ~is_flush x y] drives the C executor for one
-     stage over [n] stage-input samples ([x] when streaming, virtual zeros when
-     draining), writing [n_out] freshly computed planar outputs into [y]. The
-     state of the first output [i = emitted] is exact integer arithmetic: [t = i
-     * M], bank row [i mod L] in visit order (the executor reconstructs the
-     phase [t mod L] from it; in phase-major layout it recomputes the row too),
-     window start [t / L + K - fed] in scratch coordinates. Advances [emitted];
-     the caller advances [fed] — a drain feeds no real samples. *)
-  let direct_run k st dx ~n ~n_out ~is_flush x y =
+  (* [direct_run k st dx ~n ~n_out ~y_off ~y_stride ~is_flush x y] drives the C
+     executor for one stage over [n] stage-input samples ([x] when streaming,
+     virtual zeros when draining), writing [n_out] freshly computed outputs per
+     channel into [y] at [y_off], channel stride [y_stride]. The state of the
+     first output [i = emitted] is exact integer arithmetic: [t = i * M], bank
+     row [i mod L] in visit order (the executor reconstructs the phase [t mod L]
+     from it; in phase-major layout it recomputes the row too), window start [t
+     / L + K - fed] in scratch coordinates. Advances [emitted]; the caller
+     advances [fed] — a drain feeds no real samples. *)
+  let direct_run k st dx ~n ~n_out ~y_off ~y_stride ~is_flush x y =
     let t = st.emitted * st.sp.sm in
     let row0 = st.emitted mod st.sp.sl in
     let s0 = (t / st.sp.sl) + st.sp.sk - st.fed in
     resample_step_c dx.bank dx.hist dx.scratch x y n n_out k.channels st.sp.sk
-      st.sp.sl st.sp.sm row0 s0 dx.visit is_flush ;
+      st.sp.sl st.sp.sm row0 s0 y_off y_stride dx.visit is_flush ;
     st.emitted <- st.emitted + n_out
 
   type 'a feed_src =
@@ -1261,14 +1416,15 @@ module Kernel = struct
       (* packed planar source and its per-channel stride *)
     | Silence
 
-  (* [ols_run k st os ~src ~n ~n_out y] feeds [n] stage-input samples into an
-     OLS stage, executes every block that completes — in order, exactly once
-     each, always the same call shape — and writes this call's [n_out] planar
-     outputs into [y] (channel stride [n_out]). The one caller-visible asymmetry
-     against [direct_run]: [n_out] may be smaller than what the executed blocks
-     make available only on the truncating drain, where the surplus is exactly
-     the beyond-[output_frames] tail and is discarded. *)
-  let ols_run k st os ~src ~n ~n_out y =
+  (* [ols_run k st os ~src ~n ~n_out ~y_off ~y_stride y] feeds [n] stage-input
+     samples into an OLS stage, executes every block that completes — in order,
+     exactly once each, always the same call shape — and writes this call's
+     [n_out] outputs per channel into [y] at [y_off], channel stride [y_stride].
+     The one caller-visible asymmetry against [direct_run]: [n_out] may be
+     smaller than what the executed blocks make available only on the truncating
+     drain, where the surplus is exactly the beyond-[output_frames] tail and is
+     discarded. *)
+  let ols_run k st os ~src ~n ~n_out ~y_off ~y_stride y =
     let sp = st.sp and o = os.op in
     let ch = k.channels in
     let kk = sp.sk in
@@ -1312,69 +1468,23 @@ module Kernel = struct
               (Bigarray.Array1.sub av ((c * alen) + pend) n)
               0.
       done ;
-      let bins = (o.on / 2) + 1 in
       let w = if sp.sl > 1 then o.on * sp.sl else o.on / sp.sm in
-      (* [transform_spec x] is the block identity from the half spectrum on:
-         multiply/fold against the plan spectrum -> [irfft] at the kernel dtype
-         (last axis [w]). Leading axes are transform lines; per-line
-         independence is the standing probe's guarantee, and every arithmetic op
-         is elementwise with a fixed evaluation order.
+      (* [transform_spec x] is the block identity from the half spectrum on: the
+         plan spectrum applied on the inverse transform's half grid -> [irfft]
+         at the kernel dtype (last axis [w]). Leading axes are transform lines,
+         shaped one from the other's data alone.
 
          The spectrum reaches it two ways — one block's [rfft], or one batched
          [rfft] over many gathered blocks — and the two agree bit for bit. *)
       let transform_spec x =
-        let last_axis x = Nx.ndim x - 1 in
-        let sub_last x lo hi =
-          Nx.shrink
-            (Array.init (Nx.ndim x) (fun i ->
-                 if i = last_axis x then (lo, hi) else (0, Nx.dim i x) ) )
-            x
+        let lead_shape = Array.sub (Nx.shape x) 0 (Nx.ndim x - 1) in
+        let lines = Array.fold_left ( * ) 1 lead_shape in
+        let shaped =
+          Nx.empty Nx.complex128 (Array.append lead_shape [|(w / 2) + 1|])
         in
-        let mirror x =
-          (* the Hermitian interior, reversed and conjugated: bins [1 .. N/2 -
-             1] of the half spectrum extend it to the full N grid *)
-          Nx.conjugate (Nx.flip ~axes:[last_axis x] (sub_last x 1 (bins - 1)))
-        in
-        if sp.sl > 1 then begin
-          (* interpolate ×F: the zero-stuffed block's length-[N*F] spectrum is
-             the periodic extension of [x] — build its half grid by tiling the
-             full-grid extension, multiply, invert *)
-          let full = Nx.concatenate ~axis:(-1) [x; mirror x] in
-          let rec rep j acc =
-            if j = 0 then acc else rep (j - 1) (full :: acc)
-          in
-          let parts =
-            if sp.sl mod 2 = 0 then rep (sp.sl / 2) [sub_last x 0 1]
-            else rep ((sp.sl - 1) / 2) [x]
-          in
-          let ext = Nx.concatenate ~axis:(-1) parts in
-          Nx.irfft k.dtype ~n:w (Nx.mul ext os.ohs)
-        end
-        else if sp.sm > 1 then begin
-          (* decimate ÷F: multiply on the half grid, extend to the full [N]
-             grid, alias-fold onto the [N/F] grid — every term kept, summed in
-             one fixed order — and invert. The 1/F fold weight lives in the plan
-             spectrum. *)
-          let p = Nx.mul x os.ohs in
-          let pfull = Nx.concatenate ~axis:(-1) [p; mirror p] in
-          let lead_shape = Array.sub (Nx.shape pfull) 0 (Nx.ndim pfull - 1) in
-          let pr = Nx.reshape (Array.append lead_shape [|sp.sm; w|]) pfull in
-          let slice r =
-            Nx.shrink
-              (Array.init (Nx.ndim pr) (fun i ->
-                   if i = Nx.ndim pr - 2 then (r, r + 1) else (0, Nx.dim i pr) )
-              )
-              pr
-          in
-          let acc = ref (slice 0) in
-          for r = 1 to sp.sm - 1 do
-            acc := Nx.add !acc (slice r)
-          done ;
-          let folded = !acc in
-          let half = sub_last folded 0 ((w / 2) + 1) in
-          Nx.irfft k.dtype ~n:w half
-        end
-        else Nx.irfft k.dtype ~n:w (Nx.mul x os.ohs)
+        resample_shape_c (array1_of x) (array1_of os.ohs) (array1_of shaped)
+          lines o.on sp.sl sp.sm ;
+        Nx.irfft k.dtype ~n:w shaped
       in
       let transform v = transform_spec (Nx.rfft Nx.complex128 v) in
       (* [framed_spec ~j0 t0] is the half spectrum of the [t0] overlap-save
@@ -1411,7 +1521,9 @@ module Kernel = struct
             for c = 0 to ch - 1 do
               Bigarray.Array1.blit
                 (Bigarray.Array1.sub r_arr ((((c * stack) + j) * w) + pos) cnt)
-                (Bigarray.Array1.sub y ((c * n_out) + (i0 - st.emitted)) cnt)
+                (Bigarray.Array1.sub y
+                   (y_off + (c * y_stride) + (i0 - st.emitted))
+                   cnt )
             done ;
             out_pos := !out_pos + cnt
           end
@@ -1455,29 +1567,150 @@ module Kernel = struct
       st.emitted <- st.emitted + n_out
     end
 
-  (* [feed k st ~n ~n_out x y] advances stage [st] over [n] real samples read
-     planar from [x] (per-channel stride [n]), emitting [n_out] outputs into
-     [y]; [feed0] is the no-emission instance (the call still threads state).
-     [drain] extends the stage with virtual silence and emits its remaining
+  (* [gemm_run k st gs ~src ~n ~n_out ~y_off ~y_stride y] feeds [n] stage-input
+     samples into a GEMM stage, executes every call that completes — in order,
+     exactly once each, always the same [R; P] by [P; L] product — and writes
+     this call's [n_out] outputs per channel into [y] at [y_off], channel stride
+     [y_stride]. Like [ols_run], [n_out] falls short of what the executed calls
+     make available only on the truncating drain, where the surplus is exactly
+     the beyond-[output_frames] tail. *)
+  let gemm_run k st gs ~src ~n ~n_out ~y_off ~y_stride y =
+    let sp = st.sp in
+    let ch = k.channels in
+    let kk = sp.sk in
+    let span = gs.gspan in
+    (* the window samples already held: the [K] virtual zeros of the stream
+       start, then everything fed past the current call's window start *)
+    let pend = st.fed + kk - (gs.gcalls * gs.gb) in
+    let alen = pend + n in
+    (* [gather c j] lays call [j]'s block-rows into the product's left operand:
+       channel [c]'s stage inputs [j*B, j*B + B + 2K), cut into the [R] windows
+       of [P] samples advancing [M] that the rows read. Window offsets below
+       [held] are still in the carry, the rest are in this call's input, so a
+       row crossing that point is two runs and every other row is one. *)
+    let gather c j =
+      let off = j * gs.gb in
+      let held = Stdlib.min span (Stdlib.max 0 (pend - off)) in
+      for r = 0 to gs.gr - 1 do
+        let w = r * sp.sm and dst = r * gs.gp in
+        let kept = Stdlib.min gs.gp (Stdlib.max 0 (held - w)) in
+        if kept > 0 then
+          Bigarray.Array1.blit
+            (Bigarray.Array1.sub gs.gcarry ((c * span) + off + w) kept)
+            (Bigarray.Array1.sub gs.gaa dst kept) ;
+        let rest = gs.gp - kept in
+        if rest > 0 then
+          let into = Bigarray.Array1.sub gs.gaa (dst + kept) rest in
+          match src with
+          | From (s, stride) ->
+              Bigarray.Array1.blit
+                (Bigarray.Array1.sub s
+                   ((c * stride) + off + w + kept - pend)
+                   rest )
+                into
+          | Silence ->
+              Bigarray.Array1.fill into 0.
+      done
+    in
+    let t = if alen < span then 0 else ((alen - span) / gs.gb) + 1 in
+    if t > 0 then begin
+      let per_call = gs.gr * sp.sl in
+      let out_pos = ref 0 in
+      for j = 0 to t - 1 do
+        let b = gs.gcalls + j in
+        let i0 = st.emitted + !out_pos in
+        let cnt = Stdlib.min (((b + 1) * per_call) - i0) (n_out - !out_pos) in
+        if cnt > 0 then begin
+          let pos = i0 - (b * per_call) in
+          for c = 0 to ch - 1 do
+            gather c j ;
+            let res = array1_of (Nx.matmul gs.ga gs.gg) in
+            Bigarray.Array1.blit
+              (Bigarray.Array1.sub res pos cnt)
+              (Bigarray.Array1.sub y
+                 (y_off + (c * y_stride) + (i0 - st.emitted))
+                 cnt )
+          done ;
+          out_pos := !out_pos + cnt
+        end
+      done ;
+      assert (!out_pos = n_out)
+    end ;
+    (* the window tail becomes the next carry: what the executed calls left
+       behind, then whatever of this call's samples follows it *)
+    let base = t * gs.gb in
+    let pend' = alen - base in
+    for c = 0 to ch - 1 do
+      let held = Stdlib.min pend' (Stdlib.max 0 (pend - base)) in
+      (* what the executed calls left behind moves down by their advance; with
+         no call executed it is already in place. The move is strictly leftward,
+         so a forward copy is in order *)
+      if base > 0 then
+        for i = 0 to held - 1 do
+          Bigarray.Array1.unsafe_set gs.gcarry
+            ((c * span) + i)
+            (Bigarray.Array1.unsafe_get gs.gcarry ((c * span) + base + i))
+        done ;
+      let rest = pend' - held in
+      if rest > 0 then
+        let s0 = base + held - pend in
+        let dst = Bigarray.Array1.sub gs.gcarry ((c * span) + held) rest in
+        match src with
+        | From (s, stride) ->
+            Bigarray.Array1.blit
+              (Bigarray.Array1.sub s ((c * stride) + s0) rest)
+              dst
+        | Silence ->
+            Bigarray.Array1.fill dst 0.
+    done ;
+    gs.gcalls <- gs.gcalls + t ;
+    st.emitted <- st.emitted + n_out
+
+  (* [feed k st ~n ~n_out ~y_off ~y_stride x y] advances stage [st] over [n]
+     real samples read planar from [x] (per-channel stride [n]), emitting
+     [n_out] outputs per channel into [y] at [y_off], channel stride [y_stride];
+     [feed0] is the no-emission instance (the call still threads state). [drain]
+     extends the stage with virtual silence and emits its remaining
      [n_out]-sample tail. *)
-  let feed k st ~n ~n_out x y =
+  let feed k st ~n ~n_out ~y_off ~y_stride x y =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n ~n_out ~is_flush:false x y
+        direct_run k st d ~n ~n_out ~y_off ~y_stride ~is_flush:false x y
     | Ox os ->
-        ols_run k st os ~src:(From (x, n)) ~n ~n_out y
+        ols_run k st os ~src:(From (x, n)) ~n ~n_out ~y_off ~y_stride y
+    | Gx gs ->
+        gemm_run k st gs ~src:(From (x, n)) ~n ~n_out ~y_off ~y_stride y
 
   let feed0 k st ~n x =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n ~n_out:0 ~is_flush:false x d.scratch
+        direct_run k st d ~n ~n_out:0 ~y_off:0 ~y_stride:0 ~is_flush:false x
+          d.scratch
     | Ox os ->
-        ols_run k st os ~src:(From (x, n)) ~n ~n_out:0 os.carry
+        ols_run k st os
+          ~src:(From (x, n))
+          ~n ~n_out:0 ~y_off:0 ~y_stride:0 os.carry
+    | Gx gs ->
+        gemm_run k st gs
+          ~src:(From (x, n))
+          ~n ~n_out:0 ~y_off:0 ~y_stride:0 gs.gcarry
 
-  let drain k st ~n_out y =
+  let drain k st ~n_out ~y_off ~y_stride y =
     match st.ex with
     | Dx d ->
-        direct_run k st d ~n:st.sp.sk ~n_out ~is_flush:true d.hist y
+        direct_run k st d ~n:st.sp.sk ~n_out ~y_off ~y_stride ~is_flush:true
+          d.hist y
+    | Gx gs ->
+        (* exactly enough virtual zeros to complete the calls that cover the
+           remaining outputs — a function of totals alone *)
+        let per_call = gs.gr * st.sp.sl in
+        let target = st.emitted + n_out in
+        let b = ref gs.gcalls in
+        while (!b + 1) * per_call < target do
+          incr b
+        done ;
+        let zeros = ((!b + 1) * gs.gb) + st.sp.sk - st.fed in
+        gemm_run k st gs ~src:Silence ~n:zeros ~n_out ~y_off ~y_stride y
     | Ox os ->
         (* exactly enough virtual zeros to complete the blocks that cover the
            remaining outputs — a function of totals alone *)
@@ -1488,7 +1721,94 @@ module Kernel = struct
           incr b
         done ;
         let zeros = (!b * o.ob) + o.on - (2 * st.sp.sk) - o.odelta - st.fed in
-        ols_run k st os ~src:Silence ~n:zeros ~n_out y
+        ols_run k st os ~src:Silence ~n:zeros ~n_out ~y_off ~y_stride y
+
+  (* [outputs k n] is what a [n]-sample chunk emits per channel, and
+     [drain_outputs k] what the tail behind it does. Both are functions of the
+     stage states and the plan alone — no executor runs — so a destination can
+     be sized, and placed, before any sample moves. *)
+  let outputs k n =
+    match k.st with
+    | [|s|] ->
+        avail s (s.fed + n) - s.emitted
+    | [|s1; s2|] ->
+        let n1 = avail s1 (s1.fed + n) - s1.emitted in
+        avail s2 (s2.fed + n1) - s2.emitted
+    | _ ->
+        assert false
+
+  let drain_outputs k =
+    match k.st with
+    | [|s|] ->
+        ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted
+    | [|s1; s2|] ->
+        ceil_pos (s1.fed * k.cfg.l) k.cfg.m - s2.emitted
+    | _ ->
+        assert false
+
+  (* [run k chunk ~n ~y_off ~y_stride y] pushes [n] samples through the plan,
+     writing the [outputs k n] results per channel into [y] at [y_off], channel
+     stride [y_stride]. A cascade lands stage 1 in the hand-off buffer: its
+     output sequence is partition-independent (stage 1 is chunk-invariant), and
+     stage 2 is invariant to how that sequence reaches it — the composite keeps
+     the law by composition, not by re-proof. *)
+  let run k chunk ~n ~y_off ~y_stride y =
+    let x = array1_of chunk in
+    match k.st with
+    | [|s|] ->
+        let n_out = avail s (s.fed + n) - s.emitted in
+        if n_out = 0 then feed0 k s ~n x
+        else feed k s ~n ~n_out ~y_off ~y_stride x y ;
+        s.fed <- s.fed + n
+    | [|s1; s2|] ->
+        let n1 = avail s1 (s1.fed + n) - s1.emitted in
+        if n1 = 0 then feed0 k s1 ~n x
+        else feed k s1 ~n ~n_out:n1 ~y_off:0 ~y_stride:n1 x k.mid ;
+        s1.fed <- s1.fed + n ;
+        if n1 > 0 then begin
+          let n2 = avail s2 (s2.fed + n1) - s2.emitted in
+          if n2 = 0 then feed0 k s2 ~n:n1 k.mid
+          else feed k s2 ~n:n1 ~n_out:n2 ~y_off ~y_stride k.mid y ;
+          s2.fed <- s2.fed + n1
+        end
+    | _ ->
+        assert false
+
+  (* [drain_run k ~y_off ~y_stride y] writes the [drain_outputs k] tail. A
+     cascade drains in stage order and truncates: stage 1 flushes its exact ceil
+     tail into the hand-off buffer, the tail streams through stage 2, stage 2
+     flushes its own tail — and the composite stream is cut to [output_frames].
+     The cut only ever lands in this drain: [ceil (ceil (n*L1/M1) * L2/M2) >=
+     ceil (n*L/M)] (the stage rationals multiply to exactly [L/M]), and
+     mid-stream emission never passes the composite ceil because [K1*L >= M] —
+     checked at create — keeps [emitted <= fed*L/M + 1 - K1*L/M], and an OLS
+     stage withholds at least as much (a block only emits outputs whose full
+     lookahead lies inside it). Both counts are functions of the totals alone,
+     so the cut is partition-independent. *)
+  let drain_run k ~y_off ~y_stride y =
+    match k.st with
+    | [|s|] ->
+        let n_out = ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted in
+        if n_out > 0 then drain k s ~n_out ~y_off ~y_stride y
+    | [|s1; s2|] ->
+        let keep = ceil_pos (s1.fed * k.cfg.l) k.cfg.m - s2.emitted in
+        if keep > 0 then begin
+          let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
+          if n1 > 0 then drain k s1 ~n_out:n1 ~y_off:0 ~y_stride:n1 k.mid ;
+          let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
+          if n2a = 0 then begin
+            if n1 > 0 then
+              (* thread the tail into stage-2 state: the stage-2 drain below
+                 still reads it *)
+              feed0 k s2 ~n:n1 k.mid
+          end
+          else feed k s2 ~n:n1 ~n_out:n2a ~y_off ~y_stride k.mid y ;
+          s2.fed <- s2.fed + n1 ;
+          let n2b = keep - n2a in
+          if n2b > 0 then drain k s2 ~n_out:n2b ~y_off:(y_off + n2a) ~y_stride y
+        end
+    | _ ->
+        assert false
 
   let step k chunk =
     if k.drained then
@@ -1512,118 +1832,30 @@ module Kernel = struct
            (if k.channels = 1 then "channel" else "channels") ) ;
     k.leading <- lead ;
     if n = 0 then None
-    else begin
-      let x = array1_of chunk in
-      match k.st with
-      | [|s|] ->
-          let n_out = avail s (s.fed + n) - s.emitted in
-          let out =
-            if n_out = 0 then begin
-              (* nothing computable yet: the call only threads the state *)
-              feed0 k s ~n x ; None
-            end
-            else begin
-              let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-              feed k s ~n ~n_out x (array1_of out) ;
-              Some out
-            end
-          in
-          s.fed <- s.fed + n ;
-          out
-      | [|s1; s2|] ->
-          (* stage 1 lands in the hand-off buffer. Its output sequence is
-             partition-independent (stage 1 is chunk-invariant), and stage 2 is
-             invariant to how that sequence reaches it — the composite keeps the
-             law by composition, not by re-proof *)
-          let n1 = avail s1 (s1.fed + n) - s1.emitted in
-          if n1 = 0 then feed0 k s1 ~n x else feed k s1 ~n ~n_out:n1 x k.mid ;
-          s1.fed <- s1.fed + n ;
-          if n1 = 0 then None
-          else begin
-            let n2 = avail s2 (s2.fed + n1) - s2.emitted in
-            let out =
-              if n2 = 0 then begin
-                feed0 k s2 ~n:n1 k.mid ; None
-              end
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2|]) in
-                feed k s2 ~n:n1 ~n_out:n2 k.mid (array1_of out) ;
-                Some out
-              end
-            in
-            s2.fed <- s2.fed + n1 ;
-            out
-          end
-      | _ ->
-          assert false
-    end
+    else
+      let n_out = outputs k n in
+      if n_out = 0 then begin
+        (* nothing computable yet: the call only threads the state *)
+        run k chunk ~n ~y_off:0 ~y_stride:0 k.mid ;
+        None
+      end
+      else begin
+        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
+        run k chunk ~n ~y_off:0 ~y_stride:n_out (array1_of out) ;
+        Some out
+      end
 
   let flush k =
     if k.drained then None
     else begin
       k.drained <- true ;
-      match k.st with
-      | [|s|] ->
-          let n_out = ceil_pos (s.fed * s.sp.sl) s.sp.sm - s.emitted in
-          if n_out = 0 then None
-          else begin
-            let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-            drain k s ~n_out (array1_of out) ;
-            Some out
-          end
-      | [|s1; s2|] ->
-          (* drain in stage order, then truncate: stage 1 flushes its exact ceil
-             tail into the hand-off buffer, the tail streams through stage 2,
-             stage 2 flushes its own tail — and the composite stream is cut to
-             [output_frames]. The cut only ever lands in this drain: [ceil (ceil
-             (n*L1/M1) * L2/M2) >= ceil (n*L/M)] (the stage rationals multiply
-             to exactly [L/M]), and mid-stream emission never passes the
-             composite ceil because [K1*L >= M] — checked at create — keeps
-             [emitted <= fed*L/M + 1 - K1*L/M], and an OLS stage withholds at
-             least as much (a block only emits outputs whose full lookahead lies
-             inside it). Both counts are functions of the totals alone, so the
-             cut is partition-independent. *)
-          let total = ceil_pos (s1.fed * k.cfg.l) k.cfg.m in
-          let keep = total - s2.emitted in
-          if keep = 0 then None
-          else begin
-            let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
-            if n1 > 0 then drain k s1 ~n_out:n1 k.mid ;
-            let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
-            let piece_a =
-              if n2a = 0 then begin
-                if n1 > 0 then
-                  (* thread the tail into stage-2 state: the stage-2 drain below
-                     still reads it *)
-                  feed0 k s2 ~n:n1 k.mid ;
-                None
-              end
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2a|]) in
-                feed k s2 ~n:n1 ~n_out:n2a k.mid (array1_of out) ;
-                Some out
-              end
-            in
-            s2.fed <- s2.fed + n1 ;
-            let n2b = keep - n2a in
-            let piece_b =
-              if n2b = 0 then None
-              else begin
-                let out = Nx.empty k.dtype (Array.append k.leading [|n2b|]) in
-                drain k s2 ~n_out:n2b (array1_of out) ;
-                Some out
-              end
-            in
-            match (piece_a, piece_b) with
-            | None, None ->
-                None
-            | (Some _ as one), None | None, (Some _ as one) ->
-                one
-            | Some a, Some b ->
-                Some (Nx.concatenate ~axis:(-1) [a; b])
-          end
-      | _ ->
-          assert false
+      let n_out = drain_outputs k in
+      if n_out = 0 then None
+      else begin
+        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
+        drain_run k ~y_off:0 ~y_stride:n_out (array1_of out) ;
+        Some out
+      end
     end
 
   let reset k =
@@ -1634,7 +1866,10 @@ module Kernel = struct
             Bigarray.Array1.fill d.hist 0.
         | Ox os ->
             Bigarray.Array1.fill os.carry 0. ;
-            os.oblocks <- 0 ) ;
+            os.oblocks <- 0
+        | Gx gs ->
+            Bigarray.Array1.fill gs.gcarry 0. ;
+            gs.gcalls <- 0 ) ;
         s.fed <- 0 ;
         s.emitted <- 0 )
       k.st ;
@@ -1657,16 +1892,16 @@ let apply c x =
       Nx.zeros (Nx.dtype x) (Array.append lead [|total|])
     else begin
       let k = Kernel.prepare c (Nx.dtype x) ~channels ~max_block:n in
-      (* sequence step before flush *)
-      let stepped = Kernel.step k x in
-      let drained = Kernel.flush k in
-      match Option.to_list stepped @ Option.to_list drained with
-      | [] ->
-          Nx.zeros (Nx.dtype x) (Array.append lead [|total|])
-      | [one] ->
-          one
-      | many ->
-          Nx.concatenate ~axis:(-1) many
+      (* the whole conversion is one step and its drain, both writing their own
+         run of the result: the offline call owns the destination, so the two
+         land in place instead of being joined afterwards *)
+      let out = Nx.empty (Nx.dtype x) (Array.append lead [|total|]) in
+      let y = array1_of out in
+      let stepped = Kernel.outputs k n in
+      Kernel.run k x ~n ~y_off:0 ~y_stride:total y ;
+      assert (Kernel.drain_outputs k = total - stepped) ;
+      Kernel.drain_run k ~y_off:stepped ~y_stride:total y ;
+      out
     end
 
 (* {1 Offline, tensor formulation}
@@ -1793,11 +2028,14 @@ let stage_kernel s chunk =
    downstream — downstream kernels size their [max_block] from it, so it must
    dominate every step and the drain, whatever each stage's executor: for direct
    stages that is [ceil (b*L/M) + 1] per length-[b] chunk, for FFT-executed
-   stages at least one full block (a step that completes blocks emits them whole
-   — burst emission is the executor's cadence). A cascade compounds the two
-   per-stage bounds, and its drain — stage-1 tail through stage 2 plus stage-2's
-   own tail, delivered as one chunk — can exceed both, so it enters the max
-   explicitly. *)
+   stages at least one full block and for GEMM-executed stages at least one full
+   call — a step that completes blocks or calls emits them whole, burst emission
+   being those executors' cadence. The GEMM cadence is the coarsest of the
+   three: one call spans [R*M] stage inputs, so a stage emits nothing until that
+   many have arrived and then emits [R*L] outputs at once. A cascade compounds
+   the two per-stage bounds, and its drain — stage-1 tail through stage 2 plus
+   stage-2's own tail, delivered as one chunk — can exceed both, so it enters
+   the max explicitly. *)
 let stage_bound cfg b =
   match cfg.stages with
   | [s] ->
