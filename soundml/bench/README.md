@@ -21,6 +21,26 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
 - `stft` — `Stft.power_spectrum` offline over 30 s of mono audio at
   22.05 kHz, fft 2048 and hop 512, one row per dtype (float32, float64),
   mirroring the librosa rows one to one.
+- `istft` — `Stft.invert` of a spectrum of the same signal at the same
+  geometry, one row per dtype, mirroring the librosa rows one to one. The
+  spectrum is built outside the timed thunk, so the row carries the synthesis
+  and nothing else.
+- `griffinlim` — `Stft.griffin_lim` at its defaults (32 iterations, momentum
+  0.99, the deterministic all-ones initial phase) over a magnitude spectrogram
+  of the same signal, one row per dtype. Each row is 32 analysis-synthesis
+  pairs, so it prices both directions together; the librosa rows pass
+  `init=None`, its only deterministic initial phase, and mirror them one to
+  one.
+
+  The measured position, both sides on the maintainer machine in one session
+  (arm64, min-of-N over five interleaved alternations after a discarded
+  warm-up round): `invert` runs 0.35x `librosa.istft` at float32 and 0.27x at
+  float64 (4.63 ms against 13.30 ms, 4.34 ms against 16.12 ms), and
+  `griffin_lim` 0.53x `librosa.griffinlim` at float32 and 0.43x at float64
+  (466 ms against 872 ms, 471 ms against 1098 ms). Synthesis runs its interior
+  in double precision at both dtypes, exactly as the analysis does, so the two
+  SoundML rows sit close together while librosa's float32 rows take its own
+  single-precision path.
 - `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
   one row per dtype, mirroring the librosa rows one to one.
 - `resample` — every face of `Resample` on one-second mono clips: `apply`

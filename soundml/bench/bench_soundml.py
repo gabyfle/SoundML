@@ -3,7 +3,8 @@
 The Python twin of ``bench_soundml.ml``: every SoundML case with a librosa (or
 scipy) reference implementation gets a row here under the same group/name
 scheme, so the two tables read side by side. Window generation seeds the
-suite; STFT and mel rows land together with their OCaml counterparts.
+suite; STFT, synthesis and mel rows land together with their OCaml
+counterparts.
 
 Run it from the repository root:
 
@@ -28,6 +29,7 @@ N_AUDIO = 30 * SAMPLE_RATE
 N_FFT = 2048
 HOP = 512
 N_MELS = 128
+N_GRIFFINLIM_ITER = 32
 
 # The SoundML window specs and their librosa/scipy spellings. Parametrised
 # specs use representative parameters; keep them in sync with the OCaml suite.
@@ -153,11 +155,49 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
 
         return run
 
+    def istft(s: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.istft(s, n_fft=N_FFT, hop_length=HOP)
+
+        return run
+
+    def griffinlim(s: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.griffinlim(
+                s,
+                n_iter=N_GRIFFINLIM_ITER,
+                n_fft=N_FFT,
+                hop_length=HOP,
+                momentum=0.99,
+                init=None,
+            )
+
+        return run
+
     for tag, y in (("f32", y32), ("f64", y64)):
         benches.append(
             bench(
                 f"stft/power_spectrum 30s {tag} fft{N_FFT} hop{HOP} (librosa)",
                 power_spectrum(y),
+            )
+        )
+    # The synthesis rows: the spectrum is built once, outside the timed call,
+    # exactly as the OCaml rows precompute theirs.
+    for tag, y in (("f32", y32), ("f64", y64)):
+        spectrum = librosa.stft(y, n_fft=N_FFT, hop_length=HOP)
+        benches.append(
+            bench(
+                f"istft/invert 30s {tag} fft{N_FFT} hop{HOP} (librosa)",
+                istft(spectrum),
+            )
+        )
+    for tag, y in (("f32", y32), ("f64", y64)):
+        magnitudes = np.abs(librosa.stft(y, n_fft=N_FFT, hop_length=HOP))
+        benches.append(
+            bench(
+                f"griffinlim/griffin_lim 30s n{N_GRIFFINLIM_ITER} {tag}"
+                f" fft{N_FFT} hop{HOP} (librosa)",
+                griffinlim(magnitudes),
             )
         )
     for tag, y in (("f32", y32), ("f64", y64)):

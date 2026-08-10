@@ -14,6 +14,13 @@
    kHz, fft 2048 and hop 512, in both float32 and float64 — one row per dtype,
    mirroring the librosa rows of [bench_soundml.py] one to one.
 
+   The istft and griffinlim groups time the synthesis paths over the same audio
+   and geometry: one [Stft.invert] of a precomputed spectrum, and one
+   32-iteration [Stft.griffin_lim] of a precomputed magnitude spectrogram, which
+   is 32 analysis-synthesis pairs and prices both of them together. Their inputs
+   are built outside the timed thunk, so the rows carry the synthesis and
+   nothing else; librosa rows mirror them one to one.
+
    The resample group covers every face of [Resample] on one-second mono clips:
    [apply] across the three presets, the six headline rate pairs — near-unity
    both ways and every pair the planner splits into a cascade, so a stage-level
@@ -77,6 +84,34 @@ let stft_benchmarks () =
         Soundml.Stft.power_spectrum stft_config x32 )
   ; Thumper.bench "power_spectrum 30s f64 fft2048 hop512" (fun () ->
         Soundml.Stft.power_spectrum stft_config x64 ) ]
+
+(* The synthesis rows read a spectrum of the same audio, built once outside the
+   timed thunk. Griffin-Lim pads with zeros, the padding its librosa twin
+   defaults to. *)
+let griffin_lim_config =
+  Soundml.Stft.Config.create ~fft_size:2048 ~hop:512 ~pad:(`Constant 0.) ()
+
+let istft_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let x64 = Nx.rand Nx.float64 [|n_audio|] in
+  let z32 = Soundml.Stft.transform Nx.complex64 stft_config x32 in
+  let z64 = Soundml.Stft.transform Nx.complex128 stft_config x64 in
+  [ Thumper.bench "invert 30s f32 fft2048 hop512" (fun () ->
+        Soundml.Stft.invert Nx.float32 stft_config z32 )
+  ; Thumper.bench "invert 30s f64 fft2048 hop512" (fun () ->
+        Soundml.Stft.invert Nx.float64 stft_config z64 ) ]
+
+let griffin_lim_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let x64 = Nx.rand Nx.float64 [|n_audio|] in
+  let s32 = Soundml.Stft.power_spectrum ~power:1. griffin_lim_config x32 in
+  let s64 = Soundml.Stft.power_spectrum ~power:1. griffin_lim_config x64 in
+  [ Thumper.bench "griffin_lim 30s n32 f32 fft2048 hop512" (fun () ->
+        Soundml.Stft.griffin_lim ~n_iter:32 ~momentum:0.99 ~init:`Zero_phase
+          griffin_lim_config s32 )
+  ; Thumper.bench "griffin_lim 30s n32 f64 fft2048 hop512" (fun () ->
+        Soundml.Stft.griffin_lim ~n_iter:32 ~momentum:0.99 ~init:`Zero_phase
+          griffin_lim_config s64 ) ]
 
 let mel_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
@@ -221,13 +256,20 @@ let resample_stage_benchmarks () =
 let () =
   Nx.Rng.with_key (Nx.Rng.key 42)
   @@ fun () ->
-  Thumper.run "soundml"
+  Thumper.run
+    "soundml"
+    (* the Griffin-Lim rows are half a second each — 32 analysis-synthesis pairs
+       over 30 s of audio — so the whole protocol runs past the default
+       ten-second per-case cap *)
+    ~config:Thumper.Config.(default |> deadline 60.)
     ~budgets:
       [ Thumper.Budget.no_slower_than ~metric:Thumper.Metric.wall_time 0.05
       ; Thumper.Budget.no_more_alloc_than 0.01 ]
     [ Thumper.group "window" (window_benchmarks ())
     ; Thumper.group "pipeline" (pipeline_benchmarks ())
     ; Thumper.group "stft" (stft_benchmarks ())
+    ; Thumper.group "istft" (istft_benchmarks ())
+    ; Thumper.group "griffinlim" (griffin_lim_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
     ; Thumper.group "resample"
         ( resample_apply_benchmarks ()
