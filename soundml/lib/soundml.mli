@@ -53,7 +53,9 @@ module Mel = Mel
 
 (** Constant-Q and variable-Q transforms: the filter geometry precomputed by
     {!Cqt.Config}, the offline {!Cqt.transform} over the recursive octave
-    plan, and the dtype-preserving {!Cqt.power_spectrum}. *)
+    plan, the dtype-preserving {!Cqt.power_spectrum}, and the incremental
+    {!Cqt.Kernel} streaming the same plan at the declared
+    {!Cqt.Config.latency}. *)
 module Cqt = Cqt
 
 (** Chroma (pitch-class) projections: the Gaussian-bump matrix precomputed by

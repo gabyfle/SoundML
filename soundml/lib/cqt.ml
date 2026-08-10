@@ -451,6 +451,33 @@ module Config = struct
 
   let cutoff t = t.cutoff
 
+  (* {2 Latency}
+
+     [octave_lookahead c o] is how many input samples at [sample_rate] column
+     [p] of octave [o] reads past sample [p * hop].
+
+     Octave [o] sits under [D = 2 ^ (early + halvings)] cascaded 2:1 stages,
+     each of group delay [K = Resample.Config.latency half] input samples:
+     output [m] of a [d]-deep chain is final once [2^d * m + K * (2^d - 1) + 1]
+     samples have arrived — the recurrence unrolls from [2 m + K + 1] for one
+     stage. The octave's column [p] sits on decimated sample [p * H] and, under
+     the centered analysis, reads up to [p * H + L - 1] with [L = n_fft / 2].
+     Since [H * D = hop] at every plan shape, the column closes at
+
+     p * hop + D * (L - 1) + K * (D - 1) + 1
+
+     input samples. The decimation term vanishes for an undecimated octave,
+     where the whole lookahead is the analysis half-window. *)
+  let octave_lookahead t o =
+    let d = 1 lsl (t.early + o.halvings) in
+    let l = Stft.Config.latency o.stft in
+    (d * (l - 1)) + (Resample.Config.latency t.half * (d - 1)) + 1
+
+  let latency t =
+    Array.fold_left
+      (fun acc o -> Stdlib.max acc (octave_lookahead t o))
+      0 t.octaves
+
   let pp_gamma fmt = function
     | `Constant_q ->
         Format.pp_print_string fmt "constant_q"
@@ -576,11 +603,14 @@ let resamples (c : Config.t) =
        (fun (o : Config.octave) -> o.Config.hop mod 2 = 0)
        (Array.sub octaves 0 (Array.length octaves - 1))
 
-let shrink_last t stop =
+let slice_last t start stop =
   let nd = Nx.ndim t in
   Nx.shrink
-    (Array.init nd (fun i -> if i = nd - 1 then (0, stop) else (0, Nx.dim i t)))
+    (Array.init nd (fun i ->
+         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
     t
+
+let shrink_last t stop = slice_last t 0 stop
 
 let transform : type c a.
        (Complex.t, c) Nx.dtype
@@ -660,3 +690,323 @@ let power_spectrum ?(power = 2.) c x =
   let dtype = Nx.dtype x in
   let (Cdtype cdtype) = spectrum_witness dtype in
   magnitude_pow dtype power (transform cdtype c x)
+
+(* {1 The incremental kernel}
+
+   The same octave plan, driven sample by sample instead of signal by signal.
+   The composition, stage by stage: the input passes the [early] cascaded 2:1
+   resamplers and the [2^(early/2)] rescaling to become the stream [u_0]; octave
+   [i] analyses [u_i] through its rectangular STFT and projects each frame
+   through [kernel_i]; and, while [hop_i] is even, [u_i] passes one more 2:1
+   resampler and the [sqrt (1/2)] rescaling to become [u_(i+1)] — an odd hop
+   leaves [u_(i+1) = u_i].
+
+   Column [p] leaves once every octave has produced its frame [p]: with [H_i *
+   D_i = hop] at every plan shape, frame [p] of every octave is the same instant
+   of the input, so the per-octave frame counters are directly comparable and
+   their minimum is the emission gate. Stacking, length normalisation and the
+   cast are the transform's own, applied column-wise.
+
+   {2 The partition law}
+
+   For every partition of [x], the concatenation of the [step] outputs followed
+   by [flush] is bit-identical to the one-chunk instance of the same kernel.
+   Link by link.
+
+   Every {!Resample.Kernel} and every {!Stft.Kernel} in the composition carries
+   its own bit-exact partition law, so each intermediate stream [u_i] and each
+   octave's frame sequence is a function of the input prefix alone.
+
+   The inter-stage scalars are elementwise and applied per chunk in a fixed
+   order, so they commute with any chunking of a bit-identical stream.
+
+   The projection consumes frames one at a time, indexed by frame number: its
+   operand shapes, layouts and summation orders are plan constants, independent
+   of how the frame arrived.
+
+   The gate emits column [p] exactly once, when the minimum of the per-octave
+   counters first exceeds [p] — a function of totals, never of chunk boundaries
+   — and concatenation, division and cast are column-wise exact.
+
+   [flush] drains in one fixed topological order, each link a sub-kernel drain
+   obeying its own law, then runs the same residual gate.
+
+   Every emitted column is therefore a function of the configuration, the column
+   index and the input prefix alone.
+
+   {2 Buffering}
+
+   Octave [i] holds at most [ceil ((latency - lookahead_i) / hop) + 1] projected
+   columns — the columns it ran ahead of the slowest octave — so the kernel's
+   own state is [O (n_bins * latency / hop)] complex128 values on top of each
+   sub-kernel's documented bound. *)
+
+let sqrt_half = Float.sqrt 0.5
+
+let last_dim t = Nx.dim (Nx.ndim t - 1) t
+
+module Kernel = struct
+  type 'a octave_state =
+    { plan: Config.octave
+    ; stft: ('a, Nx.complex64_elt) Stft.Kernel.t
+    ; halver: 'a Resample.Kernel.t option
+          (** the 2:1 stage feeding the next octave, absent at the last octave
+              and wherever an odd hop stops the recursion from halving *)
+    ; columns: (Complex.t, Nx.complex64_elt) Nx.t Queue.t
+          (** projected columns not yet released by the gate, oldest first *)
+    ; mutable produced: int }
+
+  type ('a, 'c) t =
+    { cfg: Config.t
+    ; cdtype: (Complex.t, 'c) Nx.dtype
+    ; max_block: int
+    ; early: 'a Resample.Kernel.t array
+    ; octaves: 'a octave_state array
+    ; mutable emitted: int
+    ; mutable drained: bool }
+
+  (* A 2:1 stage halves its input and emits on its executor's own block grid,
+     which releases a bounded burst on top of the halved chunk; its consumer is
+     sized for both. The bound sizes buffers only — it never moves a bit. *)
+  let consumer_block b = ceil_div b 2 + 8192
+
+  let prepare : type a c.
+         (Complex.t, c) Nx.dtype
+      -> Config.t
+      -> (float, a) Nx.dtype
+      -> channels:int
+      -> max_block:int
+      -> (a, c) t =
+   fun cdtype c dtype ~channels ~max_block ->
+    if channels < 1 then
+      invalid_arg
+        (Printf.sprintf
+           "prepare: cannot analyse %d channels (channels must be at least 1)"
+           channels ) ;
+    if max_block < 1 then
+      invalid_arg
+        (Printf.sprintf
+           "prepare: cannot accept blocks of %d samples (max_block must be at \
+            least 1)"
+           max_block ) ;
+    if resamples c then check_resampling_dtype "prepare" dtype ;
+    let block = ref max_block in
+    let stages = ref [] in
+    for _ = 1 to c.Config.early do
+      stages :=
+        Resample.Kernel.prepare c.Config.half dtype ~channels ~max_block:!block
+        :: !stages ;
+      block := consumer_block !block
+    done ;
+    let last = Array.length c.Config.octaves - 1 in
+    let states = ref [] in
+    Array.iteri
+      (fun i (o : Config.octave) ->
+        let halver =
+          if i < last && o.Config.hop mod 2 = 0 then
+            Some
+              (Resample.Kernel.prepare c.Config.half dtype ~channels
+                 ~max_block:!block )
+          else None
+        in
+        states :=
+          { plan= o
+          ; stft=
+              Stft.Kernel.prepare Nx.complex128 o.Config.stft dtype ~channels
+                ~max_block:!block
+          ; halver
+          ; columns= Queue.create ()
+          ; produced= 0 }
+          :: !states ;
+        if Option.is_some halver then block := consumer_block !block )
+      c.Config.octaves ;
+    { cfg= c
+    ; cdtype
+    ; max_block
+    ; early= Array.of_list (List.rev !stages)
+    ; octaves= Array.of_list (List.rev !states)
+    ; emitted= 0
+    ; drained= false }
+
+  (* {2 Projection}
+
+     Frames are projected one at a time against the octave's filter matrix, so
+     the product's operands are plan constants: a [[count; bins]] kernel and one
+     [[...; bins; 1]] frame, whatever shape the frame arrived in. *)
+  let project os d =
+    for j = 0 to last_dim d - 1 do
+      let frame = Nx.copy (slice_last d j (j + 1)) in
+      Queue.push (Nx.matmul os.plan.Config.kernel frame) os.columns ;
+      os.produced <- os.produced + 1
+    done
+
+  (* {2 Feeding} *)
+
+  (* The early stage carries the same rescaling as one octave step per halving;
+     without length normalisation downstream it carries it twice, once for the
+     rate and once for the filter support. *)
+  let early_scale (c : Config.t) u =
+    if c.Config.early = 0 then u
+    else
+      let factor = Float.sqrt (Float.of_int (1 lsl c.Config.early)) in
+      let u = Nx.mul_s u factor in
+      if c.Config.scale then u else Nx.mul_s u factor
+
+  let rec feed_octave t i u =
+    if last_dim u > 0 then begin
+      let os = t.octaves.(i) in
+      ( match Stft.Kernel.step os.stft u with
+      | Some d ->
+          project os d
+      | None ->
+          () ) ;
+      match os.halver with
+      | Some r -> (
+        match Resample.Kernel.step r u with
+        | Some v ->
+            feed_octave t (i + 1) (Nx.div_s v sqrt_half)
+        | None ->
+            () )
+      | None ->
+          (* an odd hop stops the halving: the next octave analyses the same
+             stream at the same rate *)
+          if i < Array.length t.octaves - 1 then feed_octave t (i + 1) u
+    end
+
+  let push_early t chunk =
+    Array.fold_left
+      (fun acc k ->
+        match acc with None -> None | Some c -> Resample.Kernel.step k c )
+      (Some chunk) t.early
+
+  let concat_last parts =
+    match parts with [one] -> one | many -> Nx.concatenate ~axis:(-1) many
+
+  let join a b =
+    match (a, b) with
+    | None, x | x, None ->
+        x
+    | Some x, Some y ->
+        Some (Nx.concatenate ~axis:(-1) [x; y])
+
+  (* {2 Emission} *)
+
+  let take os count =
+    let acc = ref [] in
+    for _ = 1 to count do
+      acc := Queue.pop os.columns :: !acc
+    done ;
+    concat_last (List.rev !acc)
+
+  let emit t =
+    let gate =
+      Array.fold_left
+        (fun acc os -> Stdlib.min acc os.produced)
+        max_int t.octaves
+    in
+    if gate <= t.emitted then None
+    else begin
+      let count = gate - t.emitted in
+      (* Stacking from the lowest octave up rebuilds the ladder in ascending
+         order, and a partial bottom octave contributes only the bins it
+         carries. *)
+      let parts =
+        Array.fold_left (fun acc os -> take os count :: acc) [] t.octaves
+      in
+      let stacked =
+        match parts with
+        | [one] ->
+            one
+        | parts ->
+            Nx.concatenate ~axis:(-2) parts
+      in
+      let stacked =
+        match t.cfg.Config.divisors with
+        | None ->
+            stacked
+        | Some divisors ->
+            Nx.div stacked divisors
+      in
+      t.emitted <- gate ;
+      Some (Nx.cast t.cdtype stacked)
+    end
+
+  let step t chunk =
+    if t.drained then
+      invalid_arg
+        "step: cannot feed a drained kernel (flush consumed the tail; reset \
+         before reusing)" ;
+    check_rank "step" chunk ;
+    let n = last_dim chunk in
+    if n > t.max_block then
+      invalid_arg
+        (Printf.sprintf "step: cannot feed a %d-sample chunk (max_block is %d)"
+           n t.max_block ) ;
+    if n = 0 then None
+    else begin
+      ( match push_early t chunk with
+      | Some u ->
+          feed_octave t 0 (early_scale t.cfg u)
+      | None ->
+          () ) ;
+      emit t
+    end
+
+  (* The drain runs front to back: every stage is emptied only after everything
+     upstream of it has been, so each sub-kernel sees its whole stream before
+     its own boundary extension is installed. *)
+  let flush t =
+    if t.drained then None
+    else begin
+      t.drained <- true ;
+      let carry = ref None in
+      Array.iter
+        (fun k ->
+          let stepped =
+            match !carry with
+            | Some c ->
+                Resample.Kernel.step k c
+            | None ->
+                None
+          in
+          carry := join stepped (Resample.Kernel.flush k) )
+        t.early ;
+      ( match !carry with
+      | Some u ->
+          feed_octave t 0 (early_scale t.cfg u)
+      | None ->
+          () ) ;
+      for i = 0 to Array.length t.octaves - 1 do
+        let os = t.octaves.(i) in
+        ( match Stft.Kernel.flush os.stft with
+        | Some d ->
+            project os d
+        | None ->
+            () ) ;
+        match os.halver with
+        | Some r -> (
+          match Resample.Kernel.flush r with
+          | Some v ->
+              feed_octave t (i + 1) (Nx.div_s v sqrt_half)
+          | None ->
+              () )
+        | None ->
+            ()
+      done ;
+      (* Octaves that ran ahead of the slowest keep their surplus columns
+         unemitted: the frame grid is the one every octave produced. *)
+      emit t
+    end
+
+  let reset t =
+    Array.iter Resample.Kernel.reset t.early ;
+    Array.iter
+      (fun os ->
+        Stft.Kernel.reset os.stft ;
+        Option.iter Resample.Kernel.reset os.halver ;
+        Queue.clear os.columns ;
+        os.produced <- 0 )
+      t.octaves ;
+    t.emitted <- 0 ;
+    t.drained <- false
+end
