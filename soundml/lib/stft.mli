@@ -22,7 +22,8 @@
 (** Short-time Fourier transform.
 
     A {!Config.t} fixes the analysis geometry once; {!transform} is the
-    offline transform, {!Kernel} is the incremental form behind it, and
+    offline transform, {!invert} and {!griffin_lim} are its synthesis side,
+    {!Kernel} is the incremental form behind the analysis, and
     {!stage}/{!power_stage} expose the same kernel as {!Pipeline} stages.
     Offline is the one-chunk instance of streaming: {!transform} drives the
     kernel on a single chunk, so the two cannot disagree.
@@ -228,6 +229,179 @@ val power_spectrum :
     [x], and magnitudes land directly in that dtype.
 
     Raises [Invalid_argument] if [x] has rank zero. *)
+
+(** {1 Synthesis}
+
+    {!invert} is the least-squares inverse of {!transform}: among all signals
+    it returns the one whose transform is closest to the given frames, which
+    for frames that are an actual transform is that signal back. It reads the
+    same {!Config.t} the analysis used: the window and its length, the hop, the
+    transform size, the alignment and the normalisation, which cancels because
+    the same window appears on both sides. The padding mode is the one field
+    {!invert} does not read — the boundary extension the alignment implies is
+    trimmed back off rather than recomputed, so frames analysed under any
+    [pad] invert the same way. {!griffin_lim} does read it: every iteration
+    re-analyses the signal it has just synthesised, and that analysis pads.
+
+    Reconstruction is defined wherever the analysis windows overlap-add to
+    something the division can use. That is the invertibility criterion both
+    entry points check: the squared window, summed over the frame grid, must
+    stay above [1e-10] of its own largest value at every position. It is
+    strictly weaker than asking that sum to be {e constant}, because dividing
+    by the measured envelope corrects any shape it has, and strictly stronger
+    than asking it to be nonzero, because an envelope that clears zero by less
+    than the rounding of the two transforms determines its position in name
+    only — the check is numerical, as {!Window.cola}'s is, and the floor is
+    the whole of the difference. So it fails in two ways: at positions no
+    {e nonzero} window tap reaches — a hop past the window's support, or one
+    that lands nothing there but zeros of the window itself, as a periodic
+    Hann advanced by its own length does at the frame boundary — and at
+    positions a strongly tapered window reaches through its far tails alone,
+    where the fold is positive but below the floor, as a Kaiser or a Gaussian
+    of large shape parameter is at a quarter overlap. It is not the condition
+    {!Window.cola} tests either: that one overlap-adds the window itself
+    rather than its square.
+
+    Positions the analysis window sends to zero carry no information and come
+    back as [0] rather than as a division by zero. The returned signal reaches
+    the trailing frame edge under [`Left] and [`Right] alignment and the
+    leading one under [`Left] alone: [`Right] extends the signal by
+    [fft_size - 1] positions on the left, so its position 0 already receives
+    every tap of its residue class, exactly as an interior position does. At
+    an edge it reaches, the envelope is one window tail and nothing else, and
+    those samples are ill conditioned: a perturbation of the frames enters the
+    overlap-add through a single window tap and the envelope through that tap
+    squared, so it moves such a sample by about the reciprocal of the tap more
+    than it moves an interior one. Beside the vanishing outermost tap of a
+    Hann analysis the tap is [(pi / win_length)] squared — the length of the
+    window governs it, not the transform size it is padded into — so the
+    amplification there is of the order of [(win_length / pi)] squared. A
+    [win_length] below [fft_size] moves that edge inward: the
+    [(fft_size - win_length) / 2] outermost positions receive no tap at all
+    and come back as [0], and the ill conditioned run starts after them. That
+    is inherent to least-squares synthesis, not a defect of this
+    implementation; [`Centered] analysis trims both edges away with its
+    padding. *)
+
+val invert :
+     (float, 'a) Nx.dtype
+  -> Config.t
+  -> ?length:int
+  -> (Complex.t, 'c) Nx.t
+  -> (float, 'a) Nx.t
+(** [invert dtype c z] is the least-squares signal whose transform under [c]
+    is [z], in [dtype]. [z] is shaped [[...; bins; frames]] — the shape
+    {!transform} produces — and leading axes broadcast, so a batch of spectra
+    is one call. Values are computed in double precision and rounded once into
+    [dtype], like the analysis.
+
+    Without [length] and at [frames >= 1] the result has
+    [(frames - 1) * hop + fft_size] samples less the boundary extension of the
+    alignment; an empty spectrum returns an empty signal, which that formula
+    does not describe. Either is the shortest length that analyses back to
+    exactly [frames] frames:
+    [frames c ~n:(Nx.dim (-1) (invert dtype c z)) = frames]. Neither is the
+    only such length, and the run of lengths sharing the frame count depends on
+    that count: at [frames >= 1] it is the [hop] consecutive lengths starting
+    at the returned one, and at [frames = 0] it is [0] — which analyses to no
+    frames because the empty signal has none by definition, not because its
+    extension falls short of a frame — together with the positive lengths the
+    boundary extension does leave shorter than one: none under [`Centered] and
+    [`Right], whose extensions are a frame wide to within one sample, so the
+    run is [0] alone, and [1] to [fft_size - 1] under [`Left], which extends
+    nothing. The length just past either run analyses to one frame more.
+
+    One geometry escapes the fixed point, and only at [frames = 1]: under
+    [`Centered] with an even [fft_size] the extension is the whole frame, so
+    the length is [0], which analyses to no frames at all. The lengths that
+    analyse to one frame are [1] to [hop - 1] there, and there are none when
+    [hop = 1] — the length past the zero-frame run gains two frames at once
+    instead of one.
+
+    With [length] the result has exactly that many samples: the frames that
+    open before its end are inverted and those that lie entirely past it are
+    not, so their contents cannot reach the result, and a length beyond the
+    frames is zero-filled.
+
+    Round trip: [invert dtype c ~length:n (transform cdtype c x)] recovers [x]
+    at every position some frame reaches through a nonzero window tap, for
+    every padding mode and normalisation: the taps that reach a position
+    weight the overlap-add and the envelope alike, so one the frame pattern
+    covers only in part cancels exactly as an interior one does. Everything
+    else comes back as [0]: the positions every tap reaching them sends to
+    zero, and the positions past the last frame when [length] runs beyond it.
+    A [win_length] below [fft_size] sits centred in the frame at offset
+    [(fft_size - win_length) / 2] and is padded with zeros to the frame, so
+    the first kind runs along both frame edges — that offset many positions
+    at the head, one more under a Hann window, which itself opens at zero,
+    and [fft_size - win_length - ((fft_size - win_length) / 2)] at the tail,
+    inside the last frame's transform span rather than past it. [`Left]
+    returns both runs; [`Right] returns the trailing one only, its left
+    extension already carrying the frame pattern past position 0; and
+    [`Centered] trims both away with its padding. In float64 the covered
+    positions are exact to a few units in the last place of the signal's peak
+    and in float32 the storage rounding dominates, but at the partially
+    covered edges the amplification above applies to that rounding too: a
+    2048-point Hann analysis returns them to around [1e-11] rather than to the
+    last place.
+
+    Raises [Invalid_argument] if [z] has rank below two, if its bin axis is
+    not [bins c] long, if [length] is negative, or if the configuration is not
+    invertible: a window whose square overlap-adds somewhere on the frame grid
+    to less than [1e-10] of its largest value there (a hop wider than the
+    window's support, in particular) determines no signal at those positions,
+    or none the envelope division could carry. *)
+
+val griffin_lim :
+     ?n_iter:int
+  -> ?momentum:float
+  -> ?init:[`Zero_phase | `Phase of (float, 'a) Nx.t]
+  -> ?length:int
+  -> Config.t
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [griffin_lim c s] reconstructs a signal from the magnitude spectrogram [s]
+    — {!power_spectrum}[ ~power:1.] output, or any non-negative
+    [[...; bins; frames]] tensor on the geometry of [c] — by iterated phase
+    estimation, in the dtype of [s]. The complex spectrum never surfaces.
+
+    Each iteration synthesises the current estimate, re-analyses it with [c],
+    and keeps the phase it measures while restoring the magnitudes [s]. The
+    re-analysis pads the way {!transform} does, so the whole of [c] is in
+    play here — [pad] included, unlike in {!invert}: wherever the alignment
+    extends the signal, the extension feeds the next phase estimate and the
+    modes reconstruct differently. That alternation decreases the spectral
+    convergence
+
+    [SC = ‖ |transform (griffin_lim …)| - s ‖ / ‖ s ‖]
+
+    — the normalised distance between the magnitudes asked for and the
+    magnitudes obtained — monotonically at [momentum = 0]. [momentum]
+    defaults to [0.99] and accelerates it by extrapolating along the previous
+    step before each phase update; the sequence is then no longer monotone but
+    converges markedly faster, and values above [1.] are accepted and may not
+    converge at all. [n_iter] defaults to [32] and is run in full: there is no
+    early stop, so the cost is exactly [n_iter] analysis-synthesis pairs plus
+    one synthesis.
+
+    [init] fixes the starting phase and defaults to [`Zero_phase], all bins
+    starting at phase zero; [`Phase p] starts from the phases in [p], in
+    radians, shaped like [s]. No randomness is involved at any point — the
+    result is a function of the arguments alone, identical across runs and
+    machines up to floating-point reproducibility.
+
+    [length] fixes the length of the returned signal exactly as in {!invert},
+    and applies only to the final synthesis: the iteration itself runs at the
+    default length of {!invert}, which re-analyses to the frame count of [s].
+    Where that length is [0] there is no signal to re-analyse and no iteration
+    runs, whatever [n_iter] asks for: the result is then [init] synthesised
+    once at [length]. Two spectrograms reach it — one with no frames at all,
+    under every geometry, and a single frame under [`Centered] with an even
+    [fft_size], the geometry {!invert} documents.
+
+    Raises [Invalid_argument] under the conditions of {!invert}, and if
+    [n_iter < 1], if [momentum] is negative, or if [`Phase p] does not have
+    the shape of [s]. *)
 
 (** {1 Incremental kernel}
 
