@@ -3,13 +3,21 @@
    - the round trip [invert ~length:n (transform x) = x] on the positions the
    overlap-added squared window fully covers, over the golden parameter grid
    crossed with every alignment, every padding mode and both dtypes. The
-   comparison is restricted to that interior on purpose. The estimate agrees
-   with the signal outside it as well — the taps that reach a position weight
-   the overlap-add and the envelope alike, so a partial cover cancels like a
-   full one — but the leading positions of a [`Left] or [`Right] analysis are
-   either the ones the window sends to zero, which carry no signal and come back
-   as [0], or their neighbours, where dividing by a near-vanishing envelope
-   lifts the rounding of the two transforms far above the tolerance below.
+   comparison is restricted to that interior on purpose, and it leaves out a
+   leading and a trailing region. The leading one is empty under [`Right], whose
+   left extension already carries the whole frame pattern into position 0, so
+   there the trailing region is the entire exclusion. The estimate agrees with
+   the signal in both regions — the taps that reach a position weight the
+   overlap-add and the envelope alike, so a partial cover cancels like a full
+   one — except where no nonzero tap reaches at all: under [`Left] the leading
+   positions the window opens on, and in every trailing region the positions
+   beyond the last nonzero tap of the last frame, whether inside its transform
+   span or past it. Those carry no signal and come back as [0]. Beside them the
+   signal is recovered, but dividing by a near-vanishing envelope lifts the
+   rounding of the two transforms far above the tolerance below. Under
+   [`Centered] neither region holds a tap-free position and both come back to a
+   few ulp; they are excluded there too, since one range expression serves every
+   alignment.
 
    - the boundary extension is invisible to the round trip: the three padding
    modes reconstruct the same interior, since the padded stream agrees with the

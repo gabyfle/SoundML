@@ -543,11 +543,14 @@ class IstftVectorGenerator:
 
     def length_cases(self):
         """An explicit output length, above, below and at the natural one, and
-        one a single hop long: the frames a shortened request may skip are the
-        ones that start past it, and a longer one is zero-filled. The short
-        length leaves most of the spectrum unread -- the reference inverts
-        ceil((length + left + right) / hop) frames and no more -- which the
-        first three lengths, all at or above the natural one, never do."""
+        one a hop and a sample long: the frames a shortened request may skip
+        are the ones that start past it, and a longer one is zero-filled. The
+        reference inverts ceil((length + left + right) / hop) frames and no
+        more, so only the fourth length leaves any of the spectrum unread. The
+        natural length puts (frames - 1) * hop + fft_size padded positions in
+        that numerator, and shortening it by three still leaves
+        ceil((fft_size - 3) / hop) >= 1 frames on top of frames - 1, so the
+        first three all read the whole spectrum."""
         cases = []
         for fft_size, hop, win_length, alignment in (
             (32, 8, 20, "centered"),
