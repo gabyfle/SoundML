@@ -397,7 +397,8 @@ class IstftVectorGenerator:
       least-squares synthesis, not merely a round trip.
 
     - lengths: the same, with an explicit output length above, below and at
-      the natural one, pinning how many frames a shortened request reads.
+      the natural one, and one under a single frame span, pinning how many
+      frames a shortened request reads.
 
     - griffinlim_<cell>: librosa.griffinlim at init=None (the deterministic
       all-ones phase; librosa's default is a random init, which no committed
@@ -541,9 +542,12 @@ class IstftVectorGenerator:
         return cases
 
     def length_cases(self):
-        """An explicit output length, above, below and at the natural one:
-        the frames a shortened request may skip are the ones that start past
-        it, and a longer one is zero-filled."""
+        """An explicit output length, above, below and at the natural one, and
+        one a single hop long: the frames a shortened request may skip are the
+        ones that start past it, and a longer one is zero-filled. The short
+        length leaves most of the spectrum unread -- the reference inverts
+        ceil((length + left + right) / hop) frames and no more -- which the
+        first three lengths, all at or above the natural one, never do."""
         cases = []
         for fft_size, hop, win_length, alignment in (
             (32, 8, 20, "centered"),
@@ -553,7 +557,7 @@ class IstftVectorGenerator:
             spectrum = self.spectrum(fft_size, frames)
             left, right = self.widths(fft_size, alignment)
             natural = (frames - 1) * hop + fft_size - left - right
-            for length in (natural, natural - 3, natural + 7):
+            for length in (natural, natural - 3, natural + 7, hop + 1):
                 expected = self.inverse(
                     spectrum, fft_size, hop, win_length, alignment, length=length
                 )

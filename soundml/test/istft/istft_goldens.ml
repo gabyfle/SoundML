@@ -10,9 +10,10 @@
    transform, so every case measures the least-squares solution rather than a
    round trip, which the property suite covers separately.
 
-   Synthesis reads no padding mode — the boundary extension is trimmed off, not
-   recomputed — so the configurations below fix one and the padding grid lives
-   in the property and Griffin-Lim suites. *)
+   [Stft.invert] reads no padding mode — the boundary extension is trimmed off,
+   not recomputed — so the configurations below fix one, and the property suite
+   carries the grid that establishes it. ([Stft.griffin_lim] does read the mode,
+   since it re-analyses; its own suites cross it.) *)
 
 open Windtrap
 open Soundml

@@ -3,13 +3,21 @@
    - the round trip [invert ~length:n (transform x) = x] on the positions the
    overlap-added squared window fully covers, over the golden parameter grid
    crossed with every alignment, every padding mode and both dtypes. The
-   comparison is restricted to that interior on purpose: outside it the
-   least-squares estimate is built from fewer window taps than the analysis
-   used, so it is not the original signal and no tolerance would make it one.
+   comparison is restricted to that interior on purpose. The estimate agrees
+   with the signal outside it as well — the taps that reach a position weight
+   the overlap-add and the envelope alike, so a partial cover cancels like a
+   full one — but the leading positions of a [`Left] or [`Right] analysis are
+   either the ones the window sends to zero, which carry no signal and come back
+   as [0], or their neighbours, where dividing by a near-vanishing envelope
+   lifts the rounding of the two transforms far above the tolerance below.
 
    - the boundary extension is invisible to the round trip: the three padding
    modes reconstruct the same interior, since the padded stream agrees with the
-   signal there whatever the borders hold.
+   signal there whatever the borders hold. The normalisation is invisible
+   everywhere, since the same constant scales both sides of the quotient.
+
+   - frames that start past a requested length are never read, so their contents
+   cannot reach the synthesis.
 
    - [`Right] analysis is [`Left] analysis of the left-extended signal, so its
    synthesis is the [`Left] synthesis with that extension dropped.
@@ -168,6 +176,83 @@ let pad_independence_tests =
             alignments ) )
     cells
 
+(* {2 The normalisation cancels} *)
+
+(* [scale] multiplies the analysis window by a constant; the synthesis divides
+   the windowed overlap-add by the same window squared, so the constant leaves
+   through the quotient and the reconstruction is the [`None] one. What survives
+   is its rounding through the two transforms and the envelope, which the round
+   trip's own absolute bound covers. *)
+let scale_independence_tests =
+  List.map
+    (fun (fft, hop, wl) ->
+      test (Printf.sprintf "fft%d_hop%d_win%d" fft hop wl) (fun () ->
+          List.iter
+            (fun (aname, alignment) ->
+              let n = 300 in
+              let x = Nx.create Nx.float64 [|n|] (lcg_signal n) in
+              let reconstruct scale =
+                let c =
+                  Stft.Config.create ~fft_size:fft ~hop ~win_length:wl
+                    ~alignment ~pad:(`Constant 0.) ~scale ()
+                in
+                Stft.invert Nx.float64 c ~length:n
+                  (Stft.transform Nx.complex128 c x)
+              in
+              let reference = Nx.to_array (reconstruct `None) in
+              List.iter
+                (fun (sname, scale) ->
+                  Tutils.check_close ~rtol:0. ~atol:float64_atol
+                    ~msg:(Printf.sprintf "%s/%s" aname sname)
+                    ~expected:reference (reconstruct scale) )
+                [("magnitude", `Magnitude); ("psd", `Psd)] )
+            alignments ) )
+    cells
+
+(* {2 Frames past the requested length are never read} *)
+
+let ceil_div a b = (a + b - 1) / b
+
+(* A frame whose first sample lies at or past the requested length reaches no
+   position of the output. Overwriting every such frame must therefore leave the
+   synthesis untouched, bit for bit: the retained frames enter the same inverse
+   transform with the same values, and the envelope depends on how many frames
+   are retained rather than on what they hold. The round trip never reaches this
+   — every length it asks for is at least the natural one. *)
+let frames_past_length_tests =
+  List.map
+    (fun ((fft, hop, wl) as cell) ->
+      test (Printf.sprintf "fft%d_hop%d_win%d" fft hop wl) (fun () ->
+          List.iter
+            (fun (aname, alignment) ->
+              let n = 300 in
+              let length = hop + 1 in
+              let c = config cell alignment (`Constant 0.) in
+              let x = Nx.create Nx.float64 [|n|] (lcg_signal n) in
+              let z = Stft.transform Nx.complex128 c x in
+              let frames = Nx.dim (-1) z in
+              let first_past =
+                ceil_div (length + left_width fft alignment) hop
+              in
+              is_true
+                ~msg:
+                  (Printf.sprintf "%s: %d of %d frames start past %d samples"
+                     aname (frames - first_past) frames length )
+                (first_past < frames) ;
+              let scrambled =
+                Array.mapi
+                  (fun k v ->
+                    if k mod frames >= first_past then Complex.{re= 3.; im= -7.}
+                    else v )
+                  (Nx.to_array z)
+              in
+              Tutils.check_close ~rtol:0. ~atol:0. ~msg:aname
+                ~expected:(Nx.to_array (Stft.invert Nx.float64 c ~length z))
+                (Stft.invert Nx.float64 c ~length
+                   (Nx.create Nx.complex128 [|(fft / 2) + 1; frames|] scrambled) ) )
+            alignments ) )
+    cells
+
 (* {2 [`Right] is [`Left] on the left-extended signal} *)
 
 let right_shift_tests =
@@ -311,6 +396,8 @@ let suite =
   [ group "round-trip" round_trip_tests
   ; group "round-trip-2048" big_round_trip_tests
   ; group "pad-independence" pad_independence_tests
+  ; group "scale-independence" scale_independence_tests
+  ; group "frames-past-the-length" frames_past_length_tests
   ; group "right-is-shifted-left" right_shift_tests
   ; group "shape" shape_tests
   ; group "errors" error_tests ]

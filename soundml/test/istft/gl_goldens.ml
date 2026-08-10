@@ -1,8 +1,11 @@
 (* Golden parity against librosa 0.11 for Griffin-Lim phase reconstruction, at
    the settings where the reference is deterministic: the all-ones initial
    phase, which is our [`Zero_phase], and zero padding, which is what the
-   reference pads with. Its default initial phase is random, so no committed
-   vector could pin it; the property suite carries the rest.
+   reference pads with. The padding mode is geometry here rather than a free
+   knob — the iteration re-analyses what it synthesises, so it reads [pad] — and
+   is therefore pinned to the reference's rather than varied; the property suite
+   crosses the three modes. The reference's default initial phase is random, so
+   no committed vector could pin it; the property suite carries the rest.
 
    The magnitudes are one 31-bit LCG stream shifted into [0, 2), reproduced here
    with the same integer arithmetic as the generator. They are inconsistent — no

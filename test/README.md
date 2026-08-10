@@ -39,13 +39,15 @@ Current suites:
   component, with the imaginary DC and Nyquist bins zeroed so the inverse
   real transform discards nothing) across `(fft_size, hop, win_length)`
   combos x all three alignments x frame counts x float64/float32, plus an
-  explicit output length above, below and at the natural one
-  (`lengths.json`), and `librosa.griffinlim` at `init=None` — its only
-  deterministic initial phase — across iteration counts and momenta
-  including the momentum-free classic algorithm. The spectra are
-  inconsistent on purpose, so the cases measure the least-squares solution
-  rather than a round trip; the round trip, the padding grid and the
-  Griffin-Lim convergence gates are properties, checked without an oracle.
+  explicit output length above, below and at the natural one and one a
+  single hop long, which leaves whole frames unread (`lengths.json`), and
+  `librosa.griffinlim` at `init=None` — its only deterministic initial
+  phase — across iteration counts and momenta including the momentum-free
+  classic algorithm. The spectra are inconsistent on purpose, so the cases
+  measure the least-squares solution rather than a round trip; the round
+  trip, the padding and normalisation grids, the frames a short length
+  never reads and the Griffin-Lim convergence gates are properties, checked
+  without an oracle.
   The `right` alignment has no librosa counterpart and is generated as its
   `center=False` synthesis with the `fft_size - 1` left-extension positions
   dropped.

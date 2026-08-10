@@ -12,9 +12,11 @@
    default schedule out to 32 iterations must land well below its first step.
 
    Also here: the consistent-spectrogram fixed point (starting from the true
-   phase of a signal returns that signal's synthesis), shape stability across
-   alignments, and the argument rejections. Nothing in the module draws a random
-   number, so every case is a plain equality on rerun. *)
+   phase of a signal returns that signal's synthesis), the padding grid — the
+   iteration re-analyses what it synthesises, so unlike [Stft.invert] it reads
+   [pad] — shape stability across alignments, and the argument rejections.
+   Nothing in the module draws a random number, so every case is a plain
+   equality on rerun. *)
 
 open Windtrap
 open Soundml
@@ -25,8 +27,8 @@ let lcg_signal n =
       state := ((1103515245 * !state) + 12345) mod (1 lsl 31) ;
       (Float.of_int !state /. Float.of_int (1 lsl 30)) -. 1. )
 
-let config ?(alignment = `Centered) () =
-  Stft.Config.create ~fft_size:512 ~hop:128 ~alignment ()
+let config ?(alignment = `Centered) ?(pad = `Reflect) () =
+  Stft.Config.create ~fft_size:512 ~hop:128 ~alignment ~pad ()
 
 let signals =
   let half = lcg_signal 1024 in
@@ -133,6 +135,77 @@ let fixed_point_tests =
         equal ~msg:"dtype preserved" bool true
           (match Nx.dtype y with Nx.Float32 -> true | _ -> false) ) ]
 
+(* {2 The padding mode is part of the geometry} *)
+
+(* Each iteration re-analyses the signal it has just synthesised, and that
+   analysis pads: the loop reads [pad] where [Stft.invert] does not. [`Left]
+   extends nothing, so under it the three modes are the same computation and
+   agree bit for bit. [`Centered] and [`Right] do extend, the extension feeds
+   the next phase estimate, and the reconstructions separate — by a fair
+   fraction of the signal's own range, far above anything rounding explains.
+   Each mode is still a Griffin-Lim iteration on its own geometry, and the
+   descent gate above holds for all of them. *)
+
+let pads = [("reflect", `Reflect); ("constant", `Constant 0.); ("edge", `Edge)]
+
+(* the reconstructions are O(1) signals, and the measured separation is above
+   1.6; a tenth is a wide margin either way *)
+let separated = 0.1
+
+let max_gap a b =
+  let a = Nx.to_array a and b = Nx.to_array b in
+  Array.fold_left Float.max 0.
+    (Array.mapi (fun i v -> Float.abs (v -. b.(i))) a)
+
+let padding_tests =
+  let name, x = List.hd signals in
+  let reconstruct ~alignment pad =
+    let c = config ~alignment ~pad () in
+    Stft.griffin_lim ~n_iter:4 c (magnitudes c x)
+  in
+  [ test "`Left` extends nothing to disagree about" (fun () ->
+        let reference = reconstruct ~alignment:`Left `Reflect in
+        List.iter
+          (fun (pname, pad) ->
+            Tutils.check_close ~rtol:0. ~atol:0.
+              ~msg:(Printf.sprintf "%s/%s" name pname)
+              ~expected:(Nx.to_array reference)
+              (reconstruct ~alignment:`Left pad) )
+          pads )
+  ; test "the extension reaches the reconstruction" (fun () ->
+        List.iter
+          (fun (aname, alignment) ->
+            let reference = reconstruct ~alignment `Reflect in
+            List.iter
+              (fun (pname, pad) ->
+                let gap = max_gap reference (reconstruct ~alignment pad) in
+                is_true
+                  ~msg:
+                    (Printf.sprintf "%s: reflect and %s differ by %.6g" aname
+                       pname gap )
+                  (gap > separated) )
+              [("constant", `Constant 0.); ("edge", `Edge)] )
+          [("centered", `Centered); ("right", `Right)] )
+  ; test "every mode converges on its own geometry" (fun () ->
+        List.iter
+          (fun (aname, alignment) ->
+            List.iter
+              (fun (pname, pad) ->
+                let c = config ~alignment ~pad () in
+                let s = magnitudes c x in
+                let sc n_iter =
+                  convergence c s (Stft.griffin_lim ~n_iter c s)
+                in
+                let sc_1 = sc 1 and sc_16 = sc 16 in
+                is_true
+                  ~msg:
+                    (Printf.sprintf
+                       "%s/%s: SC went from %.6g at 1 iteration to %.6g at 16"
+                       aname pname sc_1 sc_16 )
+                  (sc_16 < sc_1 && sc_16 <= 0.25) )
+              pads )
+          [("centered", `Centered); ("left", `Left); ("right", `Right)] ) ]
+
 (* {2 Rejections} *)
 
 let error_tests =
@@ -163,4 +236,5 @@ let error_tests =
 let suite =
   [ group "descent" descent_tests
   ; group "fixed-point" fixed_point_tests
+  ; group "padding" padding_tests
   ; group "errors" error_tests ]
