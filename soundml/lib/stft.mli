@@ -236,18 +236,21 @@ val power_spectrum :
     {!invert} is the least-squares inverse of {!transform}: among all signals
     it returns the one whose transform is closest to the given frames, which
     for frames that are an actual transform is that signal back. It reads the
-    same {!Config.t} the analysis used and honours every knob — the window and
-    its length, the hop, the alignment (whose boundary extension is trimmed
-    back off) and the normalisation, which cancels because the same window
-    appears on both sides.
+    same {!Config.t} the analysis used: the window and its length, the hop, the
+    transform size, the alignment and the normalisation, which cancels because
+    the same window appears on both sides. The padding mode is the one field it
+    does not read — the boundary extension the alignment implies is trimmed
+    back off rather than recomputed, so frames analysed under any [pad] invert
+    the same way.
 
     Reconstruction is defined wherever the analysis windows overlap-add to
     something nonzero. That is the invertibility criterion both entry points
     check: the squared window, summed over the frame grid, must be nonzero at
     every position. It is strictly weaker than asking that sum to be
-    {e constant} — the condition {!Window.cola} tests — because dividing by
-    the measured envelope corrects any shape it has, and it fails exactly when
-    a hop leaves positions no window tap reaches.
+    {e constant}, because dividing by the measured envelope corrects any shape
+    it has, and it fails exactly when a hop leaves positions no window tap
+    reaches. It is not the condition {!Window.cola} tests either: that one
+    overlap-adds the window itself rather than its square.
 
     Positions the analysis window sends to zero carry no information and come
     back as [0] rather than as a division by zero. With [`Left] and [`Right]
@@ -272,11 +275,13 @@ val invert :
     [dtype], like the analysis.
 
     Without [length] the result has [(frames - 1) * hop + fft_size] samples
-    less the boundary extension of the alignment, which is the one length that
+    less the boundary extension of the alignment, the shortest length that
     analyses back to exactly [frames] frames:
-    [frames c ~n:(Nx.dim (-1) (invert dtype c z)) = frames]. With [length] the
-    result has exactly that many samples: frames that lie entirely past it are
-    never inverted, and a length beyond the frames is zero-filled.
+    [frames c ~n:(Nx.dim (-1) (invert dtype c z)) = frames]. It is not the only
+    such length — every one up to a sample short of the next hop analyses to
+    [frames] as well — but it is the one returned when none is asked. With
+    [length] the result has exactly that many samples: frames that lie entirely
+    past it are never inverted, and a length beyond the frames is zero-filled.
 
     Round trip: [invert dtype c ~length:n (transform cdtype c x)] recovers [x]
     at every position the overlap-added squared window covers, for every
