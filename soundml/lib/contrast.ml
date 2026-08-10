@@ -19,17 +19,16 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(* librosa 0.11 [feature.spectral_contrast], replicated band by band. Each of
-   the [n_bands + 1] octave bands is a contiguous FFT-bin range: band [k]
-   collects the bins whose center frequency lies in [edge k, edge (k + 1)]
-   inclusive (edge 0 is 0 Hz, edge j is [f_min * 2^(j-1)] beyond), extended one
-   bin below for [k > 0], to the top of the spectrum for [k = n_bands], and
-   trimmed of its top bin — returned to the next band — for [k < n_bands]. Per
-   band and frame, the valley is the mean of the [take] smallest magnitudes and
-   the peak the mean of the [take] largest, where [take] is the quantile of the
-   extended band's bin count, rounded half-to-even (numpy [rint]) and floored at
-   one bin; a [take] beyond the trimmed band covers the whole band (numpy's
-   slice clamping). *)
+(* Octave-band spectral contrast, band by band. Each of the [n_bands + 1] octave
+   bands is a contiguous FFT-bin range: band [k] collects the bins whose center
+   frequency lies in [edge k, edge (k + 1)] inclusive (edge 0 is 0 Hz, edge j is
+   [f_min * 2^(j-1)] beyond), extended one bin below for [k > 0], to the top of
+   the spectrum for [k = n_bands], and trimmed of its top bin — returned to the
+   next band — for [k < n_bands]. Per band and frame, the valley is the mean of
+   the [take] smallest magnitudes and the peak the mean of the [take] largest,
+   where [take] is the quantile of the extended band's bin count, rounded half
+   to even ([rint]) and floored at one bin; a [take] beyond the trimmed band
+   clamps to cover the whole band. *)
 
 type band =
   { lo: int  (** First bin of the trimmed band. *)
@@ -42,14 +41,14 @@ type plan =
   ; n_bands: int
   ; linear: bool
   ; clamped: bool
-        (* The flat function replicates librosa's [power_to_db] defaults —
-           including the 80 dB whole-tensor clamp — on the log path; the
-           per-frame stage cannot (the clamp is a whole-signal reduction) and
-           leaves it out, documented. *)
+        (* The flat function applies [power_to_db] with its defaults — including
+           the 80 dB whole-tensor clamp — on the log path; the per-frame stage
+           cannot (the clamp is a whole-signal reduction) and leaves it out,
+           documented. *)
   ; bands: band list }
 
-(* [rint x] is [x] rounded to the nearest integer, ties to even — numpy's
-   [rint], which librosa uses to size the quantile. *)
+(* [rint x] is [x] rounded to the nearest integer, ties to even — the rounding
+   that sizes the quantile. *)
 let rint x =
   let fl = Float.floor x in
   let d = x -. fl in
@@ -83,7 +82,7 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
          "%s: cannot use a sample rate of %d Hz (sample_rate must be at least \
           1)"
          fn sample_rate ) ;
-  (* Band edges: 0, f_min, 2 f_min, ..., f_min * 2^n_bands — librosa's octa. *)
+  (* Band edges: 0, f_min, 2 f_min, ..., f_min * 2^n_bands. *)
   let edge j =
     if j = 0 then 0. else f_min *. Float.pow 2. (Float.of_int (j - 1))
   in
@@ -96,8 +95,8 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
           f_min or n_bands)"
          fn (edge n_bands) sample_rate nyquist ) ;
   let bins = (fft_size / 2) + 1 in
-  (* Bin center frequencies with librosa's exact arithmetic ([np.fft.rfftfreq]):
-     one reciprocal, one multiply per bin. *)
+  (* Bin center frequencies, evaluated as one reciprocal and one multiply per
+     bin — the reference arithmetic the parity contract fixes. *)
   let step =
     1.0 /. (Float.of_int fft_size *. (1.0 /. Float.of_int sample_rate))
   in
@@ -218,7 +217,7 @@ let spectral_contrast stft_config ?(n_bands = 6) ?(f_min = 200.)
       (fn ^ ": cannot analyse a rank-zero tensor (the time axis must exist)") ;
   apply fn p (Stft.power_spectrum ~power:1. stft_config x)
 
-(* [spectral_contrast_of_spectrogram] is librosa's [S=] input mode: the same
+(* [spectral_contrast_of_spectrogram] is the spectrogram-input mode: the same
    band plan and contrast over an already-computed magnitude spectrogram, the
    FFT size implied by the bin count. *)
 let spectral_contrast_of_spectrogram ?(n_bands = 6) ?(f_min = 200.)

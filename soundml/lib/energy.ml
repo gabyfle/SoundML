@@ -23,15 +23,14 @@
    zero-crossing rate, each as an offline batched computation and as the
    streaming carry behind its pipeline stage.
 
-   The framing geometry is librosa 0.11's feature framing: the signal is
-   centered by [frame_length / 2] positions of boundary extension on each side —
-   constant zeros for [rms] ([librosa.feature.rms]'s [pad_mode] default), edge
-   copies for [zero_crossing_rate] (hard-wired there) — and frames advance by
-   [hop] over the padded stream. Framing goes through [Nx.extract_patches] in
-   bounded blocks, exactly as [Stft] (see the header note there): the framed
-   signal is never materialized whole, and per-frame work never routes through
-   per-frame Nx calls. The interior is double precision with one cast at the
-   boundary.
+   The framing geometry centers the signal by [frame_length / 2] positions of
+   boundary extension on each side — constant zeros for [rms], edge copies for
+   [zero_crossing_rate], the fixed choices of the module's parity contract (see
+   the interface) — and frames advance by [hop] over the padded stream. Framing
+   goes through [Nx.extract_patches] in bounded blocks, exactly as [Stft] (see
+   the header note there): the framed signal is never materialized whole, and
+   per-frame work never routes through per-frame Nx calls. The interior is
+   double precision with one cast at the boundary.
 
    The streaming state below is the [Stft] framing carry re-instantiated for the
    boundary modes these features need. Both are computable from one sample — a
@@ -110,8 +109,7 @@ let check_threshold op threshold =
    Frame [p] of a length-[n] signal covers padded positions [p * hop, p * hop +
    frame_length), where the padded stream is the signal extended by
    [frame_length / 2] positions on each side. An empty signal produces no frames
-   — the [Stft] grid convention; librosa pads an all-border frame for even frame
-   lengths and rejects empty input otherwise. *)
+   — the [Stft] grid convention, a documented deviation on the public face. *)
 
 let count_frames ~frame_length ~hop n =
   if n = 0 then 0
@@ -125,17 +123,16 @@ let count_frames ~frame_length ~hop n =
    to double, to its per-frame values [[...; 1; count]] — one batched Nx
    expression, no frame loop. *)
 
-(* [reduce_rms patches] is the root of the mean square over the frame axis:
-   librosa's [mean(abs2(frames)); sqrt]. *)
+(* [reduce_rms patches] is the root of the mean square over the frame axis: the
+   mean of the squared samples first, then the root. *)
 let reduce_rms patches =
   Nx.sqrt (Nx.mean ~axes:[-2] ~keepdims:true (Nx.square patches))
 
 (* [reduce_zcr ~frame_length ~threshold patches] is the fraction of
-   consecutive-sample sign changes per frame. librosa clamps values in
-   [-threshold, threshold] to positive zero and compares [signbit]s, so a sample
-   is negative iff it lies strictly below [-threshold]; the first frame position
-   carries no crossing ([pad=False] in [librosa.feature.zero_crossing_rate]),
-   and the count is averaged over [frame_length]. *)
+   consecutive-sample sign changes per frame. Values in [-threshold, threshold]
+   clamp to positive zero before signs are compared, so a sample is negative iff
+   it lies strictly below [-threshold]; the first frame position carries no
+   crossing, and the count is averaged over [frame_length]. *)
 let reduce_zcr ~frame_length ~threshold patches =
   if frame_length = 1 then Nx.zeros Nx.float64 (Nx.shape patches)
   else
@@ -390,10 +387,10 @@ let zero_crossing_rate ?(frame_length = 2048) ?(hop = 512) ?(threshold = 1e-10)
     (reduce_zcr ~frame_length ~threshold)
     x
 
-(* [rms_of_spectrogram] is librosa's [S=] path: the frame power recovered from a
-   magnitude spectrogram by Parseval's identity for the one-sided layout — the
-   DC bin (and, for even frame lengths, the Nyquist bin) is halved, the doubled
-   bin sum divides by [frame_length ^ 2]. *)
+(* [rms_of_spectrogram] is the spectrogram-input companion of [rms]: the frame
+   power recovered from a magnitude spectrogram by Parseval's identity for the
+   one-sided layout — the DC bin (and, for even frame lengths, the Nyquist bin)
+   is halved, the doubled bin sum divides by [frame_length ^ 2]. *)
 let rms_of_spectrogram ?(frame_length = 2048) s =
   check_frame_length "rms_of_spectrogram" frame_length ;
   if Nx.ndim s < 2 then

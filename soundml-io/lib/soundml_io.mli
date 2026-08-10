@@ -87,8 +87,8 @@ module Format : sig
 
   val create : ?encoding:encoding -> container -> t
   (** [create c] is the format writing container [c] with its conventional
-      encoding: [`Pcm_16] for [`Wav]/[`Aiff]/[`Flac]/[`Caf]
-      (python-soundfile's defaults), [`Vorbis] for [`Ogg].
+      encoding: [`Pcm_16] for [`Wav]/[`Aiff]/[`Flac]/[`Caf], [`Vorbis] for
+      [`Ogg].
 
       Raises [Invalid_argument] if the pair is statically invalid: [`Vorbis]
       outside [`Ogg]; anything but [`Vorbis] inside [`Ogg]; [`Pcm_32],
@@ -161,8 +161,8 @@ val read :
 
     [?mono] (default [false]) downmixes to [[1; frames]] {e before} any
     resampling: sample [i] is the channel mean, summed in channel order in
-    the element dtype and multiplied by [1/channels] — numpy's [mean] over
-    the channel axis, bit for bit at these channel counts. Downmix is
+    the element dtype and multiplied by [1/channels] — one fixed summation
+    order, so the downmix is reproducible bit for bit. Downmix is
     per-sample, so it commutes with decode chunking bit-identically.
 
     [Invalid_argument] on preconditions: [dt] neither float32 nor float64
@@ -304,13 +304,12 @@ val write : ?format:Format.t -> string -> 'a audio -> (unit, error) result
     process.
 
     Durability: [write] returns after [sf_close] (libsndfile buffers
-    flushed to the OS); it does not fsync — the same close-to-close
-    contract python-soundfile has.
+    flushed to the OS); it does not fsync — durability past the OS cache is
+    the caller's concern.
 
     One upstream asymmetry, pinned rather than papered over: a 0-frame FLAC
     write succeeds but produces a 0-byte file that no decoder recognizes —
-    libsndfile 1.2.2 emits nothing for an empty FLAC stream, and
-    python-soundfile writes the identical 0-byte file. Every other
+    libsndfile 1.2.2 emits nothing for an empty FLAC stream. Every other
     container round-trips empty data exactly.
 
     Raises [Invalid_argument] if [a.sample_rate < 1], [a.data] has rank 0

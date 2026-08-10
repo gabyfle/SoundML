@@ -25,18 +25,18 @@
    through a strided frame view and carried by a single batched [rfft], so no
    framed scratch is ever gathered.
 
-   - The windowed product is computed in double, exactly as librosa's: librosa
-   0.11 multiplies the frames by its float64 window (promoting float32 audio)
-   and transforms in double, rounding once into the complex storage. The double
-   promotion is applied to the stream, not the frames — widening is exact, so
-   the product is unchanged, and it costs one cast per sample instead of one per
-   framed position. [Nx.rfft] takes the output dtype first, so the caller's
-   witness supplies that storage natively — no boundary cast of the spectrum.
+   - The windowed product is computed in double — the arithmetic the module's
+   parity contract fixes (see the interface): the frames are multiplied by the
+   float64 window (promoting float32 audio) and transformed in double, rounding
+   once into the complex storage. The double promotion is applied to the stream,
+   not the frames — widening is exact, so the product is unchanged, and it costs
+   one cast per sample instead of one per framed position. [Nx.rfft] takes the
+   output dtype first, so the caller's witness supplies that storage natively —
+   no boundary cast of the spectrum.
 
    - Complex magnitudes are [Nx.magnitude], dtype-first, landing directly in the
    caller's float dtype. The real-valued conveniences pick the complex storage
-   matching the input's component width ([spectrum_witness]), which is librosa's
-   [dtype_r2c] pairing. *)
+   whose component width matches the input's dtype ([spectrum_witness]). *)
 
 module Config = struct
   type t =
@@ -225,8 +225,8 @@ let times dtype c ~sample_rate ~n =
   check_sample_rate "times" sample_rate ;
   check_length "times" n ;
   let count = frames c ~n in
-  (* [p * hop] is exact in double; the single rounding is the division, as in
-     librosa's frames_to_time. *)
+  (* [p * hop] is exact in double; the single rounding is the division — the
+     reference arithmetic the parity contract fixes for the frame-time grid. *)
   Nx.arange_f Nx.float64 0. (Float.of_int count) 1.
   |> Fun.flip Nx.mul_s (Float.of_int (Config.hop c))
   |> Fun.flip Nx.div_s (Float.of_int sample_rate)
@@ -273,7 +273,7 @@ let check_rank op t =
 
 (* {1 Boundary extension} *)
 
-(* [reflect_index n q] is the source index numpy's reflect mode reads for padded
+(* [reflect_index n q] is the source index reflect padding reads for padded
    position [q] over a length-[n] signal: mirrored around the first and last
    samples without repeating them, with period [2 * (n - 1)]. *)
 let reflect_index n q =
