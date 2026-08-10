@@ -927,7 +927,7 @@ let invert dtype c ?length z =
    angles_{k+1} = unit (c_k - a * c_{k-1})
 
    and [mu = 0] is the plain alternation. The unit-modulus map divides by the
-   magnitude floored by the smallest positive normal double, which makes it
+   magnitude offset by the smallest positive normal double, which makes it
    total: a bin whose value vanishes exactly maps to zero rather than to a NaN,
    so the magnitude asked for there is left out of the spectrum that iteration
    synthesises instead of being placed at an arbitrary phase. *)

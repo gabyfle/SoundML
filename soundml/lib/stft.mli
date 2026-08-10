@@ -238,10 +238,11 @@ val power_spectrum :
     for frames that are an actual transform is that signal back. It reads the
     same {!Config.t} the analysis used: the window and its length, the hop, the
     transform size, the alignment and the normalisation, which cancels because
-    the same window appears on both sides. The padding mode is the one field it
-    does not read — the boundary extension the alignment implies is trimmed
-    back off rather than recomputed, so frames analysed under any [pad] invert
-    the same way.
+    the same window appears on both sides. The padding mode is the one field
+    {!invert} does not read — the boundary extension the alignment implies is
+    trimmed back off rather than recomputed, so frames analysed under any
+    [pad] invert the same way. {!griffin_lim} does read it: every iteration
+    re-analyses the signal it has just synthesised, and that analysis pads.
 
     Reconstruction is defined wherever the analysis windows overlap-add to
     something nonzero. That is the invertibility criterion both entry points
@@ -255,12 +256,15 @@ val power_spectrum :
     Positions the analysis window sends to zero carry no information and come
     back as [0] rather than as a division by zero. With [`Left] and [`Right]
     alignment the returned signal includes the frame edges where the envelope
-    is one window tail and nothing else: those samples are recovered from a
-    vanishing weight, so their conditioning is poor — around [(fft_size / pi)]
-    to the fourth power at the very first sample of a Hann analysis — and they
-    amplify perturbations of the frames accordingly. That is inherent to
-    least-squares synthesis, not a defect of this implementation; [`Centered]
-    analysis trims those edges away with its padding. *)
+    is one window tail and nothing else, and those samples are ill
+    conditioned: a perturbation of the frames enters the overlap-add through a
+    single window tap and the envelope through that tap squared, so it moves
+    such a sample by about the reciprocal of the tap more than it moves an
+    interior one. Beside the vanishing first tap of a Hann analysis the tap is
+    [(pi / fft_size)] squared, so the amplification there is of the order of
+    [(fft_size / pi)] squared. That is inherent to least-squares synthesis,
+    not a defect of this implementation; [`Centered] analysis trims those
+    edges away with its padding. *)
 
 val invert :
      (float, 'a) Nx.dtype
@@ -284,12 +288,19 @@ val invert :
     past it are never inverted, and a length beyond the frames is zero-filled.
 
     Round trip: [invert dtype c ~length:n (transform cdtype c x)] recovers [x]
-    at every position the overlap-added squared window covers, for every
-    padding mode and normalisation. In float64 that is exact to a few units in
-    the last place of the signal's peak; in float32 the storage rounding
-    dominates. Positions outside that cover — the leading [fft_size - hop]
-    samples under [`Left] alignment, say — are the least-squares estimate from
-    the frames that do reach them, not the original signal.
+    at every position some frame reaches through a nonzero window tap, for
+    every padding mode and normalisation: the taps that reach a position
+    weight the overlap-add and the envelope alike, so one the frame pattern
+    covers only in part cancels exactly as an interior one does. Everything
+    else comes back as [0]: the positions every tap reaching them sends to
+    zero — under [`Left] the leading ones, since a Hann window opens at zero
+    and a [win_length] below [fft_size] pads it with more — and the positions
+    past the last frame when [length] runs beyond it. In float64 the covered
+    positions are exact to a few units in the last place of the signal's peak
+    and in float32 the storage rounding dominates, but at the partially
+    covered edges the amplification above applies to that rounding too: a
+    2048-point Hann analysis returns them to around [1e-11] rather than to the
+    last place.
 
     Raises [Invalid_argument] if [z] has rank below two, if its bin axis is
     not [bins c] long, if [length] is negative, or if the configuration is not
@@ -311,8 +322,12 @@ val griffin_lim :
     estimation, in the dtype of [s]. The complex spectrum never surfaces.
 
     Each iteration synthesises the current estimate, re-analyses it with [c],
-    and keeps the phase it measures while restoring the magnitudes [s]. That
-    alternation decreases the spectral convergence
+    and keeps the phase it measures while restoring the magnitudes [s]. The
+    re-analysis pads the way {!transform} does, so the whole of [c] is in
+    play here — [pad] included, unlike in {!invert}: wherever the alignment
+    extends the signal, the extension feeds the next phase estimate and the
+    modes reconstruct differently. That alternation decreases the spectral
+    convergence
 
     [SC = ‖ |transform (griffin_lim …)| - s ‖ / ‖ s ‖]
 
