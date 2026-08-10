@@ -24,8 +24,10 @@
    signal there whatever the borders hold. The normalisation is invisible
    everywhere, since the same constant scales both sides of the quotient.
 
-   - frames that start past a requested length are never read, so their contents
-   cannot reach the synthesis.
+   - a requested length retains exactly the frames that open before its end: the
+   frames past it are never read, so their contents cannot reach the synthesis,
+   and the last frame before it is read wherever it lands a nonzero window tap
+   inside the request.
 
    - [`Right] analysis is [`Left] analysis of the left-extended signal, so its
    synthesis is the [`Left] synthesis with that extension dropped.
@@ -36,8 +38,9 @@
    at all; and leading axes broadcast.
 
    - the invertibility criterion rejects both shapes of gap and the envelopes
-   that clear zero by less than its relative floor, and the shape and length
-   checks fire before any transform runs. *)
+   that clear zero by less than its relative floor, accepts every fold that
+   clears it whatever the hop, and the shape and length checks fire before any
+   transform runs. *)
 
 open Windtrap
 open Soundml
@@ -220,16 +223,45 @@ let scale_independence_tests =
             alignments ) )
     cells
 
-(* {2 Frames past the requested length are never read} *)
+(* {2 The frames a requested length retains} *)
 
-let ceil_div a b = (a + b - 1) / b
+(* Frame [p] opens at padded position [p * hop] and a request for [length]
+   samples keeps padded positions [[left, left + length)], so the frames the
+   output can reach are exactly those with [p * hop < left + length]. The three
+   laws below bound that set from both sides, over a sweep of lengths short
+   enough that most frames fall past them; the round trip never reaches any of
+   it, since every length it asks for is at least the natural one.
 
-(* A frame whose first sample lies at or past the requested length reaches no
-   position of the output. Overwriting every such frame must therefore leave the
-   synthesis untouched, bit for bit: the retained frames enter the same inverse
-   transform with the same values, and the envelope depends on how many frames
-   are retained rather than on what they hold. The round trip never reaches this
-   — every length it asks for is at least the natural one. *)
+   [reaching] counts the frames the geometry allows rather than solving for the
+   first one it excludes, so the laws do not restate the arithmetic they
+   check. *)
+let reaching (fft, hop, _) alignment ~frames ~length =
+  let left = left_width fft alignment in
+  let reached = ref 0 in
+  for p = 0 to frames - 1 do
+    if p * hop < left + length then incr reached
+  done ;
+  !reached
+
+(* [sweep_lengths hop] is one sample up to three hops and two more: every
+   residue of the hop, three times over, so the last frame a request reaches
+   lands its taps at every offset from one to a whole hop past its opening. *)
+let sweep_lengths hop = List.init ((3 * hop) + 2) (fun i -> i + 1)
+
+(* [frame_taps cell] is the analysis window as a frame sees it: the window
+   itself when it fills the frame, and centred in it between zeros otherwise.
+   [config] leaves the default window, so it is the periodic Hann. *)
+let frame_taps (fft, _, wl) =
+  let w = Nx.to_array (Window.make Nx.float64 ~periodic:true Window.Hann wl) in
+  let head = (fft - wl) / 2 in
+  Array.init fft (fun j ->
+      if j < head || j >= head + wl then 0. else w.(j - head) )
+
+(* A frame that opens at or past the end of the request reaches no position of
+   the output. Overwriting every such frame must therefore leave the synthesis
+   untouched, bit for bit: the retained frames enter the same inverse transform
+   with the same values, and the envelope depends on how many frames are
+   retained rather than on what they hold. *)
 let frames_past_length_tests =
   List.map
     (fun ((fft, hop, wl) as cell) ->
@@ -237,30 +269,150 @@ let frames_past_length_tests =
           List.iter
             (fun (aname, alignment) ->
               let n = 300 in
-              let length = hop + 1 in
               let c = config cell alignment (`Constant 0.) in
               let x = Nx.create Nx.float64 [|n|] (lcg_signal n) in
               let z = Stft.transform Nx.complex128 c x in
               let frames = Nx.dim (-1) z in
-              let first_past =
-                ceil_div (length + left_width fft alignment) hop
-              in
+              List.iter
+                (fun length ->
+                  let kept = reaching cell alignment ~frames ~length in
+                  is_true
+                    ~msg:
+                      (Printf.sprintf "%s: %d of %d frames open past %d samples"
+                         aname (frames - kept) frames length )
+                    (kept < frames) ;
+                  let scrambled =
+                    Array.mapi
+                      (fun k v ->
+                        if k mod frames >= kept then Complex.{re= 3.; im= -7.}
+                        else v )
+                      (Nx.to_array z)
+                  in
+                  Tutils.check_close ~rtol:0. ~atol:0.
+                    ~msg:(Printf.sprintf "%s/length=%d" aname length)
+                    ~expected:(Nx.to_array (Stft.invert Nx.float64 c ~length z))
+                    (Stft.invert Nx.float64 c ~length
+                       (Nx.create Nx.complex128
+                          [|(fft / 2) + 1; frames|]
+                          scrambled ) ) )
+                (sweep_lengths hop) )
+            alignments ) )
+    cells
+
+(* The other side of the same statement, in the aggregate: a request no longer
+   than the default output is that output cut to the request. The retained
+   frames sum the same taps into the same positions and the envelope collects
+   the same ones there, so the agreement is bit for bit — and it fails as soon
+   as one frame the request reaches is left out. *)
+let length_prefix_tests =
+  List.map
+    (fun ((fft, hop, wl) as cell) ->
+      test (Printf.sprintf "fft%d_hop%d_win%d" fft hop wl) (fun () ->
+          List.iter
+            (fun (aname, alignment) ->
+              let n = 300 in
+              let c = config cell alignment (`Constant 0.) in
+              let x = Nx.create Nx.float64 [|n|] (lcg_signal n) in
+              let z = Stft.transform Nx.complex128 c x in
+              let whole = Nx.to_array (Stft.invert Nx.float64 c z) in
+              List.iter
+                (fun length ->
+                  if length <= Array.length whole then
+                    Tutils.check_close ~rtol:0. ~atol:0.
+                      ~msg:(Printf.sprintf "%s/length=%d" aname length)
+                      ~expected:(sub_array whole 0 length)
+                      (Stft.invert Nx.float64 c ~length z) )
+                (sweep_lengths hop) )
+            alignments ) )
+    cells
+
+(* And the same statement frame by frame, which is where it is sharp: the last
+   frame the request reaches must be read. Silencing it moves the output
+   wherever it lands a nonzero window tap inside the request — one tap is
+   enough, and it enters the numerator alone, the envelope depending only on how
+   many frames are retained. Where every tap it lands there is a zero of the
+   window, the positions carry nothing and silencing it is invisible: the frame
+   is still retained, and the sweep crosses both cases, since a request ending
+   one sample past a frame's opening reaches that frame through [w[0]] alone,
+   which a periodic Hann sends to zero. *)
+let last_frame_read_tests =
+  List.map
+    (fun ((fft, hop, wl) as cell) ->
+      test (Printf.sprintf "fft%d_hop%d_win%d" fft hop wl) (fun () ->
+          let taps = frame_taps cell in
+          List.iter
+            (fun (aname, alignment) ->
+              let left = left_width fft alignment in
+              let n = 300 in
+              let c = config cell alignment (`Constant 0.) in
+              let x = Nx.create Nx.float64 [|n|] (lcg_signal n) in
+              let z = Stft.transform Nx.complex128 c x in
+              let frames = Nx.dim (-1) z in
+              let values = Nx.to_array z in
+              let read = ref 0 and silent = ref 0 in
+              List.iter
+                (fun length ->
+                  let last = reaching cell alignment ~frames ~length - 1 in
+                  (* the taps of that frame the request keeps: it opens at
+                     padded position [last * hop] and lands tap [j] at [last *
+                     hop + j] *)
+                  let reaches = ref false in
+                  for j = 0 to fft - 1 do
+                    let q = (last * hop) + j in
+                    if q >= left && q < left + length && taps.(j) <> 0. then
+                      reaches := true
+                  done ;
+                  let silenced =
+                    Array.mapi
+                      (fun k v ->
+                        if k mod frames = last then Complex.zero else v )
+                      values
+                  in
+                  let expected =
+                    Nx.to_array (Stft.invert Nx.float64 c ~length z)
+                  in
+                  let got =
+                    Stft.invert Nx.float64 c ~length
+                      (Nx.create Nx.complex128
+                         [|(fft / 2) + 1; frames|]
+                         silenced )
+                  in
+                  if !reaches then begin
+                    incr read ;
+                    let silence = Nx.to_array got in
+                    let moved = ref 0. in
+                    Array.iteri
+                      (fun i v ->
+                        let d = Float.abs (v -. silence.(i)) in
+                        if d > !moved then moved := d )
+                      expected ;
+                    is_true
+                      ~msg:
+                        (Printf.sprintf
+                           "%s/length=%d: silencing frame %d moves the output \
+                            by %.3g"
+                           aname length last !moved )
+                      (!moved > 0.)
+                  end
+                  else begin
+                    incr silent ;
+                    Tutils.check_close ~rtol:0. ~atol:0.
+                      ~msg:
+                        (Printf.sprintf "%s/length=%d: frame %d lands no tap"
+                           aname length last )
+                      ~expected got
+                  end )
+                (sweep_lengths hop) ;
               is_true
                 ~msg:
-                  (Printf.sprintf "%s: %d of %d frames start past %d samples"
-                     aname (frames - first_past) frames length )
-                (first_past < frames) ;
-              let scrambled =
-                Array.mapi
-                  (fun k v ->
-                    if k mod frames >= first_past then Complex.{re= 3.; im= -7.}
-                    else v )
-                  (Nx.to_array z)
-              in
-              Tutils.check_close ~rtol:0. ~atol:0. ~msg:aname
-                ~expected:(Nx.to_array (Stft.invert Nx.float64 c ~length z))
-                (Stft.invert Nx.float64 c ~length
-                   (Nx.create Nx.complex128 [|(fft / 2) + 1; frames|] scrambled) ) )
+                  (Printf.sprintf "%s: %d lengths read the last frame" aname
+                     !read )
+                (!read > 0) ;
+              is_true
+                ~msg:
+                  (Printf.sprintf "%s: %d lengths reach it through zeros alone"
+                     aname !silent )
+                (!silent > 0) )
             alignments ) )
     cells
 
@@ -301,10 +453,12 @@ let right_shift_tests =
    The run itself depends on the frame count. At [frames >= 1] it is the [hop]
    lengths starting at the returned one. At [frames = 0] the returned length is
    0 — the empty spectrum is the empty signal, whatever the frame-span formula
-   would give — and the run is the lengths the boundary extension leaves shorter
-   than a single frame: [0] alone under [`Centered] and [`Right], whose
-   extensions are [2 * (fft_size / 2)] and [fft_size - 1] wide, and 0 to
-   [fft_size - 1] under [`Left], which extends nothing.
+   would give — and the run holds 0, which analyses to no frames because the
+   empty signal has none by definition rather than for want of samples, and the
+   positive lengths the extension still leaves shorter than a frame. There are
+   none of those under [`Centered] and [`Right], whose extensions are [2 *
+   (fft_size / 2)] and [fft_size - 1] wide, so the run is 0 alone; under
+   [`Left], which extends nothing, they carry it to [fft_size - 1].
 
    One geometry stands outside the fixed point. Under [`Centered] the boundary
    extension is [2 * (fft_size / 2)], which for an even [fft_size] is the whole
@@ -450,6 +604,23 @@ let error_tests =
            must stay above 1e-10 of its largest value at every position)"
           (fun () ->
             ignore (Stft.griffin_lim c (Nx.zeros Nx.float64 [|1025; 3|])) ) )
+  ; test "a hop as wide as the frame is accepted when the fold clears"
+      (fun () ->
+        (* the criterion is on the fold, not on the hop: a rectangular window
+           advanced by its own length lays each frame beside the last, every
+           position receives exactly one unit tap, and the geometry inverts
+           exactly even though nothing overlaps *)
+        let c =
+          Stft.Config.create ~window:Window.Rectangular ~fft_size:16 ~hop:16
+            ~alignment:`Left ()
+        in
+        let n = 64 in
+        let signal = lcg_signal n in
+        let x = Nx.create Nx.float64 [|n|] signal in
+        Tutils.check_close ~rtol:0. ~atol:float64_atol
+          ~msg:"a hop equal to the frame round-trips" ~expected:signal
+          (Stft.invert Nx.float64 c ~length:n
+             (Stft.transform Nx.complex128 c x) ) )
   ; test "an envelope below the relative floor is rejected too" (fun () ->
         (* the criterion is numerical, not a test for zero: every position here
            is reached by taps the window does not send to zero, and the fold of
@@ -522,6 +693,8 @@ let suite =
   ; group "pad-independence" pad_independence_tests
   ; group "scale-independence" scale_independence_tests
   ; group "frames-past-the-length" frames_past_length_tests
+  ; group "the-length-is-a-prefix" length_prefix_tests
+  ; group "the-last-frame-is-read" last_frame_read_tests
   ; group "right-is-shifted-left" right_shift_tests
   ; group "shape" shape_tests
   ; group "errors" error_tests ]
