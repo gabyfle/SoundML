@@ -299,6 +299,15 @@ let ols_geom ~rate ~l ~m ~k =
       let delta = (f_div - (3 * k mod f_div)) mod f_div in
       if b < 1 then None else Some (n, b, delta)
 
+(* [ols_folds_inverse w] is whether the inverse transform's 1/W rides in the
+   plan spectrum instead of in a pass over every output sample. Scaling a
+   spectrum by an exact power of two scales every value the transform derives
+   from it by that same power of two, exactly, so for such a [w] the two
+   placements agree bit for bit and the spectrum — one scaling, done once per
+   plan — carries it. For any other [w] the factor is inexact and moving it
+   ahead of the transform would move the output, so the transform normalises. *)
+let ols_folds_inverse w = w land (w - 1) = 0
+
 (* The executor cost model's rate constants, in nanoseconds, measured with
    bench/profile/profile_fft.ml on the reference machine (Apple M4 Pro, quiet
    host) at the batched steady state — the condition offline [apply] and >=
@@ -322,6 +331,16 @@ let ols_copy_ns_per_bin = 0.5
 let ols_block_fixed_ns = 1000.
 
 let dot_ns_per_mac = 0.058
+
+(* The direct kernel's per-output cost that does not scale with the tap count:
+   the window advance, the bank row address, the lane initialisation, the
+   lane-combine tree and the store. Measured on the reference machine as the
+   intercept of the kernel's per-output wall against the tap count, 0.55-0.80 ns
+   float32 over banks of 41 to 641 taps. A short bank pays it once per output
+   like a long one, so a stage of a few dozen taps runs at two to three times
+   [dot_ns_per_mac] per MAC; without this term the search prices such a stage as
+   nearly free and picks cascades that lose to the single stage they replace. *)
+let dot_ns_per_output = 0.5
 
 (* [ols_cost ~l ~m ~k (n, b, _)] is the modeled OLS execution cost per stage
    output, in direct-kernel MAC equivalents — the unit [bank_cost] prices direct
@@ -402,8 +421,11 @@ type ols_plan =
   ; oh: Nx.complex128_t Lazy.t
         (* the prototype's spectrum on the transform grid: [rfft] of the
            zero-padded prototype — length [N*F/2 + 1] for ×F stages, [N/2 + 1]
-           (pre-scaled by 1/F, the alias-fold weight) for ÷F. Forced on the
-           first prepared kernel; not domain-safe, like [sgemm] *) }
+           for ÷F — carrying the scalar weights the block product would
+           otherwise apply sample by sample: 1/F, the ÷F alias-fold weight, and
+           the inverse transform's 1/W where [ols_folds_inverse] admits it.
+           Forced on the first prepared kernel; not domain-safe, like [sgemm] *)
+  }
 
 (* {1 The GEMM executor plan}
 
@@ -561,12 +583,16 @@ let pp_bytes fmt bytes =
 type stage_geom =
   {gl: int; gm: int; gk: int; gfc: float; gols: (int * int * int) option}
 
-(* [bank_cost l k] is [2K + 1] MACs weighted by the residency factor above; the
-   tie-breaker uses the float32 bank size — the throughput-critical
-   instantiation. *)
+(* [bank_cost l k] is [2K + 1] MACs weighted by the residency factor above, plus
+   the tap-independent per-output term of [dot_ns_per_output] converted into the
+   same MAC currency; the tie-breaker uses the float32 bank size — the
+   throughput-critical instantiation. *)
 let bank_cost l k =
   let macs = (2. *. Float.of_int k) +. 1. in
-  if l * ((2 * k) + 1) * 4 > l1_edge_bytes then macs *. 1.25 else macs
+  let weighted =
+    if l * ((2 * k) + 1) * 4 > l1_edge_bytes then macs *. 1.25 else macs
+  in
+  weighted +. (dot_ns_per_output /. dot_ns_per_mac)
 
 let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
   let att = attenuation +. (20. *. Float.log10 2.) in
@@ -830,11 +856,15 @@ let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
             ; oh=
                 lazy
                   (let len = if l > 1 then n * l else n in
+                   let w = if l > 1 then n * l else n / m in
                    let padded = Nx.pad [|(0, len - Array.length h)|] 0. proto in
                    let spec = Nx.rfft Nx.complex128 padded in
-                   if m > 1 then
-                     Nx.mul_s spec {Complex.re= 1. /. Float.of_int m; im= 0.}
-                   else spec ) } ) }
+                   let scale =
+                     (if m > 1 then 1. /. Float.of_int m else 1.)
+                     *. if ols_folds_inverse w then 1. /. Float.of_int w else 1.
+                   in
+                   if scale = 1. then spec
+                   else Nx.mul_s spec {Complex.re= scale; im= 0.} ) } ) }
 
 module Config = struct
   type t = config
@@ -1483,7 +1513,9 @@ module Kernel = struct
         in
         resample_shape_c (array1_of x) (array1_of os.ohs) (array1_of shaped)
           lines o.on sp.sl sp.sm ;
-        Nx.irfft k.dtype ~n:w shaped
+        Nx.irfft k.dtype ~n:w
+          ~norm:(if ols_folds_inverse w then `Forward else `Backward)
+          shaped
       in
       let transform v = transform_spec (Nx.rfft Nx.complex128 v) in
       (* [framed_spec ~j0 t0] is the half spectrum of the [t0] overlap-save
