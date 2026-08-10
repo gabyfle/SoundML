@@ -43,6 +43,56 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   single-precision path.
 - `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
   one row per dtype, mirroring the librosa rows one to one.
+- `cqt` — the constant-Q paths end to end over the same 30 s of mono audio at
+  22.05 kHz and hop 512: `Cqt.power_spectrum` over the default seven-octave
+  84-bin ladder and over the erb variable-Q ladder, and `chroma_cqt` over a
+  252-bin ladder at 36 bins per octave, one row per dtype, mirroring the
+  librosa rows one to one. `Cqt.Config.create` is priced separately: it builds
+  the frequency ladder, the octave plan and one filter kernel per octave once,
+  and every call reuses them.
+
+  The measured position, both sides on the maintainer machine in one session
+  (arm64, min-of-N over five interleaved alternations, librosa 0.11 with
+  `tuning=0.0` and `sparsity=0` pinned on every call so the two suites compute
+  the same transform): 0.46x librosa at float32 and 0.47x at float64 on the
+  84-bin constant-Q ladder (8.94 ms against 19.23, 10.18 against 21.66);
+  0.58x on the erb variable-Q ladder at both dtypes (8.12 against 13.98,
+  9.29 against 15.91); and 0.20x float32 / 0.15x float64 on the 252-bin
+  chromagram (19.75 against 98.00, 21.01 against 139.22). Three things carry
+  it: the filter bank is built once in the configuration where librosa
+  rebuilds it per call (0.77 ms here, against a 9 ms transform); the octave
+  projection is one dense complex GEMM per octave through the platform BLAS,
+  where the reference multiplies a sparsified CSR basis — which is why the gap
+  widens with the bank, from 2.2x at 84 bins to 5-6.6x at 252; and the octave
+  decimation runs the resampler's dense offline form, which measures 3.4x its
+  own dot-product executor on the 2:1 chain and is what closes the distance to
+  libsoxr's half-band path. The remaining variable-Q gap against constant-Q is
+  the erb ladder's longer low-octave filters, on both sides.
+
+  The same group prices the incremental `Cqt.Kernel` over the same clip and
+  ladder: the whole-signal instance (one `step` plus `flush`, which is what
+  the partition law is anchored on) and three chunk cadences, 1024, 4096 and
+  16384 samples. Measured against `Cqt.transform` in one session (min-of-N
+  over seven interleaved alternations): the whole-signal instance runs 3.8x
+  offline (37.2 ms against 9.69), chunk 16384 3.9x (38.1), chunk 4096 4.4x
+  (42.2) and chunk 1024 6.4x (61.9). Two terms pay for it, and both are the
+  price of a partition law the offline path does not carry. The decimation
+  chain runs the streaming executor instead of `Resample.apply_gemm` — 13.2 ms
+  against 3.98 for the six cascaded 2:1 stages over the clip, 3.3x, the same
+  ratio the paragraph above quotes from the other side. And the projection
+  consumes one frame at a time rather than one octave at a time, because a
+  blocking indexed by frame number is exactly what makes the emitted bits
+  independent of where a chunk boundary fell: 1.93 ms against 0.106 for the
+  top octave's 1292 frames, 18x — a small term made large, worth about 13 ms
+  across the seven octaves. What is left is per-chunk dispatch, 21 µs per
+  chunk at 16384, 31 µs at 4096 and 38 µs at 1024. Allocation moves the same
+  way, 4.2 Mwords for the whole-signal instance and 19.7 at chunk 1024 against
+  40 Kwords offline: one small tensor per frame per octave instead of one per
+  octave. None of it threatens a real-time budget — the worst cadence spends
+  0.21% of the audio's own duration, some 480x real time on this machine — and
+  the whole-signal instance is not the offline path's replacement: `transform`
+  stays the surface for a signal in hand.
+
 - `resample` — every face of `Resample` on one-second mono clips: `apply`
   across presets, rate pairs and dtypes; the GEMM surface next to the
   executor; the streaming kernel across chunk sizes (the 1024 row keeps the

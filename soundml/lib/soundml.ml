@@ -4,6 +4,8 @@ module Stft = Stft
 module Convert = Convert
 module Db = Db
 module Mel = Mel
+module Cqt = Cqt
+module Chroma = Chroma
 module Resample = Resample
 
 let check_fft_sizes fn stft_config mel_config =
@@ -20,17 +22,16 @@ let mel_spectrogram stft_config mel_config ?(power = 2.) x =
   check_fft_sizes "mel_spectrogram" stft_config mel_config ;
   Mel.apply mel_config (Stft.power_spectrum ~power stft_config x)
 
-(* Orthonormal type-II DCT row scales — scipy's [dct norm='ortho']: the raw
-   transform times [1 / sqrt (4 n)] on row zero and [1 / sqrt (2 n)]
-   elsewhere. *)
+(* Orthonormal type-II DCT row scales: the raw transform times [1 / sqrt (4 n)]
+   on row zero and [1 / sqrt (2 n)] elsewhere. *)
 let dct_ortho_scales n_mels n_mfcc =
   Nx.create Nx.float64 [|n_mfcc; 1|]
     (Array.init n_mfcc (fun k ->
          if k = 0 then 1. /. Float.sqrt (4. *. Float.of_int n_mels)
          else 1. /. Float.sqrt (2. *. Float.of_int n_mels) ) )
 
-(* Sinusoidal liftering weights (librosa): coefficient [k], from zero, scales by
-   [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)]. *)
+(* Sinusoidal liftering weights: coefficient [k], from zero, scales by [1 +
+   (lifter / 2) * sin (pi * (k + 1) / lifter)]. *)
 let lifter_weights lifter n_mfcc =
   Nx.create Nx.float64 [|n_mfcc; 1|]
     (Array.init n_mfcc (fun k ->
@@ -73,10 +74,10 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
     Nx.zeros dtype out
   end
   else
-    (* The interior runs in double: librosa's log-mel (power_to_db with the 80
-       dB clamp librosa.feature.mfcc inherits), the raw type-II DCT along the
-       mel axis, the orthonormal row scaling, then one rounding at the
-       boundary. *)
+    (* The interior runs in double: the log-mel spectrogram ([power_to_db] with
+       the 80 dB dynamic-range clamp the parity contract fixes), the raw type-II
+       DCT along the mel axis, the orthonormal row scaling, then one rounding at
+       the boundary. *)
     let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
     let cepstrum =
       Nx.mul
@@ -91,6 +92,22 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
           cepstrum
     in
     Nx.cast dtype cepstrum
+
+let chroma_stft stft_config chroma_config ?(power = 2.) ?norm x =
+  let stft_size = Stft.Config.fft_size stft_config in
+  let chroma_size = Chroma.Config.fft_size chroma_config in
+  if stft_size <> chroma_size then
+    invalid_arg
+      (Printf.sprintf
+         "chroma_stft: cannot project a %d-point STFT through a filterbank \
+          built for an FFT of size %d (the two configurations must agree on \
+          fft_size)"
+         stft_size chroma_size ) ;
+  Chroma.apply ?norm chroma_config (Stft.power_spectrum ~power stft_config x)
+
+let chroma_cqt cqt_config ?n_chroma ?norm x =
+  Chroma.of_cqt ?n_chroma ?norm cqt_config
+    (Cqt.power_spectrum ~power:1. cqt_config x)
 
 let resample ?quality ~sample_rate ~target x =
   Resample.(apply (Config.create ?quality ~sample_rate ~target ()) x)

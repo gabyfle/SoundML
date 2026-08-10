@@ -1,0 +1,7 @@
+(test
+ (name test_cqt)
+ (package soundml)
+ (modules cqt_goldens cqt_props cqt_stream test_cqt)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
