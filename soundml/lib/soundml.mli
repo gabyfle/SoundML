@@ -51,6 +51,11 @@ module Db = Db
     {!Mel.stage} consuming {!Stft.power_stage} output. *)
 module Mel = Mel
 
+(** Constant-Q and variable-Q transforms: the filter geometry precomputed by
+    {!Cqt.Config}, the offline {!Cqt.transform} over the recursive octave
+    plan, and the dtype-preserving {!Cqt.power_spectrum}. *)
+module Cqt = Cqt
+
 (** Sample-rate conversion: one exact-rational polyphase resampler behind the
     offline {!Resample.apply}, the incremental {!Resample.Kernel} and the
     {!Resample.stage} pipeline stage — bit-identical on every partitioning. *)

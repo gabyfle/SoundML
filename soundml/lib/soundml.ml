@@ -4,6 +4,7 @@ module Stft = Stft
 module Convert = Convert
 module Db = Db
 module Mel = Mel
+module Cqt = Cqt
 module Resample = Resample
 
 let check_fft_sizes fn stft_config mel_config =
