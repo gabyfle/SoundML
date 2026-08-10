@@ -249,22 +249,29 @@ val power_spectrum :
     check: the squared window, summed over the frame grid, must be nonzero at
     every position. It is strictly weaker than asking that sum to be
     {e constant}, because dividing by the measured envelope corrects any shape
-    it has, and it fails exactly when a hop leaves positions no window tap
-    reaches. It is not the condition {!Window.cola} tests either: that one
-    overlap-adds the window itself rather than its square.
+    it has, and it fails exactly when the frame grid leaves positions no
+    {e nonzero} window tap reaches — either a hop past the window's support,
+    or one that lands nothing there but zeros of the window itself, as a
+    periodic Hann advanced by its own length does at the frame boundary. It
+    is not the condition {!Window.cola} tests either: that one overlap-adds
+    the window itself rather than its square.
 
     Positions the analysis window sends to zero carry no information and come
     back as [0] rather than as a division by zero. With [`Left] and [`Right]
-    alignment the returned signal includes the frame edges where the envelope
+    alignment the returned signal reaches the frame edges, where the envelope
     is one window tail and nothing else, and those samples are ill
     conditioned: a perturbation of the frames enters the overlap-add through a
     single window tap and the envelope through that tap squared, so it moves
     such a sample by about the reciprocal of the tap more than it moves an
     interior one. Beside the vanishing first tap of a Hann analysis the tap is
-    [(pi / fft_size)] squared, so the amplification there is of the order of
-    [(fft_size / pi)] squared. That is inherent to least-squares synthesis,
-    not a defect of this implementation; [`Centered] analysis trims those
-    edges away with its padding. *)
+    [(pi / win_length)] squared — the length of the window governs it, not the
+    transform size it is padded into — so the amplification there is of the
+    order of [(win_length / pi)] squared. A [win_length] below [fft_size]
+    moves that edge inward: the [(fft_size - win_length) / 2] outermost
+    positions receive no tap at all and come back as [0], and the ill
+    conditioned run starts after them. That is inherent to least-squares
+    synthesis, not a defect of this implementation; [`Centered] analysis trims
+    those edges away with its padding. *)
 
 val invert :
      (float, 'a) Nx.dtype
@@ -293,9 +300,16 @@ val invert :
     weight the overlap-add and the envelope alike, so one the frame pattern
     covers only in part cancels exactly as an interior one does. Everything
     else comes back as [0]: the positions every tap reaching them sends to
-    zero — under [`Left] the leading ones, since a Hann window opens at zero
-    and a [win_length] below [fft_size] pads it with more — and the positions
-    past the last frame when [length] runs beyond it. In float64 the covered
+    zero, and the positions past the last frame when [length] runs beyond it.
+    A [win_length] below [fft_size] sits centred in the frame at offset
+    [(fft_size - win_length) / 2] and is padded with zeros to the frame, so
+    the first kind runs along both frame edges — that offset many positions
+    at the head, one more under a Hann window, which itself opens at zero,
+    and [fft_size - win_length - ((fft_size - win_length) / 2)] at the tail,
+    inside the last frame's transform span rather than past it. [`Left]
+    returns both runs; [`Right] returns the trailing one only, its left
+    extension already carrying the frame pattern past position 0; and
+    [`Centered] trims both away with its padding. In float64 the covered
     positions are exact to a few units in the last place of the signal's peak
     and in float32 the storage rounding dominates, but at the partially
     covered edges the amplification above applies to that rounding too: a
