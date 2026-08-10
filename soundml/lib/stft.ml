@@ -868,15 +868,17 @@ let envelope (c : Config.t) ~frames =
 (* [synthesise c ?length z] is the synthesis equation above, on a checked
    complex128 spectrum [z] shaped [[...; bins; frames]].
 
-   Only the frames the output can reach are inverted: a named [length] covers
-   padded positions below [length + left + right], so frames beyond that are
-   dropped before any transform runs. The retained frames are inverted in one
-   batched real transform, windowed, overlap-added and divided by the envelope
-   in padded coordinates; the left extension is then trimmed and the result cut
-   or zero-extended to the requested length. *)
+   Only the frames the output can reach are inverted: a named [length] keeps
+   padded positions [[left, left + length)], and frame [p] opens at padded
+   position [p * hop], so the frames from [ceil ((length + left) / hop)] on lie
+   entirely past the output and are dropped before any transform runs. The
+   retained frames are inverted in one batched real transform, windowed,
+   overlap-added and divided by the envelope in padded coordinates; the left
+   extension is then trimmed and the result cut or zero-extended to the
+   requested length. *)
 let synthesise (c : Config.t) ?length z =
   let fft = Config.fft_size c and hop = Config.hop c in
-  let left = left_width c and right = right_width c in
+  let left = left_width c in
   let frames = last_dim z in
   let out_len =
     match length with Some n -> n | None -> output_length c ~frames
@@ -886,7 +888,7 @@ let synthesise (c : Config.t) ?length z =
     | None ->
         frames
     | Some n ->
-        Stdlib.min frames (ceil_div (n + left + right) hop)
+        Stdlib.min frames (ceil_div (n + left) hop)
   in
   if count = 0 || out_len = 0 || Array.exists (fun d -> d = 0) (batch_shape z)
   then Nx.zeros Nx.float64 (Array.append (batch_shape z) [|out_len|])
