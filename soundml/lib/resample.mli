@@ -59,8 +59,8 @@
     the exact accessors and the partition law are the same in every case; the
     choice is the planner's, and {!Config.pp} names it. Both block-shaped
     executors change the {e cadence} of streaming: output leaves in bursts, and
-    the first samples emerge after roughly one block (about the class of soxr's
-    DFT stages, 1-4 k source samples, {!Config.pp} names the length) or one
+    the first samples emerge after roughly one block (1-4 k source
+    samples; {!Config.pp} names the length) or one
     matrix-product group (about 16 k source samples) instead of after the group
     delay. Offline {!apply} is unaffected. *)
 
@@ -186,8 +186,7 @@ val apply : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     a batch of clips is one call. Output length is {!Config.output_frames}
     exactly; sample [i] of the output corresponds to input time [i * M / L]
     (group delay compensated); the signal is treated as silence outside its
-    extent (zeros — the linear-convolution convention shared by torchaudio and
-    scipy [resample_poly]).
+    extent (zeros — the linear-convolution convention).
 
     [apply] is the one-chunk instance of {!Kernel}: one [step] on the whole
     signal plus the drain, bit-identical to any chunked execution. For the

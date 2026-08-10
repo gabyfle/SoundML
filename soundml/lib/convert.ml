@@ -25,7 +25,8 @@ let decade = 10. /. Float.log 10.
 (* The validated core shared by [power_to_db] and [amplitude_to_db]; [gain] is
    10 for powers and 20 for amplitudes, [reference] and [amin] live in the
    input's own domain. Powers are floored signed — a negative power sits at the
-   floor — while amplitudes are magnitudes first; both are librosa's choices. *)
+   floor — while amplitudes are magnitudes first; both orders are fixed by the
+   module's parity contract (see the interface). *)
 let to_db ~gain ~magnitude ~reference ~amin ~top_db s =
   if Nx.numel s = 0 then Nx.copy s
   else
@@ -66,8 +67,8 @@ let db_to_amplitude ?(reference = 1.) db =
   check_reference "db_to_amplitude" reference ;
   from_db ~gain:20. ~reference db
 
-(* Slaney-scale constants (librosa): linear below 1000 Hz at [1 / f_sp] mel per
-   hertz, logarithmic above, continuous at the break. *)
+(* Slaney-scale constants: linear below 1000 Hz at [1 / f_sp] mel per hertz,
+   logarithmic above, continuous at the break. *)
 let f_sp = 200. /. 3.
 
 let min_log_hz = 1000.
