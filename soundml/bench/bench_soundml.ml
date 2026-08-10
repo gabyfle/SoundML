@@ -14,6 +14,15 @@
    kHz, fft 2048 and hop 512, in both float32 and float64 — one row per dtype,
    mirroring the librosa rows of [bench_soundml.py] one to one.
 
+   The cqt group times the constant-Q paths end to end — [Cqt.power_spectrum]
+   over the default seven-octave ladder and over the erb variable-Q ladder, and
+   [chroma_cqt] over a 252-bin ladder at 36 bins per octave — over the same 30 s
+   of mono audio at 22.05 kHz and hop 512, in both float32 and float64, one row
+   per dtype, mirroring the librosa rows of [bench_soundml.py] one to one.
+   [Config.create] is priced separately: it builds the frequency ladder, the
+   octave plan and one filter kernel per octave once, and every call reuses them
+   — the reference implementation rebuilds its basis on every call.
+
    The resample group covers every face of [Resample] on one-second mono clips:
    [apply] across the three presets, the six headline rate pairs — near-unity
    both ways and every pair the planner splits into a cascade, so a stage-level
@@ -85,6 +94,37 @@ let mel_benchmarks () =
         Soundml.mel_spectrogram stft_config mel_config x32 )
   ; Thumper.bench "mel_spectrogram 30s f64 fft2048 hop512" (fun () ->
         Soundml.mel_spectrogram stft_config mel_config x64 ) ]
+
+(* The constant-Q group: 30 s of mono audio through the seven-octave default
+   ladder, the erb variable-Q ladder, and the 252-bin chromagram — one row per
+   dtype, mirroring the librosa rows of [bench_soundml.py] one to one. The
+   configuration row prices what creation does once and every call reuses: the
+   frequency ladder, the octave plan and seven filter kernels. *)
+let cqt_config = Soundml.Cqt.Config.create ~n_bins:84 ~sample_rate ()
+
+let vqt_config =
+  Soundml.Cqt.Config.create ~n_bins:84 ~gamma:`Erb ~sample_rate ()
+
+let chroma_cqt_config =
+  Soundml.Cqt.Config.create ~n_bins:252 ~bins_per_octave:36 ~sample_rate ()
+
+let cqt_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let x64 = Nx.rand Nx.float64 [|n_audio|] in
+  [ Thumper.bench "cqt 30s f32 84/12 hop512" (fun () ->
+        Soundml.Cqt.power_spectrum cqt_config x32 )
+  ; Thumper.bench "cqt 30s f64 84/12 hop512" (fun () ->
+        Soundml.Cqt.power_spectrum cqt_config x64 )
+  ; Thumper.bench "vqt 30s f32 84/12 gamma-erb hop512" (fun () ->
+        Soundml.Cqt.power_spectrum vqt_config x32 )
+  ; Thumper.bench "vqt 30s f64 84/12 gamma-erb hop512" (fun () ->
+        Soundml.Cqt.power_spectrum vqt_config x64 )
+  ; Thumper.bench "chroma_cqt 30s f32 n252 bpo36 hop512" (fun () ->
+        Soundml.chroma_cqt chroma_cqt_config x32 )
+  ; Thumper.bench "chroma_cqt 30s f64 n252 bpo36 hop512" (fun () ->
+        Soundml.chroma_cqt chroma_cqt_config x64 )
+  ; Thumper.bench "cqt config 84/12" (fun () ->
+        Soundml.Cqt.Config.create ~n_bins:84 ~sample_rate () ) ]
 
 let n = 1_000_000
 
@@ -229,6 +269,7 @@ let () =
     ; Thumper.group "pipeline" (pipeline_benchmarks ())
     ; Thumper.group "stft" (stft_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
+    ; Thumper.group "cqt" (cqt_benchmarks ())
     ; Thumper.group "resample"
         ( resample_apply_benchmarks ()
         @ resample_gemm_benchmarks ()
