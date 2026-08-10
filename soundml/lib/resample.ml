@@ -323,6 +323,16 @@ let ols_block_fixed_ns = 1000.
 
 let dot_ns_per_mac = 0.058
 
+(* The direct kernel's per-output cost that does not scale with the tap count:
+   the window advance, the bank row address, the lane initialisation, the
+   lane-combine tree and the store. Measured on the reference machine as the
+   intercept of the kernel's per-output wall against the tap count, 0.55-0.80 ns
+   float32 over banks of 41 to 641 taps. A short bank pays it once per output
+   like a long one, so a stage of a few dozen taps runs at two to three times
+   [dot_ns_per_mac] per MAC; without this term the search prices such a stage as
+   nearly free and picks cascades that lose to the single stage they replace. *)
+let dot_ns_per_output = 0.5
+
 (* [ols_cost ~l ~m ~k (n, b, _)] is the modeled OLS execution cost per stage
    output, in direct-kernel MAC equivalents — the unit [bank_cost] prices direct
    stages in, so the two executors compare in one currency. *)
@@ -561,12 +571,16 @@ let pp_bytes fmt bytes =
 type stage_geom =
   {gl: int; gm: int; gk: int; gfc: float; gols: (int * int * int) option}
 
-(* [bank_cost l k] is [2K + 1] MACs weighted by the residency factor above; the
-   tie-breaker uses the float32 bank size — the throughput-critical
-   instantiation. *)
+(* [bank_cost l k] is [2K + 1] MACs weighted by the residency factor above, plus
+   the tap-independent per-output term of [dot_ns_per_output] converted into the
+   same MAC currency; the tie-breaker uses the float32 bank size — the
+   throughput-critical instantiation. *)
 let bank_cost l k =
   let macs = (2. *. Float.of_int k) +. 1. in
-  if l * ((2 * k) + 1) * 4 > l1_edge_bytes then macs *. 1.25 else macs
+  let weighted =
+    if l * ((2 * k) + 1) * 4 > l1_edge_bytes then macs *. 1.25 else macs
+  in
+  weighted +. (dot_ns_per_output /. dot_ns_per_mac)
 
 let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
   let att = attenuation +. (20. *. Float.log10 2.) in
