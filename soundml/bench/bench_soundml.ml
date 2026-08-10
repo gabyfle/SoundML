@@ -33,7 +33,6 @@
    are built outside the timed thunk, so the rows carry the synthesis and
    nothing else; librosa rows mirror them one to one.
 
-
    The resample group covers every face of [Resample] on one-second mono clips:
    [apply] across the three presets, the six headline rate pairs — near-unity
    both ways and every pair the planner splits into a cascade, so a stage-level
