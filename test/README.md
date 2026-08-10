@@ -34,6 +34,21 @@ Current suites:
   float64/float32, plus `librosa.fft_frequencies` and
   `librosa.frames_to_time` truths for `Stft.frequencies` and `Stft.times`
   (`coordinates.json`).
+- `istft` — the synthesis side of `Soundml.Stft`: `librosa.istft` over
+  deterministic synthetic spectra (two LCG streams, one per complex
+  component, with the imaginary DC and Nyquist bins zeroed so the inverse
+  real transform discards nothing) across `(fft_size, hop, win_length)`
+  combos x all three alignments x frame counts x float64/float32, plus an
+  explicit output length above, below and at the natural one
+  (`lengths.json`), and `librosa.griffinlim` at `init=None` — its only
+  deterministic initial phase — across iteration counts and momenta
+  including the momentum-free classic algorithm. The spectra are
+  inconsistent on purpose, so the cases measure the least-squares solution
+  rather than a round trip; the round trip, the padding grid and the
+  Griffin-Lim convergence gates are properties, checked without an oracle.
+  The `right` alignment has no librosa counterpart and is generated as its
+  `center=False` synthesis with the `fft_size - 1` left-extension positions
+  dropped.
 - `db` — the `Soundml.Convert` decibel conversions (`power_to_db`,
   `amplitude_to_db`) over synthetic seeded inputs: fixed references, the
   `amin` floor, `top_db` clamping (global across a rank-two input),

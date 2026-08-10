@@ -1,0 +1,7 @@
+(test
+ (name test_istft)
+ (package soundml)
+ (modules istft_goldens istft_law gl_goldens gl_law test_istft)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
