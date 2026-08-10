@@ -14,9 +14,10 @@
    Also here: the consistent-spectrogram fixed point (starting from the true
    phase of a signal returns that signal's synthesis), the padding grid — the
    iteration re-analyses what it synthesises, so unlike [Stft.invert] it reads
-   [pad] — shape stability across alignments, the one geometry that leaves the
-   iteration no length to run at, and the argument rejections. Nothing in the
-   module draws a random number, so every case is a plain equality on rerun. *)
+   [pad] — shape stability across alignments, the two spectrograms that leave
+   the iteration no length to run at, and the argument rejections. Nothing in
+   the module draws a random number, so every case is a plain equality on
+   rerun. *)
 
 open Windtrap
 open Soundml
@@ -252,7 +253,39 @@ let no_length_tests =
         in
         is_true
           ~msg:(Printf.sprintf "two frames iterate, and move by %.6g" gap)
-          (gap > separated) ) ]
+          (gap > separated) )
+  ; test "an empty spectrogram leaves nothing to iterate on either" (fun () ->
+        List.iter
+          (fun (aname, alignment) ->
+            let c = config ~alignment () in
+            let s = Nx.zeros Nx.float64 [|Stft.Config.bins c; 0|] in
+            equal
+              ~msg:(aname ^ ": empty by default")
+              (array int) [|0|]
+              (Nx.shape (Stft.griffin_lim c s)) ;
+            equal
+              ~msg:(aname ^ ": empty when asked for nothing")
+              (array int) [|0|]
+              (Nx.shape (Stft.griffin_lim c ~length:0 s)) ;
+            let zero_phase =
+              Nx.complex Nx.complex128 ~re:s ~im:(Nx.zeros_like s)
+            in
+            List.iter
+              (fun length ->
+                let once =
+                  Nx.to_array (Stft.invert Nx.float64 c ~length zero_phase)
+                in
+                List.iter
+                  (fun n_iter ->
+                    Tutils.check_close ~rtol:0. ~atol:0.
+                      ~msg:
+                        (Printf.sprintf "%s: length %d after %d iterations"
+                           aname length n_iter )
+                      ~expected:once
+                      (Stft.griffin_lim ~n_iter c ~length s) )
+                  [1; 32] )
+              [1; 300; 4096] )
+          [("centered", `Centered); ("left", `Left); ("right", `Right)] ) ]
 
 (* {2 Rejections} *)
 
