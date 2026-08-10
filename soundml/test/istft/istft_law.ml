@@ -33,8 +33,9 @@
    - the default output length is the fixed point of the frame geometry, and
    leading axes broadcast.
 
-   - the invertibility criterion rejects both shapes of gap, and the shape and
-   length checks fire before any transform runs. *)
+   - the invertibility criterion rejects both shapes of gap and the envelopes
+   that clear zero by less than its relative floor, and the shape and length
+   checks fire before any transform runs. *)
 
 open Windtrap
 open Soundml
@@ -363,8 +364,8 @@ let error_tests =
         let c = Stft.Config.create ~fft_size:2048 ~hop:2048 () in
         raises_invalid_arg ~msg:"hop equal to the frame"
           "invert: cannot invert a 2048-point window advanced by 2048 samples \
-           inside a 2048-point frame (the squared window must overlap-add to a \
-           nonzero value at every position)" (fun () ->
+           inside a 2048-point frame (the overlap-added squared window must \
+           stay above 1e-10 of its largest value at every position)" (fun () ->
             ignore
               (Stft.invert Nx.float64 c (Nx.zeros Nx.complex128 [|1025; 3|])) ) ;
         (* a gap between the window supports: the taper is shorter than the
@@ -374,16 +375,66 @@ let error_tests =
         in
         raises_invalid_arg ~msg:"window shorter than the hop"
           "invert: cannot invert a 1200-point window advanced by 1500 samples \
-           inside a 2048-point frame (the squared window must overlap-add to a \
-           nonzero value at every position)" (fun () ->
+           inside a 2048-point frame (the overlap-added squared window must \
+           stay above 1e-10 of its largest value at every position)" (fun () ->
             ignore
               (Stft.invert Nx.float64 gapped
                  (Nx.zeros Nx.complex128 [|1025; 3|]) ) ) ;
         raises_invalid_arg ~msg:"griffin_lim checks the same criterion"
           "griffin_lim: cannot invert a 2048-point window advanced by 2048 \
-           samples inside a 2048-point frame (the squared window must \
-           overlap-add to a nonzero value at every position)" (fun () ->
+           samples inside a 2048-point frame (the overlap-added squared window \
+           must stay above 1e-10 of its largest value at every position)"
+          (fun () ->
             ignore (Stft.griffin_lim c (Nx.zeros Nx.float64 [|1025; 3|])) ) )
+  ; test "an envelope below the relative floor is rejected too" (fun () ->
+        (* the criterion is numerical, not a test for zero: every position here
+           is reached by taps the window does not send to zero, and the fold of
+           the squared window is strictly positive everywhere, but a strongly
+           tapered window at a small overlap leaves it so far below its own
+           maximum that dividing by it would return rounding rather than signal.
+           [1e-10] of the maximum is the line, and nothing else is. *)
+        let window = Window.Kaiser 20. in
+        let taps =
+          Nx.to_array (Window.make Nx.float64 ~periodic:true window 64)
+        in
+        let cell hop = Stft.Config.create ~window ~fft_size:64 ~hop () in
+        let fold hop =
+          let folded = Array.make hop 0. and reached = Array.make hop false in
+          Array.iteri
+            (fun j w ->
+              let r = j mod hop in
+              folded.(r) <- folded.(r) +. (w *. w) ;
+              if Float.abs w > 0. then reached.(r) <- true )
+            taps ;
+          ( Array.fold_left Float.min Float.infinity folded
+          , Array.fold_left Float.max 0. folded
+          , Array.for_all Fun.id reached )
+        in
+        List.iter
+          (fun hop ->
+            let lo, hi, reached = fold hop in
+            let name = Printf.sprintf "hop%d" hop in
+            is_true ~msg:(name ^ ": every position has a nonzero tap") reached ;
+            is_true
+              ~msg:(Printf.sprintf "%s: the fold bottoms at %.4g" name lo)
+              (lo > 0.) ;
+            is_true
+              ~msg:(Printf.sprintf "%s: the fold ratio is %.4g" name (lo /. hi))
+              (lo /. hi > 1e-10 = (hop = 56)) )
+          [63; 56] ;
+        raises_invalid_arg ~msg:"below the floor"
+          "invert: cannot invert a 64-point window advanced by 63 samples \
+           inside a 64-point frame (the overlap-added squared window must stay \
+           above 1e-10 of its largest value at every position)" (fun () ->
+            ignore
+              (Stft.invert Nx.float64 (cell 63)
+                 (Nx.zeros Nx.complex128 [|33; 3|]) ) ) ;
+        let accepted = cell 56 in
+        let out =
+          Nx.dim (-1)
+            (Stft.invert Nx.float64 accepted (Nx.zeros Nx.complex128 [|33; 3|]))
+        in
+        equal ~msg:"above the floor" int 3 (Stft.frames accepted ~n:out) )
   ; test "the spectral shape is checked before any transform" (fun () ->
         let c = config (32, 8, 20) `Centered `Reflect in
         raises_invalid_arg ~msg:"rank one"

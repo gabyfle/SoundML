@@ -78,8 +78,8 @@ val cola : t -> length:int -> hop:int -> bool
     constant, so overlap-adding windowed frames rebuilds the signal up to
     that constant with no envelope to divide out. It is stronger than what
     {!Stft.invert} requires at the same window and hop — that the {e squared}
-    window overlap-add to a nonzero value at every position — and
-    configurations this predicate rejects still invert.
+    window overlap-add at every position to more than [1e-10] of its largest
+    such sum — and configurations this predicate rejects still invert.
 
     The check is numerical: the window is overlap-added at every shift that
     is a multiple of [hop], and the resulting per-sample sums over one hop

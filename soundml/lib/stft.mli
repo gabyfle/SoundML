@@ -245,16 +245,23 @@ val power_spectrum :
     re-analyses the signal it has just synthesised, and that analysis pads.
 
     Reconstruction is defined wherever the analysis windows overlap-add to
-    something nonzero. That is the invertibility criterion both entry points
-    check: the squared window, summed over the frame grid, must be nonzero at
-    every position. It is strictly weaker than asking that sum to be
-    {e constant}, because dividing by the measured envelope corrects any shape
-    it has, and it fails exactly when the frame grid leaves positions no
-    {e nonzero} window tap reaches — either a hop past the window's support,
-    or one that lands nothing there but zeros of the window itself, as a
-    periodic Hann advanced by its own length does at the frame boundary. It
-    is not the condition {!Window.cola} tests either: that one overlap-adds
-    the window itself rather than its square.
+    something the division can use. That is the invertibility criterion both
+    entry points check: the squared window, summed over the frame grid, must
+    stay above [1e-10] of its own largest value at every position. It is
+    strictly weaker than asking that sum to be {e constant}, because dividing
+    by the measured envelope corrects any shape it has, and strictly stronger
+    than asking it to be nonzero, because an envelope that clears zero by less
+    than the rounding of the two transforms determines its position in name
+    only — the check is numerical, as {!Window.cola}'s is, and the floor is
+    the whole of the difference. So it fails in two ways: at positions no
+    {e nonzero} window tap reaches — a hop past the window's support, or one
+    that lands nothing there but zeros of the window itself, as a periodic
+    Hann advanced by its own length does at the frame boundary — and at
+    positions a strongly tapered window reaches through its far tails alone,
+    where the fold is positive but below the floor, as a Kaiser or a Gaussian
+    of large shape parameter is at a quarter overlap. It is not the condition
+    {!Window.cola} tests either: that one overlap-adds the window itself
+    rather than its square.
 
     Positions the analysis window sends to zero carry no information and come
     back as [0] rather than as a division by zero. With [`Left] and [`Right]
@@ -318,9 +325,10 @@ val invert :
 
     Raises [Invalid_argument] if [z] has rank below two, if its bin axis is
     not [bins c] long, if [length] is negative, or if the configuration is not
-    invertible: a window whose square does not overlap-add to a nonzero value
-    at every position (a hop wider than the window's support, in particular)
-    determines no signal at the positions it misses. *)
+    invertible: a window whose square overlap-adds somewhere on the frame grid
+    to less than [1e-10] of its largest value there (a hop wider than the
+    window's support, in particular) determines no signal at those positions,
+    or none the envelope division could carry. *)
 
 val griffin_lim :
      ?n_iter:int

@@ -707,13 +707,14 @@ let folded_square_window (c : Config.t) =
   done ;
   folded
 
-(* [nola c] is [true] iff that quotient is defined everywhere: the overlap-added
-   squared window is nonzero at every position. The fold above collects every
-   value the envelope can take, so the criterion is the minimum of the fold,
-   floored relative to its maximum. This is the nonzero overlap-add condition,
-   necessary and sufficient for invertibility — strictly weaker than requiring
-   the envelope to be constant. A hop wider than the frame leaves whole residue
-   classes untouched. *)
+(* [nola c] is [true] iff that quotient is defined everywhere and the division
+   is conditioned: the fold above collects every value the envelope can take, so
+   the criterion is the minimum of the fold, floored at [1e-10] of its maximum.
+   Nonzero overlap-add is the mathematical condition, necessary and sufficient
+   for invertibility and strictly weaker than requiring the envelope to be
+   constant; the relative floor adds to it the envelopes that clear zero by less
+   than the rounding of the two transforms survives. A hop wider than the frame
+   leaves whole residue classes untouched. *)
 let nola (c : Config.t) =
   Config.hop c <= Config.fft_size c
   &&
@@ -731,8 +732,8 @@ let check_invertible op (c : Config.t) =
     invalid_arg
       (Printf.sprintf
          "%s: cannot invert a %d-point window advanced by %d samples inside a \
-          %d-point frame (the squared window must overlap-add to a nonzero \
-          value at every position)"
+          %d-point frame (the overlap-added squared window must stay above \
+          1e-10 of its largest value at every position)"
          op (Config.win_length c) (Config.hop c) (Config.fft_size c) )
 
 (* [check_frames op c t] enforces the spectral shape both synthesis entry points
