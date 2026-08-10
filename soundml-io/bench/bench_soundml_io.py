@@ -13,6 +13,15 @@ close-to-close on both sides (no fsync anywhere). The resampled-read row
 has no Python twin here by design: librosa's resampler is a different
 algorithm, so that comparison would measure the resampler, not the I/O.
 
+On multichannel files the two libraries deliver different objects:
+``soundfile.read`` returns the interleaved ``(frames, channels)`` buffer
+libsndfile wrote and ``librosa.load`` returns ``.T`` of it — a strided
+view, no copy — while ``Soundml_io.read`` delivers C-contiguous
+``[channels; frames]``. The ``librosa_contig`` rows add
+``np.ascontiguousarray`` so one row per stereo cell compares equal
+layouts; the view rows stay next to them, being what the two libraries
+actually hand a caller.
+
 Discipline: warm cache (one untimed pass), gc disabled inside timed
 regions, min-of-N primary statistic with the median as sanity.
 
@@ -128,6 +137,13 @@ def main() -> None:
             emit(
                 f"librosa_fair {fam} 30s",
                 lambda p=bulk: librosa.load(p, sr=None, mono=False),
+                30,
+            )
+            emit(
+                f"librosa_contig {fam} 30s",
+                lambda p=bulk: np.ascontiguousarray(
+                    librosa.load(p, sr=None, mono=False)[0]
+                ),
                 30,
             )
             emit(
