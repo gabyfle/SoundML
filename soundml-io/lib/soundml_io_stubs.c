@@ -34,10 +34,11 @@
    locals before the lock is reacquired, and no OCaml value is touched in
    between. No OCaml callback is reachable from any I/O path.
 
-   Decode is single-copy: a mono destination is decoded into directly, 65536
-   frames per sf_readf call; a multichannel destination goes through one
-   staging block — clamp(262144 / (channels * elt_size), 4096, 65536) frames
-   — whose deinterleave (or downmix) pass is the only full-size copy beyond
+   Decode is single-copy: a mono destination is decoded into directly, one
+   sf_readf call over the whole extent the caller's destination already
+   sizes; a multichannel destination goes through one staging block —
+   clamp(262144 / (channels * elt_size), 4096, 65536) frames — whose
+   deinterleave (or downmix) pass is the only full-size copy beyond
    libsndfile's own decode write. The block is <= 256 KB while the byte
    budget sets the count (up to 64 bytes per frame: 16 channels of float32,
    8 of float64); past that the 4096-frame floor dominates and the block
@@ -62,6 +63,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__GNUC__)
+#include <arm_neon.h>
+#define SOUNDML_IO_NEON_PAIR 1
+#endif
+
 #include <sndfile.h>
 
 #include <caml/alloc.h>
@@ -72,9 +78,10 @@
 #include <caml/mlvalues.h>
 #include <caml/threads.h>
 
-/* Frames libsndfile is handed per sf_readf/sf_writef call, unconditionally
-   (the Vorbis write segfault cap; symmetric on reads so no call ever hands
-   libsndfile an unbounded count). */
+/* Frames libsndfile is handed per sf_writef call, unconditionally (the
+   Vorbis write segfault cap), and the ceiling of the staging block that
+   bounds every staged call. A direct decode carries no such bound: it is one
+   sf_readf over the destination the caller already sized. */
 #define SOUNDML_IO_CALL_FRAMES ((int64_t) 65536)
 
 /* Staging block byte budget. Sets the block's frame count only down to the
@@ -316,6 +323,55 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
   return malloc((size_t) bytes);
 }
 
+/* {1 The two-channel layout pass}
+
+   Stereo carries the bulk of the layout traffic, so on arm64 it is spelled
+   out: paired lane loads (ld2) split the staging block into its two channels
+   and each channel cursor is written with a non-temporal paired store. The
+   destination is written exactly once here and is not read again before the
+   call returns, so keeping it out of the caches leaves the staging block —
+   which the next decoder call overwrites and reads again — resident. STNP
+   addresses Normal memory with no alignment requirement, so neither cursor
+   has to be aligned; the tail below the unrolled width is stored plainly.
+   Everywhere else the same movement as the plain loop, left to the
+   vectorizer. */
+
+#ifdef SOUNDML_IO_NEON_PAIR
+#define SOUNDML_IO_DEINTERLEAVE2(SUFFIX, T, VEC2, VLD2, LANES)                \
+  static void soundml_io_deinterleave2_##SUFFIX(                              \
+      const T *restrict s, T *restrict o0, T *restrict o1, int64_t n) {       \
+    int64_t i = 0;                                                            \
+    for (; i + (2 * (LANES)) <= n; i += 2 * (LANES)) {                        \
+      VEC2 a = VLD2(s + (2 * i));                                             \
+      VEC2 b = VLD2(s + (2 * i) + (2 * (LANES)));                             \
+      __asm__ volatile("stnp %q0, %q1, [%2]"                                  \
+                       :                                                      \
+                       : "w"(a.val[0]), "w"(b.val[0]), "r"(o0 + i)            \
+                       : "memory");                                           \
+      __asm__ volatile("stnp %q0, %q1, [%2]"                                  \
+                       :                                                      \
+                       : "w"(a.val[1]), "w"(b.val[1]), "r"(o1 + i)            \
+                       : "memory");                                           \
+    }                                                                         \
+    for (; i < n; i++) {                                                      \
+      o0[i] = s[2 * i];                                                       \
+      o1[i] = s[(2 * i) + 1];                                                 \
+    }                                                                         \
+  }
+#else
+#define SOUNDML_IO_DEINTERLEAVE2(SUFFIX, T, VEC2, VLD2, LANES)                \
+  static void soundml_io_deinterleave2_##SUFFIX(                              \
+      const T *restrict s, T *restrict o0, T *restrict o1, int64_t n) {       \
+    for (int64_t i = 0; i < n; i++) {                                         \
+      o0[i] = s[2 * i];                                                       \
+      o1[i] = s[(2 * i) + 1];                                                 \
+    }                                                                         \
+  }
+#endif
+
+SOUNDML_IO_DEINTERLEAVE2(f32, float, float32x4x2_t, vld2q_f32, 4)
+SOUNDML_IO_DEINTERLEAVE2(f64, double, float64x2x2_t, vld2q_f64, 2)
+
 /* {1 Decode kernels}
 
    One instantiation per sample type. The planar deinterleave walks the
@@ -327,16 +383,9 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
 #define SOUNDML_IO_READ_KERNEL(SUFFIX, T, SF_READF)                           \
   static int64_t soundml_io_read_direct_##SUFFIX(SNDFILE *file, T *dst,       \
                                                  int64_t frames) {            \
-    int64_t done = 0;                                                         \
-    while (done < frames) {                                                   \
-      int64_t want = frames - done;                                           \
-      if (want > SOUNDML_IO_CALL_FRAMES) want = SOUNDML_IO_CALL_FRAMES;       \
-      int64_t got = SF_READF(file, dst + done, want);                         \
-      if (got <= 0) break;                                                    \
-      done += got;                                                            \
-      if (got < want) break;                                                  \
-    }                                                                         \
-    return done;                                                              \
+    /* one call over the whole extent; a short delivery is the stream's end */\
+    int64_t got = SF_READF(file, dst, frames);                                \
+    return got > 0 ? got : 0;                                                 \
   }                                                                           \
   static int64_t soundml_io_read_planar_##SUFFIX(                             \
       SNDFILE *file, T *restrict dst, int64_t dst_off, int64_t dst_total,     \
@@ -352,16 +401,8 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
       if (mode == SOUNDML_IO_MODE_PLANAR) {                                   \
         T *out = dst + dst_off + done;                                        \
         if (channels == 2) {                                                  \
-          /* the stereo transpose, written as an interleave group the        \
-             vectorizer lowers to paired lane loads (ld2 on arm64) — the     \
-             layout pass must track the decoder, not trail it */             \
-          T *restrict o0 = out;                                              \
-          T *restrict o1 = out + dst_total;                                  \
-          const T *restrict s = staging;                                     \
-          for (int64_t i = 0; i < got; i++) {                                \
-            o0[i] = s[2 * i];                                                \
-            o1[i] = s[(2 * i) + 1];                                          \
-          }                                                                  \
+          soundml_io_deinterleave2_##SUFFIX(staging, out, out + dst_total,   \
+                                            got);                            \
         } else {                                                             \
           for (int64_t i = 0; i < got; i++) {                                \
             const T *fr = staging + (i * channels);                          \
