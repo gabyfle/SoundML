@@ -14,9 +14,9 @@
    Also here: the consistent-spectrogram fixed point (starting from the true
    phase of a signal returns that signal's synthesis), the padding grid — the
    iteration re-analyses what it synthesises, so unlike [Stft.invert] it reads
-   [pad] — shape stability across alignments, and the argument rejections.
-   Nothing in the module draws a random number, so every case is a plain
-   equality on rerun. *)
+   [pad] — shape stability across alignments, the one geometry that leaves the
+   iteration no length to run at, and the argument rejections. Nothing in the
+   module draws a random number, so every case is a plain equality on rerun. *)
 
 open Windtrap
 open Soundml
@@ -206,6 +206,54 @@ let padding_tests =
               pads )
           [("centered", `Centered); ("left", `Left); ("right", `Right)] ) ]
 
+(* {2 The geometry with no natural length} *)
+
+(* The iteration runs at the default length of [Stft.invert], and under
+   [`Centered] with an even [fft_size] a single frame has none: the boundary
+   extension is the whole frame, so the frame spans no signal. There is then
+   nothing to synthesise and re-analyse, no iteration runs however many are
+   asked for, and what comes back is [init] put through one synthesis — which at
+   [`Zero_phase] is the magnitudes taken as a real spectrum. The last case shows
+   the equality is not vacuous: two frames leave a signal to iterate on, and the
+   iteration count changes the answer. *)
+
+let no_length_tests =
+  [ test "a single centered frame leaves nothing to iterate on" (fun () ->
+        let c = config () in
+        (* 100 samples is one frame on this geometry, 200 is two *)
+        let one = Nx.create Nx.float64 [|100|] (lcg_signal 100) in
+        let s = magnitudes c one in
+        equal ~msg:"one frame" int 1 (Nx.dim (-1) s) ;
+        equal ~msg:"empty by default" (array int) [|0|]
+          (Nx.shape (Stft.griffin_lim c s)) ;
+        let zero_phase = Nx.complex Nx.complex128 ~re:s ~im:(Nx.zeros_like s) in
+        List.iter
+          (fun length ->
+            let once =
+              Nx.to_array (Stft.invert Nx.float64 c ~length zero_phase)
+            in
+            List.iter
+              (fun n_iter ->
+                Tutils.check_close ~rtol:0. ~atol:0.
+                  ~msg:
+                    (Printf.sprintf "length %d after %d iterations" length
+                       n_iter )
+                  ~expected:once
+                  (Stft.griffin_lim ~n_iter c ~length s) )
+              [1; 32] )
+          [1; 300; 4096] ;
+        let two = Nx.create Nx.float64 [|200|] (lcg_signal 200) in
+        let s = magnitudes c two in
+        equal ~msg:"two frames" int 2 (Nx.dim (-1) s) ;
+        let gap =
+          max_gap
+            (Stft.griffin_lim ~n_iter:1 c ~length:200 s)
+            (Stft.griffin_lim ~n_iter:32 c ~length:200 s)
+        in
+        is_true
+          ~msg:(Printf.sprintf "two frames iterate, and move by %.6g" gap)
+          (gap > separated) ) ]
+
 (* {2 Rejections} *)
 
 let error_tests =
@@ -237,4 +285,5 @@ let suite =
   [ group "descent" descent_tests
   ; group "fixed-point" fixed_point_tests
   ; group "padding" padding_tests
+  ; group "no-natural-length" no_length_tests
   ; group "errors" error_tests ]

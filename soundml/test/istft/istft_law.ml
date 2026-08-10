@@ -30,8 +30,9 @@
    - [`Right] analysis is [`Left] analysis of the left-extended signal, so its
    synthesis is the [`Left] synthesis with that extension dropped.
 
-   - the default output length is the fixed point of the frame geometry, and
-   leading axes broadcast.
+   - the default output length is the shortest fixed point of the frame
+   geometry, down to the single frame where [`Centered] with an even [fft_size]
+   has none, and leading axes broadcast.
 
    - the invertibility criterion rejects both shapes of gap and the envelopes
    that clear zero by less than its relative floor, and the shape and length
@@ -291,33 +292,73 @@ let right_shift_tests =
 
 (* {2 Lengths, shapes and batching} *)
 
+(* The whole of the default-length contract, on a spectrum of [frames] frames:
+   the length returned analyses back to [frames], no shorter length does, and
+   the [hop] lengths starting there analyse to [frames] as well while the next
+   one gains a frame.
+
+   One geometry stands outside it. Under [`Centered] the boundary extension is
+   [2 * (fft_size / 2)], which for an even [fft_size] is the whole frame, so a
+   single frame spans no signal at all: the length is 0, and 0 analyses to no
+   frames rather than to one. The shortest length that does analyse to one frame
+   is then 1 — except at [hop = 1], where the second frame completes at the
+   first sample and no length analyses to one frame at all. *)
+let default_length_law c (fft, hop, wl) aname ~frames =
+  let msg suffix =
+    Printf.sprintf "fft%d_hop%d_win%d %s frames=%d: %s" fft hop wl aname frames
+      suffix
+  in
+  let out =
+    Nx.dim (-1)
+      (Stft.invert Nx.float64 c
+         (Nx.zeros Nx.complex128 [|Stft.Config.bins c; frames|]) )
+  in
+  if frames = 1 && Stft.Config.alignment c = `Centered && fft mod 2 = 0 then begin
+    equal ~msg:(msg "the frame spans no signal") int 0 out ;
+    equal ~msg:(msg "and no signal is no frame") int 0 (Stft.frames c ~n:0) ;
+    if hop > 1 then
+      equal ~msg:(msg "one sample is one frame") int 1 (Stft.frames c ~n:1)
+    else
+      equal
+        ~msg:(msg "one sample is already two frames")
+        int 2 (Stft.frames c ~n:1)
+  end
+  else begin
+    equal ~msg:(msg "fixed point") int frames (Stft.frames c ~n:out) ;
+    if out > 0 then
+      is_true ~msg:(msg "nothing shorter") (Stft.frames c ~n:(out - 1) < frames) ;
+    if frames > 0 then begin
+      equal ~msg:(msg "last of the run") int frames
+        (Stft.frames c ~n:(out + hop - 1)) ;
+      equal ~msg:(msg "one past the run") int (frames + 1)
+        (Stft.frames c ~n:(out + hop))
+    end
+  end
+
 let shape_tests =
   [ test "the default length is the frame-count fixed point" (fun () ->
         List.iter
-          (fun ((fft, hop, wl) as cell) ->
+          (fun cell ->
             List.iter
               (fun (aname, alignment) ->
                 List.iter
                   (fun n ->
                     let c = config cell alignment (`Constant 0.) in
-                    let frames = Stft.frames c ~n in
-                    if frames > 0 then begin
-                      let x = Nx.zeros Nx.float64 [|n|] in
-                      let y =
-                        Stft.invert Nx.float64 c
-                          (Stft.transform Nx.complex128 c x)
-                      in
-                      let out = Nx.dim (-1) y in
-                      if out > 0 then
-                        equal
-                          ~msg:
-                            (Printf.sprintf "fft%d_hop%d_win%d %s n=%d" fft hop
-                               wl aname n )
-                          int frames (Stft.frames c ~n:out)
-                    end )
+                    default_length_law c cell aname ~frames:(Stft.frames c ~n) )
                   lengths )
               alignments )
           cells )
+  ; test "the default length holds down to a single frame" (fun () ->
+        List.iter
+          (fun cell ->
+            List.iter
+              (fun (aname, alignment) ->
+                let c = config cell alignment (`Constant 0.) in
+                List.iter
+                  (fun frames -> default_length_law c cell aname ~frames)
+                  [0; 1; 2; 3] )
+              alignments )
+          ((2048, 512, 2048) :: (2048, 500, 1200) :: (6, 1, 6) :: cells) )
   ; test "leading axes broadcast" (fun () ->
         let cell = (32, 8, 20) in
         let n = 200 in

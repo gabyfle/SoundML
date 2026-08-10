@@ -297,11 +297,15 @@ val invert :
     [dtype], like the analysis.
 
     Without [length] the result has [(frames - 1) * hop + fft_size] samples
-    less the boundary extension of the alignment, the shortest length that
-    analyses back to exactly [frames] frames:
+    less the boundary extension of the alignment. That is the shortest length
+    which analyses back to exactly [frames] frames:
     [frames c ~n:(Nx.dim (-1) (invert dtype c z)) = frames]. It is not the only
-    such length — every one up to a sample short of the next hop analyses to
-    [frames] as well — but it is the one returned when none is asked. With
+    such length — the [hop] consecutive lengths starting there analyse to
+    [frames] as well — but it is the one returned when none is asked. One
+    geometry escapes that law, and only at [frames = 1]: under [`Centered]
+    with an even [fft_size] the extension is the whole frame, so the length is
+    [0], which analyses to no frames at all. The lengths that analyse to one
+    frame are [1] to [hop - 1] there, and there are none when [hop = 1]. With
     [length] the result has exactly that many samples: frames that lie entirely
     past it are never inverted, and a length beyond the frames is zero-filled.
 
@@ -373,8 +377,12 @@ val griffin_lim :
     machines up to floating-point reproducibility.
 
     [length] fixes the length of the returned signal exactly as in {!invert},
-    and applies only to the final synthesis: the iteration itself always runs
-    at the natural length, the one that re-analyses to the frame count of [s].
+    and applies only to the final synthesis: the iteration itself runs at the
+    default length of {!invert}, which re-analyses to the frame count of [s].
+    Where that length is [0] — a single frame under [`Centered] with an even
+    [fft_size], the one geometry {!invert} documents — there is no signal to
+    re-analyse and no iteration runs, whatever [n_iter] asks for: the result
+    is then [init] synthesised once at [length].
 
     Raises [Invalid_argument] under the conditions of {!invert}, and if
     [n_iter < 1], if [momentum] is negative, or if [`Phase p] does not have
