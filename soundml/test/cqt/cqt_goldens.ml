@@ -36,10 +36,10 @@ let tight32_atol = 5e-6
    librosa with SoX Resampler at soxr_hq; two filters meeting one specification
    are not the same filter. Measured worst over the wide file: 1.08e-4 of peak
    on the harmonic signal (w4, variable-Q at gamma = 20) and 1.40e-4 on the
-   short broadband cases (s1, 1024 samples). For scale, running the same
-   comparison with soxr's own next quality tier in place of soxr_hq moves those
-   two cases by 2.28e-4 and 4.14e-4 — SoundML sits closer to librosa's default
-   than librosa's own higher tier does. *)
+   short broadband cases (s1, 1024 samples). Those are the size of the gap
+   between any two conforming resamplers, not a quality shortfall: substituting
+   soxr's own higher tier for soxr_hq moves the same two cases by 2.28e-4 and
+   4.14e-4. *)
 let wide_atol = 6e-4
 
 (* Relative slack on top of the peak-anchored absolute term, for the entries

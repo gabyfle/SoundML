@@ -58,6 +58,7 @@ SUITE_DIRECTORIES = {
     "features_energy": "soundml/test/energy/vectors",
     "features_onset": "soundml/test/onset/vectors",
     "cqt": "soundml/test/cqt/vectors",
+    "chroma": "soundml/test/chroma/vectors",
     "resample": "soundml/test/resample/vectors",
     "io": "soundml-io/test/vectors",
 }
@@ -1725,6 +1726,267 @@ class CqtVectorGenerator:
         )
 
 
+class ChromaVectorGenerator:
+    """Golden vectors for Soundml.Chroma and the flat chroma features.
+
+    Three files:
+
+    - chroma_fb: librosa.filters.chroma weight matrices in float64 (librosa
+      builds them in float32 by default, so every call passes
+      dtype=np.float64), across n_chroma including an odd one, both octave
+      envelopes, both base rotations and nonzero tunings; plus
+      librosa.filters.cq_to_chroma assignment matrices, which are exactly 0/1.
+    - chroma_stft: librosa.feature.chroma_stft end-to-end over the CQT suite's
+      harmonic signal, covering the three normalisations this library offers.
+    - chroma_cqt: librosa.feature.chroma_cqt over a constant-Q transform
+      computed with sparsity=0 and passed in as C, since the y= path would
+      carry librosa's default sparsified filter basis; one case uses an odd hop
+      so that neither side resamples.
+
+    float32 cases quantize the signal to float32 and compute the reference in
+    float64, exactly like the stft suite.
+    """
+
+    SUITE = "chroma"
+
+    SR = CqtVectorGenerator.SR
+
+    C1 = CqtVectorGenerator.C1
+
+    # (case key, sample_rate, fft_size, n_chroma, tuning, ctroct, octwidth,
+    #  base_c)
+    FILTERBANKS = [
+        ("fb64_c12", SR, 64, 12, 0.0, 5.0, 2.0, True),
+        ("fb64_c12_flat", SR, 64, 12, 0.0, 5.0, None, True),
+        ("fb64_c24", SR, 64, 24, 0.0, 5.0, 2.0, True),
+        ("fb128_c12", SR, 128, 12, 0.0, 5.0, 2.0, True),
+        ("fb128_c12_basea", SR, 128, 12, 0.0, 5.0, 2.0, False),
+        ("fb128_c12_tuned", SR, 128, 12, 0.22, 5.0, 2.0, True),
+        ("fb128_c13_odd", SR, 128, 13, 0.0, 5.0, 2.0, True),
+        ("fb128_c24_tuned_neg", SR, 128, 24, -0.35, 4.0, 1.5, True),
+        ("fb128_c12_sr44100", 44100, 128, 12, 0.0, 5.0, 2.0, True),
+    ]
+
+    # (case key, n_bins, bins_per_octave, n_chroma, fmin)
+    PROJECTIONS = [
+        ("cq84_bpo12_c12", 84, 12, 12, C1),
+        ("cq252_bpo36_c12", 252, 36, 12, C1),
+        ("cq120_bpo24_c24", 120, 24, 24, C1),
+        ("cq120_bpo24_c12", 120, 24, 12, C1),
+        ("cq60_bpo12_c12_a1", 60, 12, 12, 55.0),
+        ("cq84_bpo12_c4", 84, 12, 4, C1),
+    ]
+
+    def filterbank_cases(self):
+        cases = []
+        for (key, sr, fft_size, n_chroma, tuning, ctroct, octwidth,
+             base_c) in self.FILTERBANKS:
+            weights = librosa.filters.chroma(
+                sr=sr,
+                n_fft=fft_size,
+                n_chroma=n_chroma,
+                tuning=tuning,
+                ctroct=ctroct,
+                octwidth=octwidth,
+                base_c=base_c,
+                dtype=np.float64,
+            )
+            assert weights.shape == (n_chroma, 1 + fft_size // 2)
+            cases.append(
+                {
+                    "name": key,
+                    "params": {
+                        "kind": "filterbank",
+                        "sample_rate": sr,
+                        "fft_size": fft_size,
+                        "n_chroma": n_chroma,
+                        "tuning": tuning,
+                        "ctroct": ctroct,
+                        "octwidth": octwidth,
+                        "base_c": base_c,
+                    },
+                    "shape": list(weights.shape),
+                    "values": weights.flatten().tolist(),
+                }
+            )
+        return cases
+
+    def projection_cases(self):
+        cases = []
+        for key, n_bins, bpo, n_chroma, fmin in self.PROJECTIONS:
+            weights = librosa.filters.cq_to_chroma(
+                n_bins,
+                bins_per_octave=bpo,
+                n_chroma=n_chroma,
+                fmin=fmin,
+                base_c=True,
+                dtype=np.float64,
+            )
+            assert set(np.unique(weights)) <= {0.0, 1.0}
+            cases.append(
+                {
+                    "name": key,
+                    "params": {
+                        "kind": "cqt_projection",
+                        "sample_rate": self.SR,
+                        "n_bins": n_bins,
+                        "bins_per_octave": bpo,
+                        "n_chroma": n_chroma,
+                        "fmin": fmin,
+                        "tuning": 0.0,
+                        "hop": 512,
+                    },
+                    "shape": list(weights.shape),
+                    "values": weights.flatten().tolist(),
+                }
+            )
+        return cases
+
+    NORMS = {"inf": np.inf, "l2": 2, "l1": 1, "none": None}
+
+    # (case key, length, fft_size, hop, n_chroma, norm, power, dtype)
+    SPECTRA = [
+        ("stft_n2048_c12_inf", 8192, 2048, 512, 12, "inf", 2.0, "float64"),
+        ("stft_n4096_c12_l2", 8192, 4096, 1024, 12, "l2", 2.0, "float64"),
+        ("stft_n2048_c24_none", 8192, 2048, 512, 24, "none", 2.0, "float64"),
+        ("stft_n2048_c12_l1_mag", 8192, 2048, 512, 12, "l1", 1.0, "float64"),
+        ("stft_n2048_c12_inf", 8192, 2048, 512, 12, "inf", 2.0, "float32"),
+    ]
+
+    def spectrum_cases(self):
+        cases = []
+        for (key, length, fft_size, hop, n_chroma, norm, power,
+             dtype) in self.SPECTRA:
+            base = CqtVectorGenerator.harmonic(length, self.SR)
+            y = (
+                base
+                if dtype == "float64"
+                else base.astype(np.float32).astype(np.float64)
+            )
+            spectrum = (
+                np.abs(
+                    librosa.stft(
+                        y,
+                        n_fft=fft_size,
+                        hop_length=hop,
+                        window="hann",
+                        center=True,
+                        pad_mode="constant",
+                        dtype=np.complex128,
+                    )
+                )
+                ** power
+            )
+            expected = librosa.feature.chroma_stft(
+                S=spectrum,
+                sr=self.SR,
+                n_fft=fft_size,
+                tuning=0.0,
+                n_chroma=n_chroma,
+                norm=self.NORMS[norm],
+                dtype=np.float64,
+            )
+            cases.append(
+                {
+                    "name": f"{key}_{dtype}",
+                    "params": {
+                        "kind": "chroma_stft",
+                        "signal": "harmonic",
+                        "length": length,
+                        "sample_rate": self.SR,
+                        "fft_size": fft_size,
+                        "hop": hop,
+                        "n_chroma": n_chroma,
+                        "tuning": 0.0,
+                        "norm": norm,
+                        "power": power,
+                        "dtype": dtype,
+                    },
+                    "shape": list(expected.shape),
+                    "values": expected.flatten().tolist(),
+                }
+            )
+        return cases
+
+    # (case key, length, n_bins, bins_per_octave, fmin, hop, n_chroma, norm,
+    #  dtype)
+    CONSTANT_Q = [
+        ("cqt84_hop512_inf", 8192, 84, 12, C1, 512, 12, "inf", "float64"),
+        ("cqt252_bpo36_hop512_l2", 4096, 252, 36, C1, 512, 12, "l2", "float64"),
+        ("cqt120_bpo24_c24_none", 8192, 120, 24, C1, 512, 24, "none", "float64"),
+        ("cqt84_hop511_inf", 8192, 84, 12, C1, 511, 12, "inf", "float64"),
+        ("cqt84_hop512_inf", 8192, 84, 12, C1, 512, 12, "inf", "float32"),
+    ]
+
+    def constant_q_cases(self):
+        cases = []
+        for (key, length, n_bins, bpo, fmin, hop, n_chroma, norm,
+             dtype) in self.CONSTANT_Q:
+            base = CqtVectorGenerator.harmonic(length, self.SR)
+            y = (
+                base
+                if dtype == "float64"
+                else base.astype(np.float32).astype(np.float64)
+            )
+            transform = np.abs(
+                librosa.vqt(
+                    y,
+                    sr=self.SR,
+                    hop_length=hop,
+                    fmin=fmin,
+                    n_bins=n_bins,
+                    bins_per_octave=bpo,
+                    gamma=0,
+                    scale=True,
+                    **CqtVectorGenerator.COMMON,
+                )
+            )
+            expected = librosa.feature.chroma_cqt(
+                C=transform,
+                sr=self.SR,
+                hop_length=hop,
+                fmin=fmin,
+                n_chroma=n_chroma,
+                n_octaves=int(np.ceil(n_bins / bpo)),
+                bins_per_octave=bpo,
+                norm=self.NORMS[norm],
+                threshold=0.0,
+            )
+            cases.append(
+                {
+                    "name": f"{key}_{dtype}",
+                    "params": {
+                        "kind": "chroma_cqt",
+                        "signal": "harmonic",
+                        "length": length,
+                        "sample_rate": self.SR,
+                        "n_bins": n_bins,
+                        "bins_per_octave": bpo,
+                        "fmin": fmin,
+                        "hop": hop,
+                        "n_chroma": n_chroma,
+                        "gamma": "0.0",
+                        "tuning": 0.0,
+                        "scale": True,
+                        "norm": norm,
+                        "dtype": dtype,
+                    },
+                    "shape": list(expected.shape),
+                    "values": expected.flatten().tolist(),
+                }
+            )
+        return cases
+
+    def generate(self):
+        write_suite(
+            self.SUITE,
+            "chroma_fb",
+            self.filterbank_cases() + self.projection_cases(),
+        )
+        write_suite(self.SUITE, "chroma_stft", self.spectrum_cases())
+        write_suite(self.SUITE, "chroma_cqt", self.constant_q_cases())
+
+
 class IoVectorGenerator:
     """Golden fixtures and decode-parity vectors for Soundml_io.
 
@@ -2021,6 +2283,7 @@ GENERATORS = [
     EnergyFeaturesVectorGenerator,
     OnsetFeaturesVectorGenerator,
     CqtVectorGenerator,
+    ChromaVectorGenerator,
     IoVectorGenerator,
 ]
 
