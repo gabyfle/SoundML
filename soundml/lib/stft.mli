@@ -304,11 +304,13 @@ val invert :
     [frames c ~n:(Nx.dim (-1) (invert dtype c z)) = frames]. Neither is the
     only such length, and the run of lengths sharing the frame count depends on
     that count: at [frames >= 1] it is the [hop] consecutive lengths starting
-    at the returned one, and at [frames = 0] it is the lengths the boundary
-    extension leaves shorter than a single frame — [0] alone under [`Centered]
-    and [`Right], whose extensions are a frame wide to within one sample, and
-    [0] to [fft_size - 1] under [`Left], which extends nothing. The length just
-    past either run analyses to one frame more.
+    at the returned one, and at [frames = 0] it is [0] — which analyses to no
+    frames because the empty signal has none by definition, not because its
+    extension falls short of a frame — together with the positive lengths the
+    boundary extension does leave shorter than one: none under [`Centered] and
+    [`Right], whose extensions are a frame wide to within one sample, so the
+    run is [0] alone, and [1] to [fft_size - 1] under [`Left], which extends
+    nothing. The length just past either run analyses to one frame more.
 
     One geometry escapes the fixed point, and only at [frames = 1]: under
     [`Centered] with an even [fft_size] the extension is the whole frame, so
@@ -317,9 +319,10 @@ val invert :
     [hop = 1] — the length past the zero-frame run gains two frames at once
     instead of one.
 
-    With [length] the result has exactly that many samples: frames that lie
-    entirely past it are never inverted, and a length beyond the frames is
-    zero-filled.
+    With [length] the result has exactly that many samples: the frames that
+    open before its end are inverted and those that lie entirely past it are
+    not, so their contents cannot reach the result, and a length beyond the
+    frames is zero-filled.
 
     Round trip: [invert dtype c ~length:n (transform cdtype c x)] recovers [x]
     at every position some frame reaches through a nonzero window tap, for
