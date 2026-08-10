@@ -446,10 +446,11 @@ let gemm_rows_of ~m = Stdlib.max 2 (gemm_span / m)
 
 (* The stages the matrix product takes: at least this many phases — the product
    is [L] columns wide, and a narrow one leaves the machine idle between
-   reductions — together with a window no wider than twice the filter, [M <= 2K
-   + 1], which bounds the arithmetic a block-row spends against the [2K + 1]
-   multiplies an output needs. Everything else keeps the dot products or the
-   transforms. *)
+   reductions — with the bank budget the only other bar, so the same stages
+   qualify at every tier. A block-row reads a window [P] wider than the [2K + 1]
+   multiplies one output needs; over the standard rate pairs that redundancy
+   stays under four, which the platform matrix product carries. Stages with
+   fewer phases keep the dot products or the transforms. *)
 let gemm_min_phases = 64
 
 (* One polyphase stage of a plan: factors [sl / sm], group delay [sk] in
@@ -907,12 +908,10 @@ module Config = struct
         ; latency= k_single
         ; stages= [make_stage ~exec ~l ~m ~k:k_single ~fc ~beta ()] }
       in
-      (* The one stage runs as a matrix product when the ratio is phase-rich
-         against a narrow window: no split can beat it there, and the plan keeps
-         the single stage's latency and prototype exactly. *)
-      let gemm_single =
-        single_fits && l >= gemm_min_phases && m <= (2 * k_single) + 1
-      in
+      (* The one stage runs as a matrix product when the ratio is phase-rich: no
+         split beats it there, and the plan keeps the single stage's latency and
+         prototype exactly. *)
+      let gemm_single = single_fits && l >= gemm_min_phases in
       (* A pure ×F or ÷F conversion may run its one stage — the same designed
          filter, so the same latency and accessors to the bit — by overlap-save
          when the model prices the transform under the dense dot products. *)
