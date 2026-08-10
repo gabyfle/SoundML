@@ -89,19 +89,31 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
     every family, both sessions (budget 1.25x) — 2.2–3.3x faster than
     `librosa.load(sr=None, mono=False)` on WAV PCM, 1.7x on wav-float32,
     1.4–1.5x on FLAC, 1.1x on Ogg.
-  - **Bulk reads (30 s files)**: at the C ceiling on FLAC (1.02x), Ogg
-    (1.01x) and every mono cell (0.95–1.10x). The stereo WAV cells pay the
-    planar-materialization pass — `data` is C-contiguous
-    `[channels; frames]` by contract, and transposing libsndfile's
-    interleaved delivery costs ~0.2–0.3 ms per 30 s stereo file (~53 GB/s
-    effective; NEON `ld2` after the channel-2 specialization in the stubs)
-    — landing 1.19x (pcm16) to 1.73x (float32, where the baseline is pure
-    memcpy) over the interleaved-destination C ceiling. The comparison that
-    holds the layout fixed: librosa's channel-first result is a *strided
-    view* of the interleaved buffer; materializing it
-    (`np.ascontiguousarray`) costs python 4.26 ms (pcm16) / 1.03 ms
-    (float32) against our 1.24 ms / 0.51 ms — 2.0–3.3x in our favor on the
-    same delivered layout.
+  - **Bulk reads (30 s files)**: at the C ceiling on FLAC (1.01x), Ogg
+    (1.00x) and the PCM mono cells (0.98–1.01x). Two cells sit above it,
+    both for reasons outside the decode itself.
+
+    The stereo WAV cells pay the planar-materialization pass — `data` is
+    C-contiguous `[channels; frames]` by contract, and splitting
+    libsndfile's interleaved delivery costs 0.14–0.17 ms per 30 s stereo
+    file (arm64 `ld2` lane loads feeding non-temporal paired stores to the
+    two channel cursors, so the staging block survives the pass) — landing
+    1.10x (pcm24) to 1.52x (float32, where the baseline is pure memcpy)
+    over the interleaved-destination C ceiling. The comparison that holds
+    the layout fixed: librosa's channel-first result is a *strided view* of
+    the interleaved buffer; materializing it (`np.ascontiguousarray`, the
+    `librosa_contig` rows of the Python twin) costs 1.10 ms on wav-float32
+    against our 0.48–0.50 ms — 2.2x in our favor on the same delivered
+    layout, against 0.33 ms for the view librosa actually returns.
+
+    The wav-float32 30 s mono cell reads 1.19x its allocating C ceiling
+    (`read_alloc`: 0.167 ms against 0.140 ms) while the same decode into a
+    lent destination (`reader_out`) is 1.04x. The difference is the result
+    tensor's first touch: a fresh 5.3 MB bigarray is a fresh mapping and
+    the kernel zero-fills its pages under the decoder's `read(2)`
+    (~0.025 ms), where a C or CPython caller gets the previous buffer's
+    warm pages back from the allocator. It is visible only here — every
+    other 30 s cell decodes slowly enough to absorb it.
   - **Many small files (1000 x 1 s, total wall)**: the reused-destination
     loop runs 1.00–1.06x the C many-files ceiling (budget 1.15x, both
     sessions); the allocating loop runs 1.07–1.28x (OCaml GC churn on
@@ -126,11 +138,17 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
     the C pcm16 ceiling moved 8.3 → 13.4 ms between sessions) — so no
     stable WAV-write multiplier exists here; measured ratios scatter
     0.67–1.79x around the no-clipping C ceiling with no consistent
-    direction. Two structural facts hold regardless: `SFC_SET_CLIPPING` —
+    direction. Three structural facts hold regardless: `SFC_SET_CLIPPING` —
     the pinned saturation policy, byte-compared against python-soundfile
     by the goldens — costs +27% on the float-to-PCM conversion (measured
-    directly with a C probe), and FLAC/Ogg writes sit at parity with
-    python-soundfile.
+    directly with a C probe); FLAC/Ogg writes sit at parity with
+    python-soundfile; and the stereo cells carry the mirror of the read
+    side's materialization pass, since libsndfile takes interleaved input
+    and `data` is planar — 0.20–0.25 ms per 30 s stereo file, measured in
+    C as the whole distance between a staged planar write and the
+    interleaved-source ceiling, which is where the WAV float32 cell's
+    ~1.06x over python-soundfile lives (python's input is already
+    interleaved).
   - **Fused resampled read**: `read ~sample_rate` within 1.004x (44.1→16 k)
     and 1.045x (44.1→48 k) of reading natively and applying
     `Resample.apply` afterwards (budget 1.05x, min-of-N; the thumper
