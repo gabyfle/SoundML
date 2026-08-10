@@ -74,8 +74,12 @@ val make :
 
 val cola : t -> length:int -> hop:int -> bool
 (** [cola w ~length ~hop] is [true] iff the [length]-point periodic window
-    [w] satisfies constant overlap-add at hop [hop], the invertibility
-    precondition of inverse STFT overlap-add.
+    [w] satisfies constant overlap-add at hop [hop]: its shifts sum to a
+    constant, so overlap-adding windowed frames rebuilds the signal up to
+    that constant with no envelope to divide out. It is stronger than what
+    {!Stft.invert} requires at the same window and hop — that the {e squared}
+    window overlap-add at every position to more than [1e-10] of its largest
+    such sum — and configurations this predicate rejects still invert.
 
     The check is numerical: the window is overlap-added at every shift that
     is a multiple of [hop], and the resulting per-sample sums over one hop

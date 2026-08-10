@@ -52,6 +52,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SUITE_DIRECTORIES = {
     "windows": "soundml/test/window/vectors",
     "stft": "soundml/test/stft/vectors",
+    "istft": "soundml/test/istft/vectors",
     "mel": "soundml/test/mel/vectors",
     "db": "soundml/test/db/vectors",
     "features_spectral": "soundml/test/spectral/vectors",
@@ -380,6 +381,294 @@ class StftVectorGenerator:
         write_suite(self.SUITE, "complex_fft16_hop4", self.complex_cases(16, 4))
         write_suite(self.SUITE, "coordinates", self.coordinate_cases())
 
+
+
+class IstftVectorGenerator:
+    """Golden vectors for the synthesis side of Soundml.Stft.
+
+    Three kinds of file:
+
+    - inverse_<cell>: librosa.istft over deterministic synthetic spectra,
+      covering (fft_size, hop, win_length) combos x alignment x frame counts
+      x both float dtypes. The spectra come from two LCG streams (one per
+      complex component, reproduced bit-exactly in OCaml through integer
+      arithmetic), with the imaginary parts of the DC and Nyquist bins zeroed
+      so the inverse real FFT discards nothing and the vectors stay portable
+      across FFT implementations. They are deliberately inconsistent -- no
+      signal has exactly this transform -- so the cases exercise the
+      least-squares synthesis, not merely a round trip.
+
+    - lengths: the same, with an explicit output length above, below and at
+      the natural one, and one under a single frame span, pinning how many
+      frames a shortened request reads.
+
+    - griffinlim_<cell>: librosa.griffinlim at init=None (the deterministic
+      all-ones phase; librosa's default is a random init, which no committed
+      vector could pin), across iteration counts and momenta including the
+      momentum-free classic algorithm, over an LCG magnitude spectrogram that
+      is likewise inconsistent.
+
+    Alignments map to librosa as elsewhere in the suite: centered is
+    center=True, left is center=False, and right -- which has no librosa
+    counterpart -- is the center=False synthesis with the fft_size - 1
+    positions of its left extension dropped. pad_mode is always passed
+    explicitly, and the float32 cases quantize the input to float32 and
+    compute the reference in float64, so the reference isolates input
+    rounding from implementation precision.
+    """
+
+    SUITE = "istft"
+
+    # (case key, fft_size, hop, win_length)
+    COMBOS = [
+        ("fft16_hop4", 16, 4, 16),
+        ("fft32_hop7", 32, 7, 32),
+        ("fft32_hop8_win20", 32, 8, 20),
+        ("fft64_hop16", 64, 16, 64),
+        ("fft64_hop17_win40", 64, 17, 40),
+        ("fft31_hop5", 31, 5, 31),
+    ]
+
+    # The analysis geometry of the benchmarks, at one frame count.
+    BIG_COMBOS = [
+        ("fft2048_hop512", 2048, 512, 2048),
+        ("fft2048_hop500_win1200", 2048, 500, 1200),
+    ]
+
+    FRAME_COUNTS = [5, 12]
+
+    ALIGNMENTS = ["centered", "left", "right"]
+
+    # (case key, fft_size, hop, win_length, alignment, frames). The third cell
+    # is the first two's geometry with a window shorter than the transform,
+    # which the iteration re-centres inside the frame on every re-analysis.
+    GRIFFINLIM_COMBOS = [
+        ("fft64_hop16", 64, 16, 64, "centered", 8),
+        ("fft512_hop128", 512, 128, 512, "left", 6),
+        ("fft64_hop16_win40", 64, 16, 40, "centered", 8),
+    ]
+
+    # (n_iter, momentum): momentum 0 is the classic alternating projection,
+    # 0.99 librosa's accelerated default.
+    GRIFFINLIM_SCHEDULE = [(1, 0.0), (1, 0.99), (2, 0.5), (8, 0.0), (8, 0.99),
+                           (32, 0.0), (32, 0.99)]
+
+    @staticmethod
+    def lcg(n, seed):
+        """A length-n float64 stream from a 31-bit LCG: every operation is
+        integer arithmetic plus one exact float64 division, so OCaml
+        reproduces the values bit-for-bit."""
+        values = []
+        state = seed
+        for _ in range(n):
+            state = (1103515245 * state + 12345) % (1 << 31)
+            values.append(state / float(1 << 30) - 1.0)
+        return np.asarray(values, dtype=np.float64)
+
+    @classmethod
+    def spectrum(cls, fft_size, frames):
+        """A deterministic [bins, frames] spectrum: one LCG stream per
+        component, with imag(DC) and imag(Nyquist) zeroed -- the inverse real
+        FFT ignores them, so leaving them nonzero would make the vectors
+        depend on that detail."""
+        bins = fft_size // 2 + 1
+        re = cls.lcg(bins * frames, 20250803).reshape(bins, frames)
+        im = cls.lcg(bins * frames, 20250804).reshape(bins, frames)
+        im[0, :] = 0.0
+        if fft_size % 2 == 0:
+            im[bins - 1, :] = 0.0
+        return re + 1j * im
+
+    @staticmethod
+    def widths(fft_size, alignment):
+        if alignment == "centered":
+            return fft_size // 2, fft_size // 2
+        if alignment == "left":
+            return 0, 0
+        return fft_size - 1, 0
+
+    @classmethod
+    def inverse(cls, spectrum, fft_size, hop, win_length, alignment, length=None):
+        """The reference synthesis at our geometry. librosa covers centered
+        and left directly; right is left with the left extension trimmed,
+        which is exactly what our synthesis does with it."""
+        center = alignment == "centered"
+        if alignment == "right":
+            assert length is None
+            reference = librosa.istft(
+                spectrum,
+                hop_length=hop,
+                win_length=win_length,
+                n_fft=fft_size,
+                window="hann",
+                center=False,
+                dtype=np.float64,
+            )
+            return reference[fft_size - 1:]
+        return librosa.istft(
+            spectrum,
+            hop_length=hop,
+            win_length=win_length,
+            n_fft=fft_size,
+            window="hann",
+            center=center,
+            dtype=np.float64,
+            length=length,
+        )
+
+    def inverse_cases(self, fft_size, hop, win_length, alignments, frame_counts,
+                      dtypes):
+        cases = []
+        for frames in frame_counts:
+            base = self.spectrum(fft_size, frames)
+            for dtype in dtypes:
+                spectrum = base
+                if dtype == "float32":
+                    spectrum = base.astype(np.complex64).astype(np.complex128)
+                for alignment in alignments:
+                    expected = self.inverse(
+                        spectrum, fft_size, hop, win_length, alignment
+                    )
+                    cases.append(
+                        {
+                            "name": f"inverse_{alignment}_{dtype}_f{frames}",
+                            "params": {
+                                "fft_size": fft_size,
+                                "hop": hop,
+                                "win_length": win_length,
+                                "alignment": alignment,
+                                "frames": frames,
+                                "dtype": dtype,
+                            },
+                            "shape": list(expected.shape),
+                            "values": expected.tolist(),
+                        }
+                    )
+        return cases
+
+    def length_cases(self):
+        """An explicit output length, above, below and at the natural one, and
+        one a hop and a sample long: the frames a shortened request may skip
+        are the ones that start past it, and a longer one is zero-filled. The
+        reference inverts ceil((length + left + right) / hop) frames and no
+        more, so only the fourth length leaves any of the spectrum unread. The
+        natural length puts (frames - 1) * hop + fft_size padded positions in
+        that numerator, and shortening it by three still leaves
+        ceil((fft_size - 3) / hop) >= 1 frames on top of frames - 1, so the
+        first three all read the whole spectrum."""
+        cases = []
+        for fft_size, hop, win_length, alignment in (
+            (32, 8, 20, "centered"),
+            (64, 17, 40, "left"),
+        ):
+            frames = 9
+            spectrum = self.spectrum(fft_size, frames)
+            left, right = self.widths(fft_size, alignment)
+            natural = (frames - 1) * hop + fft_size - left - right
+            for length in (natural, natural - 3, natural + 7, hop + 1):
+                expected = self.inverse(
+                    spectrum, fft_size, hop, win_length, alignment, length=length
+                )
+                cases.append(
+                    {
+                        "name": (
+                            f"length{length}_{alignment}_fft{fft_size}"
+                            f"_hop{hop}_win{win_length}"
+                        ),
+                        "params": {
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "win_length": win_length,
+                            "alignment": alignment,
+                            "frames": frames,
+                            "length": length,
+                            "dtype": "float64",
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.tolist(),
+                    }
+                )
+        return cases
+
+    def griffinlim_cases(self, fft_size, hop, win_length, alignment, frames):
+        """One LCG stream shifted into [0, 2): a magnitude spectrogram no
+        signal produces, so every iteration does real work."""
+        bins = fft_size // 2 + 1
+        base = self.lcg(bins * frames, 20250803).reshape(bins, frames) + 1.0
+        cases = []
+        for dtype in ("float64", "float32"):
+            magnitudes = base
+            if dtype == "float32":
+                magnitudes = base.astype(np.float32).astype(np.float64)
+            for n_iter, momentum in self.GRIFFINLIM_SCHEDULE:
+                expected = librosa.griffinlim(
+                    magnitudes,
+                    n_iter=n_iter,
+                    hop_length=hop,
+                    win_length=win_length,
+                    n_fft=fft_size,
+                    window="hann",
+                    center=alignment == "centered",
+                    dtype=np.float64,
+                    pad_mode="constant",
+                    momentum=momentum,
+                    init=None,
+                )
+                cases.append(
+                    {
+                        "name": (
+                            f"griffinlim_{alignment}_{dtype}"
+                            f"_n{n_iter}_m{momentum:g}"
+                        ),
+                        "params": {
+                            "fft_size": fft_size,
+                            "hop": hop,
+                            "win_length": win_length,
+                            "alignment": alignment,
+                            "frames": frames,
+                            "n_iter": n_iter,
+                            "momentum": momentum,
+                            "dtype": dtype,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.tolist(),
+                    }
+                )
+        return cases
+
+    def generate(self):
+        for key, fft_size, hop, win_length in self.COMBOS:
+            write_suite(
+                self.SUITE,
+                f"inverse_{key}",
+                self.inverse_cases(
+                    fft_size,
+                    hop,
+                    win_length,
+                    self.ALIGNMENTS,
+                    self.FRAME_COUNTS,
+                    ("float64", "float32"),
+                ),
+            )
+        for key, fft_size, hop, win_length in self.BIG_COMBOS:
+            cases = self.inverse_cases(
+                fft_size, hop, win_length, ["centered"], [5], ("float64", "float32")
+            )
+            cases += self.inverse_cases(
+                fft_size, hop, win_length, ["left", "right"], [5], ("float64",)
+            )
+            write_suite(self.SUITE, f"inverse_{key}", cases)
+        write_suite(self.SUITE, "lengths", self.length_cases())
+        for key, fft_size, hop, win_length, alignment, frames in (
+            self.GRIFFINLIM_COMBOS
+        ):
+            write_suite(
+                self.SUITE,
+                f"griffinlim_{key}",
+                self.griffinlim_cases(
+                    fft_size, hop, win_length, alignment, frames
+                ),
+            )
 
 
 class MelVectorGenerator:
@@ -2277,6 +2566,7 @@ class IoVectorGenerator:
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
+    IstftVectorGenerator,
     MelVectorGenerator,
     DbConversionsVectorGenerator,
     SpectralFeaturesVectorGenerator,
