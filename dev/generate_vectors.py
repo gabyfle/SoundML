@@ -439,10 +439,13 @@ class IstftVectorGenerator:
 
     ALIGNMENTS = ["centered", "left", "right"]
 
-    # (case key, fft_size, hop, win_length, alignment, frames)
+    # (case key, fft_size, hop, win_length, alignment, frames). The third cell
+    # is the first two's geometry with a window shorter than the transform,
+    # which the iteration re-centres inside the frame on every re-analysis.
     GRIFFINLIM_COMBOS = [
         ("fft64_hop16", 64, 16, 64, "centered", 8),
         ("fft512_hop128", 512, 128, 512, "left", 6),
+        ("fft64_hop16_win40", 64, 16, 40, "centered", 8),
     ]
 
     # (n_iter, momentum): momentum 0 is the classic alternating projection,
