@@ -51,6 +51,17 @@ module Db = Db
     {!Mel.stage} consuming {!Stft.power_stage} output. *)
 module Mel = Mel
 
+(** Constant-Q and variable-Q transforms: the filter geometry precomputed by
+    {!Cqt.Config}, the offline {!Cqt.transform} over the recursive octave
+    plan, and the dtype-preserving {!Cqt.power_spectrum}. *)
+module Cqt = Cqt
+
+(** Chroma (pitch-class) projections: the Gaussian-bump matrix precomputed by
+    {!Chroma.Config} for linear-frequency spectra, the exact 0/1
+    {!Chroma.cqt_projection} for constant-Q bins, and the per-frame
+    normalisation both share. *)
+module Chroma = Chroma
+
 (** Sample-rate conversion: one exact-rational polyphase resampler behind the
     offline {!Resample.apply}, the incremental {!Resample.Kernel} and the
     {!Resample.stage} pipeline stage — bit-identical on every partitioning. *)
@@ -105,6 +116,44 @@ val mfcc :
     Raises [Invalid_argument] if the configurations disagree on [fft_size],
     if [n_mfcc] does not lie in [\[1, n_mels\]], if [lifter] is not finite
     and non-negative, or if [x] has rank zero. *)
+
+val chroma_stft :
+     Stft.Config.t
+  -> Chroma.Config.t
+  -> ?power:float
+  -> ?norm:Chroma.norm
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [chroma_stft stft chroma x] is the chromagram of [x], shaped
+    [[...; n_chroma; frames]]: {!Stft.power_spectrum} on the analysis geometry
+    [stft], projected onto pitch classes by {!Chroma.apply}. The time axis is
+    the last axis of [x]; leading axes broadcast, so a batch of clips is one
+    call. [power] defaults to [2.] (the power spectrum; [1.] projects
+    magnitudes) and [norm] to [`Inf], so each frame's strongest pitch class
+    reads one.
+
+    Raises [Invalid_argument] if the two configurations disagree on
+    [fft_size], naming both sizes — the filterbank must consume exactly the
+    bins the transform produces — if [x] has rank zero, or if [norm] is
+    [`P p] with [p] not finite and positive. *)
+
+val chroma_cqt :
+     Cqt.Config.t
+  -> ?n_chroma:int
+  -> ?norm:Chroma.norm
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [chroma_cqt cqt x] is the constant-Q chromagram of [x], shaped
+    [[...; n_chroma; frames]]: {!Cqt.power_spectrum}[ ~power:1.] on the filter
+    geometry [cqt], folded onto pitch classes by {!Chroma.of_cqt}. [n_chroma]
+    defaults to [12] and [norm] to [`Inf]. Because constant-Q bins already sit
+    on the equal-tempered ladder, the fold is an exact 0/1 assignment — no
+    interpolation and no frequency-domain filterbank.
+
+    Raises [Invalid_argument] if [n_chroma] does not divide
+    [Cqt.Config.bins_per_octave cqt], if [x] has rank zero, if [norm] is
+    [`P p] with [p] not finite and positive, or for the dtype reason
+    documented on {!Cqt.transform}. *)
 
 val resample :
      ?quality:Resample.quality
