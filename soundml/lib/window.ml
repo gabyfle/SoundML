@@ -205,66 +205,106 @@ let tukey_fill buf len taper m =
     put buf len i 1.
   done
 
-(* [inv_factorial_squared.(k)] is 1 / (k!)^2, the coefficient of q^k in I0(2 *
-   sqrt q) = sum_(k >= 0) q^k / (k!)^2 — the power series of [bessel_i0] read as
-   a polynomial in q = x^2 / 4. *)
-let inv_factorial_squared =
-  let t = Array.make 96 1. in
-  for k = 1 to Array.length t - 1 do
-    t.(k) <- t.(k - 1) /. Float.of_int (k * k)
-  done ;
-  t
+(* {2 The Bessel function as a function of q = x^2 / 4}
 
-(* The same coefficients split by parity: the even and odd halves are two
-   independent Horner chains in q^2 that recombine as [even + q * odd]. *)
-let even_coefficients = Array.init 48 (fun j -> inv_factorial_squared.(2 * j))
+   A Kaiser window evaluates I0 at beta * sqrt (1 - r^2), whose square is linear
+   in r^2, so the whole family is reached without a square root by taking q =
+   x^2 / 4 as the argument: I0(2 * sqrt q) = sum_(k >= 0) q^k / (k!)^2. The
+   window is a ratio of two such values, so only the relative error of I0
+   matters.
 
-let odd_coefficients =
-  Array.init 48 (fun j -> inv_factorial_squared.((2 * j) + 1))
+   Two polynomial branches cover q from zero to [i0_limit], meeting at
+   [i0_split]; past [i0_limit] the series of [bessel_i0] itself is summed. *)
 
-(* The highest degree the split coefficient tables carry. *)
-let max_degree = 90
+(* The q at which the two branches meet, 22.5625, i.e. x = 9.5. *)
+let i0_split = 0x1.6900000000000p+4
 
-(* [series_degree qmax] is the degree past which the terms of I0(2 * sqrt q)
-   stay below 1e-19 for every q in [0, qmax]: the terms are positive and
-   increasing in q, so bounding them at [qmax] bounds them throughout, and past
-   the peak they decay faster than a geometric series. A result above
-   [max_degree] means the series does not converge inside the tables. *)
-let series_degree qmax =
-  let rec go k term =
-    if term <= 1e-19 || k > max_degree then k
-    else go (k + 1) (term *. qmax /. Float.of_int ((k + 1) * (k + 1)))
-  in
-  go 1 qmax
+(* The largest q the two branches cover, 900, i.e. x = 60. *)
+let i0_limit = 0x1.c200000000000p+9
 
-(* [i0_series ~even ~odd q] is I0(2 * sqrt q) summed over the degrees up to [2 *
-   even] and [2 * odd + 1]. Every term is positive, so the two Horner chains
-   carry no cancellation. *)
-let i0_series ~even ~odd q =
+(* [i0_low q] is I0(2 * sqrt q) for q in [0, 22.5625], as 1 + q * P(q) with P of
+   degree 15 chosen so that the relative error of that form, in exact
+   arithmetic, equioscillates below 0.02 unit in the last place of a float64
+   over that interval. Every coefficient of P is positive — the leading ones
+   agree to thirteen digits with the 1 / ((k + 1)!)^2 of the power series — so
+   the sum is free of cancellation, and the form returns exactly 1 at q = 0. The
+   even and odd coefficients are summed as two independent Horner chains in q^2,
+   recombined as q * even + q^2 * odd. *)
+let i0_low q =
   let z = q *. q in
-  let pe = ref (Array.unsafe_get even_coefficients even) in
-  for j = even - 1 downto 0 do
-    pe := (!pe *. z) +. Array.unsafe_get even_coefficients j
-  done ;
-  let po = ref (Array.unsafe_get odd_coefficients odd) in
-  for j = odd - 1 downto 0 do
-    po := (!po *. z) +. Array.unsafe_get odd_coefficients j
-  done ;
-  !pe +. (q *. !po)
+  let even = 0x1.090f739aa84aep-81 in
+  let even = (even *. z) +. 0x1.e295350cdbeb2p-66 in
+  let even = (even *. z) +. 0x1.69be0cfe090d0p-51 in
+  let even = (even *. z) +. 0x1.0b311f20aaa65p-37 in
+  let even = (even *. z) +. 0x1.522a43d4fea28p-25 in
+  let even = (even *. z) +. 0x1.2345678991078p-14 in
+  let even = (even *. z) +. 0x1.c71c71c71c57ap-6 in
+  let even = (even *. z) +. 0x1.fffffffffffffp-1 in
+  let odd = 0x1.46c2effc9c862p-88 in
+  let odd = (odd *. z) +. 0x1.5084b6acbcfe7p-73 in
+  let odd = (odd *. z) +. 0x1.41fca93a265cdp-58 in
+  let odd = (odd *. z) +. 0x1.5602ac547087bp-44 in
+  let odd = (odd *. z) +. 0x1.522a45d728f12p-31 in
+  let odd = (odd *. z) +. 0x1.02e85c0a35995p-19 in
+  let odd = (odd *. z) +. 0x1.c71c71c71ea20p-10 in
+  let odd = (odd *. z) +. 0x1.0000000000009p-2 in
+  1. +. ((q *. even) +. (z *. odd))
+
+(* [i0_high q] is I0(2 * sqrt q) for q in [22.5625, 900], as exp(x) * Q(t) /
+   sqrt x with x = 2 * sqrt q, t = 1 / x, and Q of degree 18 chosen so that the
+   relative error of that form, in exact arithmetic, equioscillates below 0.04
+   unit in the last place of a float64 over that interval. Q is the slowly
+   varying factor of the asymptotic form of I0: it tends to 1 / sqrt (2 * pi) as
+   t tends to zero, and for t in [1/60, 1/9.5] the sum of the magnitudes of its
+   terms exceeds |Q| by under 7%, so summing it as two Horner chains in t^2 —
+   recombined as even + t * odd — costs under a tenth of a bit. *)
+let i0_high q =
+  let x = 2. *. Float.sqrt q in
+  let t = 1. /. x in
+  let s = Float.sqrt t in
+  let z = t *. t in
+  let even = 0x1.2d5b6d9895d38p+42 in
+  let even = (even *. z) +. 0x1.4834005264788p+41 in
+  let even = (even *. z) +. 0x1.4fd2078ba0c8ap+37 in
+  let even = (even *. z) +. 0x1.75bfbcbfe33b6p+31 in
+  let even = (even *. z) +. 0x1.22d239ea7d6ecp+24 in
+  let even = (even *. z) +. 0x1.5b03e0b40155ep+15 in
+  let even = (even *. z) +. 0x1.40215d04a96a1p+5 in
+  let even = (even *. z) +. 0x1.d5716b735a2bep-5 in
+  let even = (even *. z) +. 0x1.cb99722289ac2p-6 in
+  let even = (even *. z) +. 0x1.9884533d74f17p-2 in
+  let odd = -0x1.47d175f29f58fp+42 in
+  let odd = (odd *. z) -. 0x1.9164b24053185p+39 in
+  let odd = (odd *. z) -. 0x1.983764aa54bbap+34 in
+  let odd = (odd *. z) -. 0x1.07af60765e842p+28 in
+  let odd = (odd *. z) -. 0x1.f96b8b01707c1p+19 in
+  let odd = (odd *. z) -. 0x1.7779f8d2b08dcp+10 in
+  let odd = (odd *. z) -. 0x1.72247942f2adfp-1 in
+  let odd = (odd *. z) +. 0x1.dc6a132626089p-6 in
+  let odd = (odd *. z) +. 0x1.988450774c0d4p-5 in
+  Float.exp x *. s *. (even +. (t *. odd))
+
+(* [i0_of_q q] is I0(2 * sqrt q) for q from zero to [i0_limit]. Below [i0_split]
+   it holds to within four units in the last place of a float64. Above it the
+   value carries the factor exp x with x = 2 * sqrt q: forming that x from q
+   rounds it by up to half a unit in its own last place, and exp multiplies the
+   relative error of its argument by x, so that half unit reaches the result as
+   x / 2 units — thirty of them at [i0_limit]. The bound over the upper branch
+   is thirty-five units. *)
+let i0_of_q q = if q <= i0_split then i0_low q else i0_high q
 
 (* [kaiser_fill buf len beta m] writes the [m]-point Kaiser window I0(beta *
    sqrt (1 - r^2)) / I0(beta), r = (i - alpha) / alpha with alpha = (m - 1) / 2.
-   In terms of q = (beta^2 / 4) * (1 - r^2) the numerator is I0(2 * sqrt q): the
-   argument is linear in r^2, so no square root is needed per sample. The series
-   is summed by [i0_series] when its degree fits the coefficient tables, and by
-   [bessel_i0] on its own argument otherwise. Requires [m >= 2] and [beta >=
+   In terms of q = (beta^2 / 4) * (1 - r^2) the numerator is I0(2 * sqrt q), and
+   q runs from 0 to beta^2 / 4 with no square root per sample. The window is
+   evaluated by [i0_of_q] while beta^2 / 4 stays inside its range, and by
+   [bessel_i0] on the argument itself beyond it. Requires [m >= 2] and [beta >=
    0]. *)
 let kaiser_fill buf len beta m =
   let alpha = Float.of_int (m - 1) /. 2. in
   let qmax = 0.25 *. beta *. beta in
-  let degree = series_degree qmax in
   let half = (m - 1) / 2 in
-  if degree > max_degree then
+  if qmax > i0_limit then
     let denominator = bessel_i0 beta in
     for i = 0 to half do
       let r = (Float.of_int i -. alpha) /. alpha in
@@ -273,11 +313,10 @@ let kaiser_fill buf len beta m =
       put buf len (m - 1 - i) v
     done
   else
-    let even = degree / 2 and odd = (degree - 1) / 2 in
-    let scale = 1. /. i0_series ~even ~odd qmax in
+    let scale = 1. /. i0_of_q qmax in
     for i = 0 to half do
       let r = (Float.of_int i -. alpha) /. alpha in
-      let v = i0_series ~even ~odd (qmax *. (1. -. (r *. r))) *. scale in
+      let v = i0_of_q (qmax *. (1. -. (r *. r))) *. scale in
       put buf len i v ;
       put buf len (m - 1 - i) v
     done
