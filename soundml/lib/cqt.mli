@@ -248,9 +248,12 @@ val transform :
     shaped [[...; n_bins; frames]]. The time axis is the last axis of [x];
     leading axes broadcast, so a batch of clips is one call.
 
-    Peak memory beyond the output is the decimation chain (under two copies of
-    the signal in total) plus one octave's spectrum and projection at a time —
-    never the whole filter bank against the whole signal.
+    Only one octave's spectrum and projection exist at a time — the whole
+    filter bank is never multiplied against the whole signal — but the
+    decimation chain runs the resampler's dense offline form
+    ({!Resample.apply_gemm}), whose working set is a few times the signal it
+    converts. Peak memory for the default seven-octave ladder measures around
+    ten times a float32 input.
 
     Raises [Invalid_argument] if [x] has rank zero, or if the plan decimates
     and the dtype of [x] is neither float32 nor float64: the recursion runs
@@ -277,8 +280,10 @@ val power_spectrum :
     - {b The octave decimation is this library's resampler.} librosa steps
       down an octave with SoX Resampler at its [soxr_hq] tier; the recursion
       here uses {!Resample} at [`High], the preset designed to that same
-      specification, which buys the partition-invariance and the speed of the
-      library's one resampler. Two resamplers meeting one specification are
+      specification, through its dense offline form ({!Resample.apply_gemm}):
+      the same filter, the same compensated group delay and the same output
+      length as the streaming executor, without the partitioning law this
+      module has no use for. Two resamplers meeting one specification are
       not the same filter, so magnitudes differ: measured at most [6.3e-5] of
       the frame peak over 30 s music clips and [1.5e-4] over short broadband
       signals. Nothing closes that gap — substituting soxr's own higher

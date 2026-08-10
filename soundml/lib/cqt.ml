@@ -555,11 +555,16 @@ let check_resampling_dtype : type a. string -> (float, a) Nx.dtype -> unit =
             which needs float32 or float64 audio)"
            op Nx.pp_dtype dtype )
 
-(* [halve c y] is [y] decimated by two with the energy convention of the octave
-   recursion: the exact 1/2 conversion, rescaled so that a band common to both
-   rates keeps its magnitude. *)
-let halve (c : Config.t) y =
-  Nx.div_s (Resample.apply c.Config.half y) (Float.sqrt 0.5)
+(* [decimate c y] is [y] at half its rate: the exact 1/2 conversion, run through
+   the resampler's dense offline form. That form carries no partitioning law,
+   which costs this module nothing — the transform is offline and evaluates the
+   whole signal at once — and it is the same filter, the same compensated group
+   delay and the same output length as the streaming executor. *)
+let decimate (c : Config.t) y = Resample.apply_gemm c.Config.half y
+
+(* [halve c y] is [decimate] with the energy convention of the octave recursion:
+   rescaled so that a band common to both rates keeps its magnitude. *)
+let halve (c : Config.t) y = Nx.div_s (decimate c y) (Float.sqrt 0.5)
 
 (* [resamples c] is [true] iff the plan decimates anywhere: an odd hop stops the
    recursion from halving after its first octave, and a configuration whose
@@ -594,7 +599,7 @@ let transform : type c a.
     let y = ref x in
     if c.Config.early > 0 then begin
       for _ = 1 to c.Config.early do
-        y := Resample.apply c.Config.half !y
+        y := decimate c !y
       done ;
       let factor = Float.sqrt (Float.of_int (1 lsl c.Config.early)) in
       (* The early stage carries the same rescaling as one octave step per
