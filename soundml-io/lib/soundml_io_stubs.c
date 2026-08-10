@@ -409,8 +409,9 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
 
 /* {1 The worker pool}
 
-   Present on arm64 macOS only; everywhere else none of this compiles and both
-   transfer stubs are their sequential bodies alone.
+   Present on arm64 macOS only; everywhere else none of this compiles and the
+   read stub is its sequential body alone. The split whole-file decode is the
+   pool's only client: a write stages and encodes on the calling thread.
 
    The pool owns threads and nothing else. At most SOUNDML_IO_POOL_SLOTS of
    them exist — further bounded at first use by min(3, ncpu-1), zero on a
@@ -1124,88 +1125,6 @@ done:
   return 1;
 }
 
-/* {1 Pipelined encode staging}
-
-   A planar write hands libsndfile the same blocks in the same order as the
-   sequential loop; only the moment each block is laced changes. The caller
-   laces the first block, then repeats: hand the next block to a worker, call
-   sf_writef on the one already laced, join. Two staging blocks alternate, and
-   a block is laced again only after the sf_writef that read it returned, so
-   the bytes libsndfile sees are the sequential loop's byte for byte. */
-
-typedef struct {
-  const void *src;
-  void *staging;
-  int64_t src_total, channels, want;
-  int kind;
-} soundml_io_lace;
-
-static void soundml_io_lace_run(void *arg) {
-  soundml_io_lace *l = arg;
-  if (l->kind == CAML_BA_FLOAT32)
-    soundml_io_interleave_f32((const float *) l->src, l->src_total, l->channels,
-                              (float *) l->staging, l->want);
-  else
-    soundml_io_interleave_f64((const double *) l->src, l->src_total,
-                              l->channels, (double *) l->staging, l->want);
-}
-
-static void soundml_io_lace_at(soundml_io_lace *l, const void *data, int kind,
-                               int64_t off, int64_t total, int64_t channels,
-                               void *staging, int64_t at, int64_t want) {
-  l->kind = kind;
-  l->src = (kind == CAML_BA_FLOAT32)
-               ? (const void *) ((const float *) data + off + at)
-               : (const void *) ((const double *) data + off + at);
-  l->staging = staging;
-  l->src_total = total;
-  l->channels = channels;
-  l->want = want;
-}
-
-static int64_t soundml_io_writef_call(SNDFILE *file, int kind, const void *buf,
-                                      int64_t want) {
-  return (kind == CAML_BA_FLOAT32)
-             ? (int64_t) sf_writef_float(file, (const float *) buf, want)
-             : (int64_t) sf_writef_double(file, (const double *) buf, want);
-}
-
-static int64_t soundml_io_write_pipelined(SNDFILE *file, const void *data,
-                                          int kind, int64_t off, int64_t total,
-                                          int64_t frames, int64_t channels,
-                                          void *stage_a, void *stage_b,
-                                          int64_t block,
-                                          soundml_io_slot *slot) {
-  soundml_io_lace lace;
-  void *cur = stage_a, *other = stage_b;
-  int64_t done = 0, want = frames < block ? frames : block;
-
-  soundml_io_lace_at(&lace, data, kind, off, total, channels, cur, 0, want);
-  soundml_io_lace_run(&lace);
-
-  while (done < frames) {
-    int64_t next_at = done + want, next_want = 0;
-    if (next_at < frames) {
-      next_want = frames - next_at;
-      if (next_want > block) next_want = block;
-      soundml_io_lace_at(&lace, data, kind, off, total, channels, other,
-                         next_at, next_want);
-      soundml_io_submit(slot, soundml_io_lace_run, &lace);
-    }
-    int64_t put = soundml_io_writef_call(file, kind, cur, want);
-    if (next_want) soundml_io_join(slot);
-    if (put <= 0) break;
-    done += put;
-    if (put < want) break;
-    if (next_want == 0) break;
-    want = next_want;
-    void *swap = cur;
-    cur = other;
-    other = swap;
-  }
-  return done;
-}
-
 /* The split width this call would use: the environment's pin when it names
    one, otherwise the work model. Either way the format must be one whose
    seek is exact and the pool must have a worker to give. */
@@ -1356,33 +1275,7 @@ CAMLprim value soundml_io_writef(value v_handle, value v_ba, value v_mode,
   int err;
   char details[256] = {0};
 
-#ifdef SOUNDML_IO_PARALLEL
-  /* Pipelining needs a second staging block and a worker, and only pays once
-     the write spans more than one block. Without either the loop below runs
-     as it always does. */
-  soundml_io_slot *lace_slot[1];
-  void *stage_b = NULL;
-  int lace_workers = 0;
-  if (mode == SOUNDML_IO_MODE_PLANAR && frames >= 2 * block) {
-    lace_workers = soundml_io_pool_acquire(1, lace_slot);
-    if (lace_workers == 1) {
-      stage_b = soundml_io_staging(block, channels, elt);
-      if (stage_b == NULL) {
-        soundml_io_pool_release(lace_slot, 1);
-        lace_workers = 0;
-      }
-    }
-  }
-#endif
-
   caml_release_runtime_system();
-#ifdef SOUNDML_IO_PARALLEL
-  if (lace_workers == 1)
-    done = soundml_io_write_pipelined(file, data, kind, off, total, frames,
-                                      channels, staging, stage_b, block,
-                                      lace_slot[0]);
-  else
-#endif
   if (kind == CAML_BA_FLOAT32) {
     const float *src = (const float *) data;
     if (mode == SOUNDML_IO_MODE_DIRECT)
@@ -1403,10 +1296,6 @@ CAMLprim value soundml_io_writef(value v_handle, value v_ba, value v_mode,
     snprintf(details, sizeof details, "%s", sf_strerror(file));
   caml_acquire_runtime_system();
   free(staging);
-#ifdef SOUNDML_IO_PARALLEL
-  free(stage_b);
-  if (lace_workers == 1) soundml_io_pool_release(lace_slot, 1);
-#endif
 
   CAMLreturn(soundml_io_outcome(done, err, details));
 }
