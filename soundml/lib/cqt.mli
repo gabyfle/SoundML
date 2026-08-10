@@ -278,14 +278,16 @@ val power_spectrum :
       down an octave with SoX Resampler at its [soxr_hq] tier; the recursion
       here uses {!Resample} at [`High], the preset designed to that same
       specification, which buys the partition-invariance and the speed of the
-      library's one resampler. Two resamplers meeting the same specification
-      are not the same filter, so magnitudes differ: measured at most
-      [1e-4] of the frame peak on music and [1e-3] on full-scale broadband
-      noise. No resampler closes that gap — soxr's own higher tier differs
-      from its [soxr_hq] by more. Configurations that never decimate carry no
-      such term: the top octave is always resampler-free, and an odd [hop]
-      keeps the whole transform resampler-free, where agreement is
-      [1.2e-7] of peak in double precision.
+      library's one resampler. Two resamplers meeting one specification are
+      not the same filter, so magnitudes differ: measured at most [6.3e-5] of
+      the frame peak over 30 s music clips and [1.5e-4] over short broadband
+      signals. Nothing closes that gap — substituting soxr's own higher
+      [soxr_vhq] tier for [soxr_hq] moves the same cases by the same order
+      ([7.7e-5] and [4.1e-4]), so the residual is what any two conforming
+      resamplers differ by, not a quality shortfall. Configurations that never
+      decimate carry no such term: the top octave is always resampler-free,
+      and an odd [hop] keeps the whole transform resampler-free, where
+      agreement is [1.2e-7] of peak in double precision.
     - {b The filter bank is double precision.} librosa builds its wavelet
       basis in single precision even when asked for a double-precision
       transform. Building it in double moves magnitudes by around [1e-7] of
@@ -295,6 +297,6 @@ val power_spectrum :
       and projects through the sparse remainder. The projection here is a
       dense product against the exact filter response: no basis energy is
       thrown away. librosa's default moves its own magnitudes by about
-      [5e-3] of peak, so parity is stated against [sparsity=0].
+      [5e-3] of peak on music, so parity is stated against [sparsity=0].
     - {b Tuning is explicit.} [tuning] defaults to [0.] and is never estimated
       from the signal; librosa's transforms estimate it by default. *)

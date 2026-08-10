@@ -5,6 +5,7 @@ module Convert = Convert
 module Db = Db
 module Mel = Mel
 module Cqt = Cqt
+module Chroma = Chroma
 module Resample = Resample
 
 let check_fft_sizes fn stft_config mel_config =
@@ -92,6 +93,22 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
           cepstrum
     in
     Nx.cast dtype cepstrum
+
+let chroma_stft stft_config chroma_config ?(power = 2.) ?norm x =
+  let stft_size = Stft.Config.fft_size stft_config in
+  let chroma_size = Chroma.Config.fft_size chroma_config in
+  if stft_size <> chroma_size then
+    invalid_arg
+      (Printf.sprintf
+         "chroma_stft: cannot project a %d-point STFT through a filterbank \
+          built for an FFT of size %d (the two configurations must agree on \
+          fft_size)"
+         stft_size chroma_size ) ;
+  Chroma.apply ?norm chroma_config (Stft.power_spectrum ~power stft_config x)
+
+let chroma_cqt cqt_config ?n_chroma ?norm x =
+  Chroma.of_cqt ?n_chroma ?norm cqt_config
+    (Cqt.power_spectrum ~power:1. cqt_config x)
 
 let resample ?quality ~sample_rate ~target x =
   Resample.(apply (Config.create ?quality ~sample_rate ~target ()) x)

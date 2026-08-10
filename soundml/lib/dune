@@ -10,6 +10,7 @@
   db
   mel
   cqt
+  chroma
   resample
   spectral
   energy
