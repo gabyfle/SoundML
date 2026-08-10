@@ -53,13 +53,13 @@ resample/apply-fast-48k-44k1-f32	alloc_words	exact	6307
 resample/apply-fast-48k-44k1-f32	wall_time	batch=32	n=20	1.689e-04	1.616e-04 1.630e-04 1.632e-04 1.633e-04 1.642e-04 1.643e-04 1.653e-04 1.681e-04 1.681e-04 1.685e-04 1.692e-04 1.694e-04 1.701e-04 1.707e-04 1.713e-04 1.716e-04 1.770e-04 1.778e-04 1.813e-04 1.866e-04
 resample/apply-fast-48k-44k1-f64	alloc_words	exact	6306
 resample/apply-fast-48k-44k1-f64	wall_time	batch=16	n=20	3.736e-04	3.559e-04 3.691e-04 3.692e-04 3.704e-04 3.709e-04 3.711e-04 3.711e-04 3.725e-04 3.728e-04 3.734e-04 3.738e-04 3.744e-04 3.744e-04 3.753e-04 3.763e-04 3.774e-04 3.785e-04 3.794e-04 3.968e-04 3.985e-04
-resample/apply-fast-48k-8k-f32	alloc_words	exact	5737
+resample/apply-fast-48k-8k-f32	alloc_words	exact	4769
 resample/apply-fast-48k-8k-f32	wall_time	batch=32	n=20	2.491e-04	2.422e-04 2.452e-04 2.453e-04 2.456e-04 2.461e-04 2.464e-04 2.465e-04 2.467e-04 2.470e-04 2.490e-04 2.491e-04 2.499e-04 2.510e-04 2.536e-04 2.784e-04 3.027e-04 5.058e-04 5.129e-04 6.307e-04 6.590e-04
-resample/apply-fast-48k-8k-f64	alloc_words	exact	5736
+resample/apply-fast-48k-8k-f64	alloc_words	exact	4768
 resample/apply-fast-48k-8k-f64	wall_time	batch=16	n=20	3.660e-04	3.510e-04 3.515e-04 3.522e-04 3.568e-04 3.569e-04 3.593e-04 3.602e-04 3.623e-04 3.643e-04 3.654e-04 3.666e-04 3.671e-04 3.673e-04 3.686e-04 3.697e-04 3.715e-04 3.719e-04 3.734e-04 3.763e-04 3.875e-04
-resample/apply-fast-8k-48k-f32	alloc_words	exact	5720
+resample/apply-fast-8k-48k-f32	alloc_words	exact	4752
 resample/apply-fast-8k-48k-f32	wall_time	batch=16	n=20	3.907e-04	3.767e-04 3.815e-04 3.827e-04 3.859e-04 3.861e-04 3.874e-04 3.884e-04 3.904e-04 3.907e-04 3.907e-04 3.907e-04 3.911e-04 3.916e-04 3.916e-04 3.926e-04 3.937e-04 3.938e-04 3.950e-04 3.984e-04 4.003e-04
-resample/apply-fast-8k-48k-f64	alloc_words	exact	5719
+resample/apply-fast-8k-48k-f64	alloc_words	exact	4751
 resample/apply-fast-8k-48k-f64	wall_time	batch=16	n=20	4.491e-04	4.387e-04 4.406e-04 4.409e-04 4.427e-04 4.436e-04 4.447e-04 4.456e-04 4.472e-04 4.478e-04 4.486e-04 4.496e-04 4.501e-04 4.505e-04 4.513e-04 4.515e-04 4.522e-04 4.528e-04 4.546e-04 4.589e-04 4.640e-04
 resample/apply-high-16k-44k1-f32	alloc_words	exact	2923
 resample/apply-high-16k-44k1-f32	wall_time	batch=1	n=20	2.301e-04	1.402e-04 1.413e-04 1.431e-04 1.439e-04 1.478e-04 1.550e-04 1.821e-04 1.920e-04 2.277e-04 2.288e-04 2.315e-04 2.339e-04 2.347e-04 2.352e-04 2.368e-04 2.408e-04 2.446e-04 2.457e-04 2.607e-04 2.985e-04
@@ -77,13 +77,13 @@ resample/apply-high-48k-44k1-f32	alloc_words	exact	6307
 resample/apply-high-48k-44k1-f32	wall_time	batch=32	n=20	1.802e-04	1.683e-04 1.705e-04 1.708e-04 1.710e-04 1.723e-04 1.770e-04 1.775e-04 1.788e-04 1.792e-04 1.801e-04 1.804e-04 1.810e-04 1.822e-04 1.832e-04 1.838e-04 1.875e-04 1.917e-04 1.933e-04 1.966e-04 2.045e-04
 resample/apply-high-48k-44k1-f64	alloc_words	exact	6306
 resample/apply-high-48k-44k1-f64	wall_time	batch=16	n=20	3.888e-04	3.691e-04 3.804e-04 3.816e-04 3.855e-04 3.855e-04 3.866e-04 3.870e-04 3.874e-04 3.885e-04 3.888e-04 3.888e-04 3.896e-04 3.920e-04 3.922e-04 3.987e-04 4.004e-04 4.051e-04 4.077e-04 4.111e-04 5.516e-04
-resample/apply-high-48k-8k-f32	alloc_words	exact	5737
+resample/apply-high-48k-8k-f32	alloc_words	exact	4769
 resample/apply-high-48k-8k-f32	wall_time	batch=32	n=20	2.594e-04	2.509e-04 2.526e-04 2.527e-04 2.535e-04 2.560e-04 2.577e-04 2.582e-04 2.584e-04 2.588e-04 2.590e-04 2.598e-04 2.607e-04 2.608e-04 2.619e-04 2.623e-04 2.629e-04 2.637e-04 2.643e-04 2.646e-04 2.650e-04
-resample/apply-high-48k-8k-f64	alloc_words	exact	5736
+resample/apply-high-48k-8k-f64	alloc_words	exact	4768
 resample/apply-high-48k-8k-f64	wall_time	batch=16	n=20	3.806e-04	3.634e-04 3.650e-04 3.743e-04 3.752e-04 3.758e-04 3.778e-04 3.783e-04 3.785e-04 3.791e-04 3.803e-04 3.808e-04 3.821e-04 3.848e-04 3.851e-04 3.855e-04 3.880e-04 3.881e-04 3.895e-04 3.901e-04 4.004e-04
-resample/apply-high-8k-48k-f32	alloc_words	exact	5720
+resample/apply-high-8k-48k-f32	alloc_words	exact	4752
 resample/apply-high-8k-48k-f32	wall_time	batch=16	n=20	3.742e-04	3.623e-04 3.660e-04 3.667e-04 3.696e-04 3.703e-04 3.711e-04 3.720e-04 3.720e-04 3.728e-04 3.735e-04 3.748e-04 3.759e-04 3.842e-04 3.859e-04 3.877e-04 3.943e-04 3.966e-04 3.990e-04 4.040e-04 4.043e-04
-resample/apply-high-8k-48k-f64	alloc_words	exact	5719
+resample/apply-high-8k-48k-f64	alloc_words	exact	4751
 resample/apply-high-8k-48k-f64	wall_time	batch=16	n=20	4.553e-04	4.494e-04 4.494e-04 4.504e-04 4.509e-04 4.515e-04 4.518e-04 4.519e-04 4.523e-04 4.547e-04 4.553e-04 4.553e-04 4.575e-04 4.585e-04 4.591e-04 4.596e-04 4.608e-04 4.611e-04 4.650e-04 4.652e-04 4.732e-04
 resample/apply-identity-1M-f32	alloc_words	exact	36
 resample/apply-identity-1M-f32	wall_time	batch=65536	n=20	7.718e-08	7.046e-08 7.133e-08 7.576e-08 7.662e-08 7.677e-08 7.683e-08 7.688e-08 7.689e-08 7.698e-08 7.713e-08 7.722e-08 7.733e-08 7.736e-08 7.758e-08 7.760e-08 7.768e-08 7.787e-08 7.790e-08 7.889e-08 7.931e-08
@@ -113,9 +113,9 @@ resample/stream-high-44k1-48k-f32-chunk-16384	alloc_words	exact	6795
 resample/stream-high-44k1-48k-f32-chunk-16384	wall_time	batch=64	n=20	1.331e-04	1.267e-04 1.271e-04 1.285e-04 1.291e-04 1.295e-04 1.302e-04 1.305e-04 1.313e-04 1.314e-04 1.330e-04 1.332e-04 1.337e-04 1.344e-04 1.344e-04 1.348e-04 1.352e-04 1.364e-04 1.369e-04 1.380e-04 1.466e-04
 resample/stream-high-44k1-48k-f32-chunk-4096	alloc_words	exact	10158
 resample/stream-high-44k1-48k-f32-chunk-4096	wall_time	batch=64	n=20	1.448e-04	1.321e-04 1.349e-04 1.351e-04 1.372e-04 1.387e-04 1.400e-04 1.421e-04 1.433e-04 1.437e-04 1.446e-04 1.451e-04 1.461e-04 1.466e-04 1.482e-04 1.482e-04 1.500e-04 1.515e-04 1.520e-04 1.521e-04 1.540e-04
-resample/stream-high-48k-8k-f32-chunk-1024	alloc_words	exact	38717
+resample/stream-high-48k-8k-f32-chunk-1024	alloc_words	exact	33877
 resample/stream-high-48k-8k-f32-chunk-1024	wall_time	batch=32	n=20	2.568e-04	2.484e-04 2.487e-04 2.508e-04 2.519e-04 2.537e-04 2.538e-04 2.553e-04 2.556e-04 2.557e-04 2.563e-04 2.574e-04 2.581e-04 2.585e-04 2.602e-04 2.608e-04 2.615e-04 2.634e-04 2.638e-04 2.669e-04 2.756e-04
-resample/stream-high-48k-8k-f32-chunk-4096	alloc_words	exact	26397
+resample/stream-high-48k-8k-f32-chunk-4096	alloc_words	exact	21557
 resample/stream-high-48k-8k-f32-chunk-4096	wall_time	batch=32	n=20	2.308e-04	2.189e-04 2.194e-04 2.211e-04 2.217e-04 2.240e-04 2.250e-04 2.255e-04 2.270e-04 2.274e-04 2.303e-04 2.313e-04 2.315e-04 2.316e-04 2.320e-04 2.340e-04 2.346e-04 2.358e-04 2.386e-04 2.392e-04 2.393e-04
 stft/power_spectrum-30s-f32-fft2048-hop512	alloc_words	exact	15450
 stft/power_spectrum-30s-f32-fft2048-hop512	wall_time	batch=1	n=40	4.533e-03	4.364e-03 4.380e-03 4.381e-03 4.423e-03 4.424e-03 4.439e-03 4.443e-03 4.444e-03 4.444e-03 4.446e-03 4.449e-03 4.481e-03 4.484e-03 4.486e-03 4.497e-03 4.499e-03 4.502e-03 4.513e-03 4.526e-03 4.526e-03 4.540e-03 4.549e-03 4.549e-03 4.559e-03 4.567e-03 4.582e-03 4.590e-03 4.597e-03 4.622e-03 4.628e-03 4.639e-03 4.646e-03 4.650e-03 4.686e-03 4.698e-03 4.720e-03 4.741e-03 4.814e-03 4.826e-03 4.982e-03
