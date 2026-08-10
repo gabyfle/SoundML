@@ -126,8 +126,31 @@ module Config = struct
 
   let bins t = (t.fft_size / 2) + 1
 
+  (* Widths of the boundary extension: frame [p] covers padded positions [p *
+     hop, p * hop + fft_size), where padded position [q] is source sample [q -
+     left_width]. *)
+  let left_width t =
+    match t.alignment with
+    | `Centered ->
+        t.fft_size / 2
+    | `Left ->
+        0
+    | `Right ->
+        t.fft_size - 1
+
+  let right_width t =
+    match t.alignment with `Centered -> t.fft_size / 2 | `Left | `Right -> 0
+
   let latency t =
     match t.alignment with `Centered -> t.fft_size / 2 | `Left | `Right -> 0
+
+  (* Synthesis releases padded position [q] once frame [q / hop] is in, and
+     never past the trailing trim [right_width] of the frames it holds: the [max
+     0 (hop + right_width - fft_size)] positions the last hop opens past that
+     trim wait for the next frame to move it. Both holdbacks are output
+     samples. *)
+  let synthesis_latency t =
+    left_width t + Stdlib.max 0 (t.hop + right_width t - t.fft_size)
 
   let pp fmt t =
     let alignment =
@@ -177,20 +200,9 @@ end
 
 (* {1 The frame grid} *)
 
-(* Widths of the boundary extension: frame [p] covers padded positions [p * hop,
-   p * hop + fft_size), where padded position [q] is source sample [q -
-   left_width]. *)
-let left_width (c : Config.t) =
-  match c.alignment with
-  | `Centered ->
-      c.fft_size / 2
-  | `Left ->
-      0
-  | `Right ->
-      c.fft_size - 1
+let left_width = Config.left_width
 
-let right_width (c : Config.t) =
-  match c.alignment with `Centered -> c.fft_size / 2 | `Left | `Right -> 0
+let right_width = Config.right_width
 
 let ceil_div a b = (a + b - 1) / b
 
@@ -818,32 +830,41 @@ let overlap_add (c : Config.t) ~frames windowed =
   in
   shrink_last (sum 1 (shifted 0)) 0 (((frames - 1) * hop) + fft)
 
+(* [guard v] is [v] with an exact zero replaced by one: a position whose
+   envelope vanishes exactly has an exactly zero numerator too — every tap
+   reaching it is a zero of the window — so dividing by one returns the honest 0
+   instead of a NaN. *)
+let guard v = if v = 0. then 1. else v
+
+(* [partial_envelope c w ~last q] is the envelope at padded position [q] summed
+   tap by tap over the frames that reach it, [p] ascending and capped at frame
+   [last]: the value of the partially covered positions, which can be many
+   orders of magnitude below the interior's and divides the reconstruction
+   there, so it is never computed as a difference of larger sums. [w] is the
+   analysis window of [c] as an array. *)
+let partial_envelope (c : Config.t) w ~last q =
+  let fft = Config.fft_size c and hop = Config.hop c in
+  let first = Stdlib.max 0 (ceil_div (q - fft + 1) hop) in
+  let last = Stdlib.min last (q / hop) in
+  let total = ref 0. in
+  for p = first to last do
+    let j = q - (p * hop) in
+    total := !total +. (w.(j) *. w.(j))
+  done ;
+  guard !total
+
 (* [envelope c ~frames] is the overlap-added squared analysis window over the
-   same padded positions, with exact zeros replaced by one: those positions have
-   an exactly zero numerator too — every tap reaching them is a zero of the
-   window — so dividing by one returns the honest 0 instead of a NaN.
+   same padded positions, guarded as above.
 
    Positions in [[fft_size - hop, frames * hop)] receive every tap of their
    residue class, so the envelope repeats with the hop there and one period
    tiles it. The at most [fft_size - hop] positions on either side receive a
-   partial run, and are summed tap by tap: their value can be many orders of
-   magnitude below the interior's, and it divides the reconstruction there, so
-   it is never computed as a difference of larger sums. *)
+   partial run, and are summed by {!partial_envelope}. *)
 let envelope (c : Config.t) ~frames =
   let fft = Config.fft_size c and hop = Config.hop c in
   let w = Nx.to_array c.analysis_window in
   let complete = folded_square_window c in
-  let guard total = if total = 0. then 1. else total in
-  let partial q =
-    let first = Stdlib.max 0 (ceil_div (q - fft + 1) hop) in
-    let last = Stdlib.min (frames - 1) (q / hop) in
-    let total = ref 0. in
-    for p = first to last do
-      let j = q - (p * hop) in
-      total := !total +. (w.(j) *. w.(j))
-    done ;
-    guard !total
-  in
+  let partial q = partial_envelope c w ~last:(frames - 1) q in
   let span = ((frames - 1) * hop) + fft in
   let head = Stdlib.min span (fft - hop) in
   let stop = Stdlib.max head (Stdlib.min span (frames * hop)) in
@@ -1003,6 +1024,279 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
   let angles = run n_iter angles None in
   Nx.cast dtype (synthesise c ?length (Nx.mul magnitudes angles))
 
+(* {1 Incremental synthesis}
+
+   The streaming form of the same equation. Synthesis looks ahead of nothing in
+   frame coordinates: padded position [q] receives its last tap from frame [q /
+   hop], so it is final the moment that frame is consumed, and one hop-sized
+   block of finished positions falls out of every frame fed. What the kernel
+   does hold back is on the output side — the [left_width] positions the
+   alignment trims off the head, and the [max 0 (hop + right_width - fft_size)]
+   positions the newest hop opens past the trailing trim, which the next frame
+   moves out of the way. Together they are [Config.synthesis_latency].
+
+   State is the last [blocks - 1] windowed frames, the held quotient tail, the
+   frame count and the head-trim counter: at most [(fft_size + hop) * ceil
+   (fft_size / hop)] doubles per channel, independent of the stream's length and
+   of how its frames were chunked.
+
+   Both folds are the offline ones, position by position and in the same order.
+   The numerator sums the [blocks] taps of a position with the tap offset
+   ascending, the association [overlap_add] performs. The denominator reads
+   [envelope]'s three regions: the head partial below [fft_size - hop], the
+   periodic tile above it, and the tail partial past [frames * hop] — the one
+   region the frame count moves, which is therefore computed at the drain and
+   nowhere else. *)
+
+type synthesis_state =
+  { scfg: Config.t
+  ; sleft: int  (** the head trim *)
+  ; shold: int  (** the tail holdback *)
+  ; sblocks: int  (** [ceil (fft_size / hop)]: hop-blocks one frame spans *)
+  ; swindow: float array
+  ; shead: float array  (** the envelope over [[0, fft_size - hop)] *)
+  ; speriod: float array  (** one hop-long envelope period *)
+  ; speriod_t: (float, Nx.float64_elt) Nx.t
+  ; mutable shist: (float, Nx.float64_elt) Nx.t option
+        (* the last [sblocks - 1] windowed frames, zero-extended to whole
+           blocks: [[...; sblocks - 1; sblocks * hop]] *)
+  ; mutable scarry: (float, Nx.float64_elt) Nx.t option
+        (* the [shold] quotients not yet releasable *)
+  ; mutable sfed: int
+  ; mutable sdrop: int
+  ; mutable sdrained: bool }
+
+let synthesis_state_create (c : Config.t) =
+  let fft = Config.fft_size c and hop = Config.hop c in
+  let w = Nx.to_array c.analysis_window in
+  let period = Array.map guard (folded_square_window c) in
+  { scfg= c
+  ; sleft= left_width c
+  ; shold= Stdlib.max 0 (hop + right_width c - fft)
+  ; sblocks= ceil_div fft hop
+  ; swindow= w
+  ; shead=
+      Array.init (Stdlib.max 0 (fft - hop)) (partial_envelope c w ~last:max_int)
+  ; speriod= period
+  ; speriod_t= Nx.create Nx.float64 [|hop|] period
+  ; shist= None
+  ; scarry= None
+  ; sfed= 0
+  ; sdrop= left_width c
+  ; sdrained= false }
+
+let synthesis_reset s =
+  s.shist <- None ;
+  s.scarry <- None ;
+  s.sfed <- 0 ;
+  s.sdrop <- s.sleft ;
+  s.sdrained <- false
+
+(* [frame_axis t start stop] is [t] restricted to frames [[start, stop)] of the
+   axis before its last. *)
+let frame_axis t start stop =
+  let nd = Nx.ndim t in
+  Nx.shrink
+    (Array.init nd (fun i ->
+         if i = nd - 2 then (start, stop) else (0, Nx.dim i t) ) )
+    t
+
+(* [synthesis_blocks s local ~frames ~count] is the overlap-add of the windowed
+   frames [local], shaped [[...; frames; blocks * hop]], over the [count]
+   hop-blocks opening at frame [blocks - 1] — returned as [[...; count * hop]].
+
+   Block [blocks - 1 + i] receives tap [j] of frame [blocks - 1 + i - j], and
+   every one of those frames is in [local]: reading each [j] as one [[...;
+   count; hop]] plane makes the block sum [blocks] dense additions with the tap
+   offset ascending, which is [overlap_add]'s association restricted to the
+   blocks the frames at hand complete. *)
+let synthesis_blocks s local ~frames ~count =
+  let hop = Config.hop s.scfg and b = s.sblocks in
+  let lead = batch_shape local in
+  let rank = Array.length lead in
+  let grid = Nx.reshape (Array.append lead [|frames; b; hop|]) local in
+  let plane j =
+    Nx.shrink
+      (Array.init (rank + 3) (fun i ->
+           if i = rank then (b - 1 - j, b - 1 - j + count)
+           else if i = rank + 1 then (j, j + 1)
+           else (0, Nx.dim i grid) ) )
+      grid
+    |> Nx.reshape (Array.append lead [|count; hop|])
+  in
+  let rec sum j acc =
+    if j = b then acc else sum (j + 1) (Nx.add acc (plane j))
+  in
+  Nx.reshape (Array.append lead [|count * hop|]) (sum 1 (plane 0))
+
+(* [step_envelope s ~start ~count] is the envelope over padded positions
+   [[start, start + count)], all of them below [frames * hop] and so settled
+   whatever frames follow. [start] is a whole number of hops, so the periodic
+   region tiles from phase zero; the head region is at most [blocks - 1] blocks
+   wide and is read position by position from the precomputed values. *)
+let step_envelope s ~start ~count =
+  let hop = Config.hop s.scfg in
+  let head = Array.length s.shead in
+  let aligned = ceil_div head hop * hop in
+  let stop = start + count in
+  let border_stop = Stdlib.min stop aligned in
+  let border =
+    if border_stop <= start then []
+    else
+      [ Nx.create Nx.float64
+          [|border_stop - start|]
+          (Array.init (border_stop - start) (fun t ->
+               let q = start + t in
+               if q < head then s.shead.(q) else s.speriod.(q mod hop) ) ) ]
+  in
+  let body_start = Stdlib.max start aligned in
+  let body =
+    if stop <= body_start then []
+    else
+      let n = stop - body_start in
+      [shrink_last (Nx.tile [|ceil_div n hop|] s.speriod_t) 0 n]
+  in
+  match border @ body with [one] -> one | parts -> concat_last parts
+
+(* [synthesis_release s stream release] drops whatever remains of the head trim
+   from the first [release] positions of [stream], and is what the caller
+   emits. *)
+let synthesis_release s stream release =
+  let drop = Stdlib.min s.sdrop release in
+  s.sdrop <- s.sdrop - drop ;
+  if release - drop = 0 then None else Some (shrink_last stream drop release)
+
+let synthesis_step s z =
+  if s.sdrained then
+    invalid_arg
+      "step: cannot feed a drained kernel (flush consumed the tail; reset \
+       before reusing)" ;
+  check_frames "step" s.scfg z ;
+  if Array.exists (fun d -> d = 0) (batch_shape z) then
+    invalid_arg
+      "step: cannot synthesise frames with a zero-size leading axis (channels \
+       must be at least 1)" ;
+  let k = last_dim z in
+  if k = 0 then None
+  else begin
+    let c = s.scfg in
+    let fft = Config.fft_size c and hop = Config.hop c in
+    let b = s.sblocks in
+    let width = b * hop in
+    let windowed =
+      Nx.irfft Nx.float64 ~axis:(-1) ~n:fft
+        (Nx.swapaxes (-1) (-2) (to_complex128 z))
+      |> Fun.flip Nx.mul c.analysis_window
+    in
+    let windowed =
+      if width = fft then windowed
+      else Nx.pad (full_widths windowed 0 (width - fft)) 0. windowed
+    in
+    let local =
+      if b = 1 then windowed
+      else
+        let hist =
+          match s.shist with
+          | Some hist ->
+              hist
+          | None ->
+              (* the frames before the stream are absent, and an absent frame
+                 lands the exact zeros [overlap_add] pads its planes with *)
+              Nx.zeros Nx.float64
+                (Array.append (batch_shape z) [|b - 1; width|])
+        in
+        Nx.concatenate ~axis:(Nx.ndim windowed - 2) [hist; windowed]
+    in
+    let fed = s.sfed in
+    let quotients =
+      Nx.div
+        (synthesis_blocks s local ~frames:(b - 1 + k) ~count:k)
+        (step_envelope s ~start:(fed * hop) ~count:(k * hop))
+    in
+    s.sfed <- fed + k ;
+    if b > 1 then s.shist <- Some (Nx.copy (frame_axis local k (b - 1 + k))) ;
+    let stream =
+      match s.scarry with
+      | None ->
+          quotients
+      | Some carry ->
+          concat_last [carry; quotients]
+    in
+    let total = last_dim stream in
+    let release = total - s.shold in
+    s.scarry <-
+      ( if s.shold = 0 then None
+        else Some (Nx.copy (shrink_last stream release total)) ) ;
+    synthesis_release s stream release
+  end
+
+let synthesis_flush s =
+  if s.sdrained then None
+  else begin
+    s.sdrained <- true ;
+    let c = s.scfg in
+    let fft = Config.fft_size c and hop = Config.hop c in
+    let b = s.sblocks in
+    (* what the last frame still owes: the padded positions past [frames * hop]
+       that the trailing trim keeps. The holdback is exactly the overshoot of
+       one hop past that trim, so at most one of the two is ever nonzero and a
+       held tail is a tail the trim discards. *)
+    let cut = Stdlib.max 0 (fft - hop - right_width c) in
+    s.scarry <- None ;
+    if s.sfed = 0 || cut = 0 then None
+    else begin
+      let hist = Option.get s.shist in
+      let local =
+        Nx.concatenate
+          ~axis:(Nx.ndim hist - 2)
+          [ hist
+          ; Nx.zeros Nx.float64
+              (Array.append (batch_shape hist) [|b - 1; b * hop|]) ]
+      in
+      let start = s.sfed * hop in
+      let quotients =
+        Nx.div
+          (shrink_last
+             (synthesis_blocks s local ~frames:(2 * (b - 1)) ~count:(b - 1))
+             0 cut )
+          (Nx.create Nx.float64 [|cut|]
+             (Array.init cut (fun t ->
+                  partial_envelope c s.swindow ~last:(s.sfed - 1) (start + t) )
+             ) )
+      in
+      synthesis_release s quotients cut
+    end
+  end
+
+module Synthesis = struct
+  type ('a, 'c) t =
+    { sstate: synthesis_state
+    ; sdtype: (float, 'a) Nx.dtype
+    ; scdtype: (Complex.t, 'c) Nx.dtype }
+
+  let prepare dtype cfg cdtype ~channels ~max_block =
+    if channels < 1 then
+      invalid_arg
+        (Printf.sprintf
+           "prepare: cannot synthesise %d channels (channels must be at least \
+            1)"
+           channels ) ;
+    if max_block < 1 then
+      invalid_arg
+        (Printf.sprintf
+           "prepare: cannot accept blocks of %d frames (max_block must be at \
+            least 1)"
+           max_block ) ;
+    check_invertible "prepare" cfg ;
+    {sstate= synthesis_state_create cfg; sdtype= dtype; scdtype= cdtype}
+
+  let step k z = Option.map (Nx.cast k.sdtype) (synthesis_step k.sstate z)
+
+  let flush k = Option.map (Nx.cast k.sdtype) (synthesis_flush k.sstate)
+
+  let reset k = synthesis_reset k.sstate
+end
+
 (* {1 Pipeline stages} *)
 
 (* [stage_latency c] is the involuntary lookahead the pipeline stage declares:
@@ -1112,4 +1406,37 @@ let power_stage ?(power = 2.) c =
       witness := Some dtype ;
       let (Cdtype cdtype) = spectrum_witness dtype in
       state_step s.state cdtype chunk |> Option.map (magnitude_pow dtype power) )
+    ()
+
+(* [synthesis_stage dtype c] declares its whole holdback on the output side: the
+   kernel withholds no frame at all — every frame it is given completes a hop of
+   output on the spot — and trails that output by [Config.synthesis_latency c]
+   samples. Composed downstream of [stage], the two declarations add up to the
+   chain's own lookahead, which is the point of stating the second one in output
+   samples. *)
+let synthesis_stage dtype c =
+  check_invertible "synthesis_stage" c ;
+  let fft = Config.fft_size c and hop = Config.hop c in
+  let rate = {Pipeline.Rate.num= hop; den= 1} in
+  let out_format fmt =
+    let ips = Pipeline.Rate.(Pipeline.Format.items_per_second fmt * rate) in
+    let bound =
+      Option.map
+        (fun b -> Stdlib.max (b * hop) (fft - hop))
+        (Pipeline.Format.max_items fmt)
+    in
+    fmt
+    |> Pipeline.Format.with_dtype dtype
+    |> Pipeline.Format.with_items_per_second ips
+    |> Pipeline.Format.with_max_items bound
+  in
+  Pipeline.kernel
+    ~output_latency:(Config.synthesis_latency c)
+    ~rate ~out_format
+    ~flush:(fun s ->
+      Option.to_list (Option.map (Nx.cast dtype) (synthesis_flush s)) )
+    ~reset:synthesis_reset
+    ~concat:(function [] -> Nx.zeros dtype [|0|] | parts -> concat_last parts)
+    ~prepare:(fun _ -> synthesis_state_create c)
+    ~step:(fun s z -> Option.map (Nx.cast dtype) (synthesis_step s z))
     ()
