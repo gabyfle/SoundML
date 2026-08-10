@@ -39,9 +39,8 @@ Current suites:
   component, with the imaginary DC and Nyquist bins zeroed so the inverse
   real transform discards nothing) across `(fft_size, hop, win_length)`
   combos x all three alignments x frame counts x float64/float32, plus an
-  explicit output length above, below and at the natural one and one a
-  hop and a sample long, which leaves whole frames unread (`lengths.json`),
-  and
+  explicit output length above, below and at the natural one and one a hop
+  and a sample long, which leaves whole frames unread (`lengths.json`), and
   `librosa.griffinlim` at `init=None` — its only deterministic initial
   phase — across iteration counts and momenta including the momentum-free
   classic algorithm. The spectra are inconsistent on purpose, so the cases

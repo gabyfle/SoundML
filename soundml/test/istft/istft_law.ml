@@ -126,9 +126,9 @@ let round_trip_tests =
         alignments )
     cells
 
-(* The 2048-point cell, at one length and one padding mode per alignment: the
-   grid above already crosses the knobs, this pins the geometry the benches and
-   the big goldens use. *)
+(* The same round trip at the 2048-point cell, one length and one padding mode
+   per alignment. The law is stated for every transform size; the grid above
+   stops at 64 points. *)
 let big_round_trip_tests =
   List.map
     (fun ((fft, hop, wl), (aname, alignment)) ->
@@ -358,7 +358,8 @@ let shape_tests =
 let error_tests =
   [ test "a hop the squared window cannot cover is rejected" (fun () ->
         (* the window's own zero at the frame edge: a periodic Hann advanced by
-           its whole length leaves that position with no tap at all *)
+           its whole length reaches that position with exactly one tap, and that
+           tap is the zero the window opens on *)
         let c = Stft.Config.create ~fft_size:2048 ~hop:2048 () in
         raises_invalid_arg ~msg:"hop equal to the frame"
           "invert: cannot invert a 2048-point window advanced by 2048 samples \
