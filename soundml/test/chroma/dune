@@ -1,0 +1,7 @@
+(test
+ (name test_chroma)
+ (package soundml)
+ (modules chroma_goldens chroma_props test_chroma)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

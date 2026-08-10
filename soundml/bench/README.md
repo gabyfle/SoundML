@@ -23,6 +23,32 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   mirroring the librosa rows one to one.
 - `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
   one row per dtype, mirroring the librosa rows one to one.
+- `cqt` — the constant-Q paths end to end over the same 30 s of mono audio at
+  22.05 kHz and hop 512: `Cqt.power_spectrum` over the default seven-octave
+  84-bin ladder and over the erb variable-Q ladder, and `chroma_cqt` over a
+  252-bin ladder at 36 bins per octave, one row per dtype, mirroring the
+  librosa rows one to one. `Cqt.Config.create` is priced separately: it builds
+  the frequency ladder, the octave plan and one filter kernel per octave once,
+  and every call reuses them.
+
+  The measured position, both sides on the maintainer machine in one session
+  (arm64, min-of-N over five interleaved alternations, librosa 0.11 with
+  `tuning=0.0` and `sparsity=0` pinned on every call so the two suites compute
+  the same transform): 0.46x librosa at float32 and 0.47x at float64 on the
+  84-bin constant-Q ladder (8.94 ms against 19.23, 10.18 against 21.66);
+  0.58x on the erb variable-Q ladder at both dtypes (8.12 against 13.98,
+  9.29 against 15.91); and 0.20x float32 / 0.15x float64 on the 252-bin
+  chromagram (19.75 against 98.00, 21.01 against 139.22). Three things carry
+  it: the filter bank is built once in the configuration where librosa
+  rebuilds it per call (0.77 ms here, against a 9 ms transform); the octave
+  projection is one dense complex GEMM per octave through the platform BLAS,
+  where the reference multiplies a sparsified CSR basis — which is why the gap
+  widens with the bank, from 2.2x at 84 bins to 5-6.6x at 252; and the octave
+  decimation runs the resampler's dense offline form, which measures 3.4x its
+  own dot-product executor on the 2:1 chain and is what closes the distance to
+  libsoxr's half-band path. The remaining variable-Q gap against constant-Q is
+  the erb ladder's longer low-octave filters, on both sides.
+
 - `resample` — every face of `Resample` on one-second mono clips: `apply`
   across presets, rate pairs and dtypes; the GEMM surface next to the
   executor; the streaming kernel across chunk sizes (the 1024 row keeps the

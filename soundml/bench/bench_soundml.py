@@ -121,6 +121,99 @@ def resample_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
     return benches
 
 
+# The constant-Q cases: the same 30 s of mono audio through the default
+# seven-octave ladder, the erb variable-Q ladder and the 252-bin chromagram.
+# Every call pins tuning=0.0 and sparsity=0 — librosa estimates tuning from the
+# signal by default and discards 1% of each filter's mass — so the two suites
+# compute the same transform. keep in sync with the OCaml suite.
+CQT_FMIN = 32.70319566257483
+
+CQT_COMMON = dict(
+    sr=SAMPLE_RATE,
+    hop_length=HOP,
+    fmin=CQT_FMIN,
+    tuning=0.0,
+    sparsity=0,
+    norm=1,
+    window="hann",
+    filter_scale=1,
+    scale=True,
+    pad_mode="constant",
+    res_type="soxr_hq",
+)
+
+
+def cqt_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
+    """librosa.vqt at gamma=0 and gamma=None, and the chroma_cqt composition.
+    librosa.feature.chroma_cqt exposes no sparsity control, so its twin times
+    the C= composition the OCaml row computes."""
+    rng = np.random.default_rng(42)
+    y32 = rng.random(N_AUDIO, dtype=np.float32) * 2.0 - 1.0
+    y64 = y32.astype(np.float64)
+
+    def transform(y: np.ndarray, n_bins: int, bins_per_octave: int, gamma: Any):
+        dtype = np.complex64 if y.dtype == np.float32 else np.complex128
+
+        def run() -> None:
+            np.abs(
+                librosa.vqt(
+                    y,
+                    n_bins=n_bins,
+                    bins_per_octave=bins_per_octave,
+                    gamma=gamma,
+                    dtype=dtype,
+                    **CQT_COMMON,
+                )
+            )
+
+        return run
+
+    def chroma(y: np.ndarray, n_bins: int, bins_per_octave: int):
+        dtype = np.complex64 if y.dtype == np.float32 else np.complex128
+
+        def run() -> None:
+            transform = np.abs(
+                librosa.vqt(
+                    y,
+                    n_bins=n_bins,
+                    bins_per_octave=bins_per_octave,
+                    gamma=0,
+                    dtype=dtype,
+                    **CQT_COMMON,
+                )
+            )
+            librosa.feature.chroma_cqt(
+                C=transform,
+                sr=SAMPLE_RATE,
+                hop_length=HOP,
+                fmin=CQT_FMIN,
+                n_chroma=12,
+                n_octaves=n_bins // bins_per_octave,
+                bins_per_octave=bins_per_octave,
+                threshold=0.0,
+            )
+
+        return run
+
+    benches: List[Tuple[str, Callable[[], Any]]] = []
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(f"cqt/cqt 30s {tag} 84/12 hop{HOP} (librosa)",
+                  transform(y, 84, 12, 0))
+        )
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(f"cqt/vqt 30s {tag} 84/12 gamma-erb hop{HOP} (librosa)",
+                  transform(y, 84, 12, None))
+        )
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(f"cqt/chroma_cqt 30s {tag} n252 bpo36 hop{HOP} (librosa)",
+                  chroma(y, 252, 36))
+        )
+    return benches
+
+
 def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
     benches: List[Tuple[str, Callable[[], Any]]] = []
 
@@ -168,6 +261,7 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
             )
         )
 
+    benches.extend(cqt_benchmarks())
     benches.extend(resample_benchmarks())
     return benches
 
