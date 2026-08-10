@@ -22,8 +22,8 @@
 (* Every feature is one batched pass over the whole spectrogram tensor:
    reductions run along the bin axis (axis -2) with [keepdims], so the result is
    [[...; 1; frames]] and leading axes broadcast untouched. The interior is
-   double precision with librosa 0.11's exact operation order; the one cast to
-   the input dtype sits at the boundary. *)
+   double precision, in the operation order the module's parity contract fixes
+   (see the interface); the one cast to the input dtype sits at the boundary. *)
 
 let bins_of s = Nx.dim (Nx.ndim s - 2) s
 
@@ -88,7 +88,7 @@ let check_power op power =
           and positive)"
          op power )
 
-(* [check_magnitudes op s] rejects what librosa rejects: the features are only
+(* [check_magnitudes op s] rejects negative entries: the features are only
    defined over non-negative energies. NaN entries fail the same comparison, so
    they are caught here too. *)
 let check_magnitudes op s =
@@ -102,8 +102,8 @@ let check_magnitudes op s =
 (* [grid op ?freqs ~sample_rate s] is the rank-one double-precision bin
    frequency vector: [freqs] validated and cast, or the FFT grid of the [2 *
    (bins - 1)]-point transform the bin count implies — bin [k] at [k *
-   sample_rate / fft_size], with librosa's exact arithmetic ([np.fft.rfftfreq]:
-   one reciprocal, one multiply per bin). *)
+   sample_rate / fft_size], evaluated as one reciprocal and one multiply per
+   bin, the reference arithmetic the parity contract fixes. *)
 let grid op ?freqs ~sample_rate s =
   check_sample_rate op sample_rate ;
   check_freqs_rank op freqs ;
@@ -144,10 +144,9 @@ let empty_feature s =
   out.(Array.length out - 2) <- 1 ;
   Nx.zeros (Nx.dtype s) out
 
-(* [normalised s64] is each frame scaled to unit magnitude sum — librosa's
-   [util.normalize norm=1 axis=-2]: frames whose sum falls below the smallest
-   positive normal double divide by [1] instead (the underflow guard), so an
-   all-zero frame stays all-zero. *)
+(* [normalised s64] is each frame scaled to unit magnitude sum. Frames whose sum
+   falls below the smallest positive normal double divide by [1] instead (the
+   underflow guard), so an all-zero frame stays all-zero. *)
 let normalised s64 =
   let length = Nx.sum ~axes:[-2] ~keepdims:true s64 in
   let safe =
@@ -157,8 +156,9 @@ let normalised s64 =
   in
   Nx.div s64 safe
 
-(* [centroid_core fq s64] is the double-precision centroid, librosa's exact
-   operation order: normalise, weight by the bin frequencies, reduce. *)
+(* [centroid_core fq s64] is the double-precision centroid, in the operation
+   order the parity contract fixes: normalise, weight by the bin frequencies,
+   reduce. *)
 let centroid_core fq s64 =
   Nx.sum ~axes:[-2] ~keepdims:true (Nx.mul (col fq) (normalised s64))
 

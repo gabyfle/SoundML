@@ -19,12 +19,12 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(* librosa 0.11 [onset.onset_strength], on the default feature chain: the
-   log-power mel spectrogram, the lagged positive difference along the frame
-   axis, the mean over the bin axis, and — for centered analysis — the [fft_size
-   / (2 * hop)]-frame compensation shift. The difference itself is the Mealy
-   kernel below ([lag] frames of carried state); the flat function runs it on
-   one chunk. *)
+(* Spectral-flux onset strength on the log-power mel chain: the log-power mel
+   spectrogram, the lagged positive difference along the frame axis, the mean
+   over the bin axis, and — for centered analysis — the [fft_size / (2 *
+   hop)]-frame compensation shift. The difference itself is the Mealy kernel
+   below ([lag] frames of carried state); the flat function runs it on one
+   chunk. *)
 
 let check_lag fn lag =
   if lag < 1 then
@@ -59,8 +59,8 @@ let collapsed_shape t frames =
    State of one flux stream: [carry] holds the last [min lag seen] input frames,
    kernel-owned copies — incoming chunks are borrowed. Output frame [t] is the
    mean over bins of [max 0 (s t - s (t - lag))], and [0] for the first [lag]
-   frames of the stream (librosa's zero prefix, its lag compensation pad); every
-   input frame yields exactly one output frame, so there is no tail to drain. *)
+   frames of the stream (the lag-compensation zero prefix); every input frame
+   yields exactly one output frame, so there is no tail to drain. *)
 
 type 'a state = {lag: int; mutable carry: (float, 'a) Nx.t option}
 
@@ -172,14 +172,14 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
        broadcast-consistent empty envelope directly. *)
     Nx.zeros dtype (collapsed_shape mel m)
   else begin
-    (* librosa's log-power mel: power_to_db with its defaults — reference 1,
-       floor 1e-10 and the 80 dB whole-tensor clamp — in double precision. *)
+    (* The log-power mel: power_to_db with its defaults — reference 1, floor
+       1e-10 and the 80 dB whole-tensor clamp — in double precision. *)
     let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
     (* The flat flux is the kernel on one chunk. *)
     let z = state_step fn (state_create lag) db in
     (* Centered analysis reads [fft_size / 2] samples ahead of each grid
-       position; librosa compensates by shifting the envelope right by [fft_size
-       / (2 * hop)] frames, trimmed back to the frame grid. *)
+       position; the envelope compensates by shifting right by [fft_size / (2 *
+       hop)] frames, trimmed back to the frame grid. *)
     let shift =
       match Stft.Config.alignment stft_config with
       | `Centered ->

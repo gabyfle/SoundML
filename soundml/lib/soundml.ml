@@ -22,17 +22,16 @@ let mel_spectrogram stft_config mel_config ?(power = 2.) x =
   check_fft_sizes "mel_spectrogram" stft_config mel_config ;
   Mel.apply mel_config (Stft.power_spectrum ~power stft_config x)
 
-(* Orthonormal type-II DCT row scales — scipy's [dct norm='ortho']: the raw
-   transform times [1 / sqrt (4 n)] on row zero and [1 / sqrt (2 n)]
-   elsewhere. *)
+(* Orthonormal type-II DCT row scales: the raw transform times [1 / sqrt (4 n)]
+   on row zero and [1 / sqrt (2 n)] elsewhere. *)
 let dct_ortho_scales n_mels n_mfcc =
   Nx.create Nx.float64 [|n_mfcc; 1|]
     (Array.init n_mfcc (fun k ->
          if k = 0 then 1. /. Float.sqrt (4. *. Float.of_int n_mels)
          else 1. /. Float.sqrt (2. *. Float.of_int n_mels) ) )
 
-(* Sinusoidal liftering weights (librosa): coefficient [k], from zero, scales by
-   [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)]. *)
+(* Sinusoidal liftering weights: coefficient [k], from zero, scales by [1 +
+   (lifter / 2) * sin (pi * (k + 1) / lifter)]. *)
 let lifter_weights lifter n_mfcc =
   Nx.create Nx.float64 [|n_mfcc; 1|]
     (Array.init n_mfcc (fun k ->
@@ -75,10 +74,10 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
     Nx.zeros dtype out
   end
   else
-    (* The interior runs in double: librosa's log-mel (power_to_db with the 80
-       dB clamp librosa.feature.mfcc inherits), the raw type-II DCT along the
-       mel axis, the orthonormal row scaling, then one rounding at the
-       boundary. *)
+    (* The interior runs in double: the log-mel spectrogram ([power_to_db] with
+       the 80 dB dynamic-range clamp the parity contract fixes), the raw type-II
+       DCT along the mel axis, the orthonormal row scaling, then one rounding at
+       the boundary. *)
     let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
     let cepstrum =
       Nx.mul

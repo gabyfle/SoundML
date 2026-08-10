@@ -40,7 +40,7 @@
     octave down runs on a signal decimated by two — so the cost is a handful of
     small transforms rather than one long convolution per bin. That recursion
     rides the library's own resampler ({!Resample}, the [`High] preset); see
-    {!section:parity} for exactly what that costs against librosa 0.11.
+    {!section:parity} for exactly what that costs.
 
     Complex-valued entry points take the spectrum dtype as an explicit
     dtype-first witness, exactly like {!Stft.transform}. Whatever the witness,
@@ -122,8 +122,8 @@ module Config : sig
       analyses every octave at [sample_rate] and a hop divisible by a high
       power of two additionally licenses an early decimation before the first
       octave. [pad] is the boundary extension of the per-octave analysis and
-      defaults to [`Constant 0.] — the zero padding librosa 0.11's own
-      constant-Q transform uses, unlike its STFT.
+      defaults to [`Constant 0.] — zero padding, the boundary convention of
+      the reference constant-Q transform (unlike its STFT).
 
       Raises [Invalid_argument] if [n_bins], [bins_per_octave], [hop] or
       [sample_rate] is smaller than [1]; if [fmin] is not finite and positive;
@@ -207,7 +207,8 @@ val frequencies : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
     The ladder is evaluated octave by octave, so a bin and its octave
     transposition differ by exactly a factor of two and the reported
     frequencies are exactly the ones the filters are built at. Evaluating
-    [2 ^ (k / bins_per_octave)] in one step instead — as librosa 0.11's
+    [2 ^ (k / bins_per_octave)] in one step instead — as the reference
+    implementation's
     [cqt_frequencies] helper does, though its [vqt] does not — moves the last
     three bits of some bins. *)
 
@@ -223,7 +224,7 @@ val filter_lengths : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
     When the plan decimates early, the octaves run at a lower rate and their
     filters are correspondingly shorter; these are the lengths at the
     configured rate, which is also the scale the [scale] normalisation and
-    librosa 0.11's [filters.wavelet_lengths] report. *)
+    the reference implementation's [filters.wavelet_lengths] report. *)
 
 (** {1 The frame grid}
 

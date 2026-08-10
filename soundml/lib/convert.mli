@@ -24,12 +24,13 @@ val power_to_db :
     [reference] defaults to [1.]. [amin] defaults to [1e-10] and floors both
     the input values and the reference before the logarithms, so the result
     is always finite; a power that is not positive — which a power spectrum
-    does not contain — sits at the floor (librosa). When [top_db] is given, the result is clamped below to
+    does not contain — sits at the floor. When [top_db] is given, the result is clamped below to
     [m - top_db], where [m] is the maximum decibel value over the {e whole}
     tensor — a whole-tensor reduction, not an elementwise operation: over a
     spectrogram the threshold is global across channels, bins and frames
-    alike. Nothing is clamped by default — librosa's [power_to_db] applies
-    [top_db = 80.] unless told otherwise; this function applies exactly what
+    alike. Nothing is clamped by default — a deviation from the reference
+    implementation, which clamps at [top_db = 80.] unless told otherwise;
+    this function applies exactly what
     the caller asks for. For the streaming consequences of that reduction,
     see {!Db.clamped_stage}.
 
@@ -55,8 +56,8 @@ val amplitude_to_db :
     reference)], elementwise, then clamped exactly as {!power_to_db} clamps
     when [top_db] is given.
 
-    [reference] defaults to [1.]. [amin] defaults to [1e-5], librosa's
-    amplitude floor — the [1e-10] power floor, in the amplitude domain.
+    [reference] defaults to [1.]. [amin] defaults to [1e-5] — the [1e-10]
+    power floor, in the amplitude domain.
 
     Raises [Invalid_argument] if [reference] or [amin] is not finite and
     positive, or if [top_db] is not finite and non-negative. *)
@@ -72,7 +73,7 @@ val db_to_amplitude : ?reference:float -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 
 val hz_to_mel : ?scale:[`Slaney | `Htk] -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [hz_to_mel ?scale f] is the frequencies [f], in hertz, on the mel scale,
-    elementwise. [scale] defaults to [`Slaney] (librosa): linear below
+    elementwise. [scale] defaults to [`Slaney]: linear below
     1000 Hz at 3/200 mel per hertz, logarithmic above, continuous at the
     break. [`Htk] is [2595 * log10 (1 + f / 700)]. *)
 
@@ -110,7 +111,7 @@ val time_to_frames :
     It inverts {!frames_to_time} exactly on grids whose [hop / sample_rate]
     ratio is representable in the element dtype — [hop] dividing a
     power-of-two [sample_rate], say. Elsewhere the floor lands one frame
-    early for the indices whose time rounded down, exactly as librosa's
-    [time_to_frames] does on the same grid.
+    early for the indices whose time rounded down, matching the reference
+    implementation on the same grid.
 
     Raises [Invalid_argument] if [sample_rate < 1] or [hop < 1]. *)

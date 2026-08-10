@@ -33,9 +33,9 @@ module Config = struct
              config-owned — accessors copy, kernels read without copying. *) }
 
   (* [fft_frequencies sample_rate fft_size bins] is the center frequency of each
-     bin in hertz, with librosa's exact arithmetic ([np.fft.rfftfreq]: one
-     reciprocal, one multiply per bin) so the bin frequencies match librosa's
-     bit for bit. *)
+     bin in hertz, evaluated as one reciprocal and one multiply per bin — the
+     reference arithmetic the parity contract fixes, so the bin frequencies
+     match it bit for bit. *)
   let fft_frequencies sample_rate fft_size bins =
     let step =
       1.0 /. (Float.of_int fft_size *. (1.0 /. Float.of_int sample_rate))
@@ -43,10 +43,10 @@ module Config = struct
     Nx.mul_s (Nx.arange_f Nx.float64 0. (Float.of_int bins) 1.) step
 
   (* [breakpoints scale f_min f_max count] is [count] frequencies equally spaced
-     on the mel scale between [f_min] and [f_max], in hertz — librosa's
-     [mel_frequencies]. The linspace mirrors numpy's normal path: one
+     on the mel scale between [f_min] and [f_max], in hertz. The linspace is one
      precomputed step [delta / div] scaled by the index, the endpoint pinned to
-     the exact upper mel. *)
+     the exact upper mel — the reference arithmetic the parity contract
+     fixes. *)
   let breakpoints scale f_min f_max count =
     let bounds =
       Convert.hz_to_mel ~scale (Nx.create Nx.float64 [|2|] [|f_min; f_max|])
@@ -61,10 +61,9 @@ module Config = struct
 
   let has_true t = Nx.item [] (Nx.any t)
 
-  (* [weights_of c] is the [[n_mels; bins]] triangular filter matrix — librosa's
-     [filters.mel], in double precision: each filter ramps up from breakpoint
-     [m] to [m + 1] and down to [m + 2], sampled at the FFT bin frequencies and
-     clamped at zero. *)
+  (* [weights_of c] is the [[n_mels; bins]] triangular filter matrix, in double
+     precision: each filter ramps up from breakpoint [m] to [m + 1] and down to
+     [m + 2], sampled at the FFT bin frequencies and clamped at zero. *)
   let weights_of ~f_min ~f_max ~scale ~norm ~n_mels ~sample_rate ~fft_size =
     let bins = (fft_size / 2) + 1 in
     let count = n_mels + 2 in

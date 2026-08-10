@@ -58,19 +58,19 @@ module Config : sig
 
       [f_min] and [f_max] bound the filterbank in hertz and default to [0.]
       and [sample_rate / 2.]. [scale] selects the mel scale variant of
-      {!Convert.hz_to_mel} and defaults to [`Slaney] (librosa). [norm]
+      {!Convert.hz_to_mel} and defaults to [`Slaney]. [norm]
       defaults to [`Slaney], which divides each filter by half the width of
-      its band in hertz so it integrates to approximately one (librosa's
-      [norm="slaney"]); [`None] keeps unit peak gain.
+      its band in hertz so it integrates to approximately one; [`None] keeps
+      unit peak gain.
 
       Raises [Invalid_argument] if [n_mels], [sample_rate] or [fft_size] is
       smaller than [1], if [f_min] is not finite and non-negative, if [f_max]
       is not finite and greater than [f_min] or exceeds the Nyquist frequency
       [sample_rate / 2.], if adjacent mel breakpoints collapse in double
       precision, or if some filter spans no FFT bin — raise [fft_size] or
-      lower [n_mels] instead. The last three checks are stricter than
-      librosa, which builds past Nyquist, degrades on collapsed breakpoints
-      and only warns on empty filters. *)
+      lower [n_mels] instead. The last three checks are stricter than the
+      reference implementation, which builds past Nyquist, degrades on
+      collapsed breakpoints and only warns on empty filters. *)
 
   val n_mels : t -> int
   (** [n_mels c] is the number of mel bands. *)

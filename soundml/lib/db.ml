@@ -20,11 +20,10 @@ let concat = function
   | chunks ->
       Nx.concatenate ~axis:(-1) chunks
 
-(* Whole-chunk maximum reference, floored by [amin] like librosa floors its
-   callable references — so a signal with no positive value is referenced to
-   [amin]. Non-finite maxima (a chunk holding NaN) also fall back to [amin]
-   rather than raising mid-run: garbage propagates elementwise instead of
-   aborting the pipeline. *)
+(* Whole-chunk maximum reference, floored by [amin] — so a signal with no
+   positive value is referenced to [amin]. Non-finite maxima (a chunk holding
+   NaN) also fall back to [amin] rather than raising mid-run: garbage propagates
+   elementwise instead of aborting the pipeline. *)
 let to_db_with_maximum ~amin ?top_db chunk =
   if Nx.numel chunk = 0 then Nx.copy chunk
   else

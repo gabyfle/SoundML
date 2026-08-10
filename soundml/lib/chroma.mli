@@ -39,10 +39,10 @@
     projection matrix is built in double precision and every projection runs in
     a double interior, rounding once into the dtype of the spectrum.
 
-    Numerical parity with librosa 0.11 ([librosa.filters.chroma],
-    [librosa.filters.cq_to_chroma] and the [librosa.feature.chroma_*] family)
-    is enforced against committed golden vectors in the test suite; the one
-    deliberate departure is named under {!section:parity}. Chroma energy
+    Numerical parity with the reference implementation
+    is enforced against committed golden vectors in the test suite; the
+    compatibility contract, and its one
+    deliberate departure, live under {!section:parity}. Chroma energy
     normalisation ([chroma_cens]) and the variable-Q chromagram are deliberately
     outside this module. *)
 
@@ -56,7 +56,7 @@
 
     A frame whose length underflows the smallest normal of the spectrum's dtype
     is left untouched rather than amplified: dividing a silent frame by its own
-    rounding noise would manufacture a pitch profile. librosa's zero-norm and
+    rounding noise would manufacture a pitch profile. Zero-norm and
     negative-infinity-norm options are deliberately not offered — neither is a
     norm. *)
 type norm = [`Inf | `P of float | `None]
@@ -181,8 +181,8 @@ val cqt_projection :
     The [bins_per_octave / n_chroma] bins of one chroma step are merged, the
     merge window is centred on the step rather than starting at it, and the
     whole assignment is rotated so that the ladder's lowest bin lands on the
-    pitch class of [Cqt.Config.fmin] — untuned, exactly as librosa 0.11 rotates
-    it.
+    pitch class of [Cqt.Config.fmin] — untuned: the [tuning] shift plays no
+    part in the rotation.
 
     Raises [Invalid_argument] if [n_chroma] is smaller than [1] or if
     [Cqt.Config.bins_per_octave c] is not an integer multiple of it. *)

@@ -138,12 +138,12 @@ let put (buf : buffer) len i v =
 
 (* [cosine_fill buf len coefficients m] writes the [m]-point generalized cosine
    window sum_k a_k * cos(k * theta_i), with theta_i evenly spaced on [-pi, pi]
-   (the scipy general_cosine formulation). Writing theta_i as (2i - (m - 1)) *
-   pi / (m - 1) makes the reflection i -> m - 1 - i negate an integer factor,
-   hence theta exactly. The harmonics follow from the Chebyshev identity cos(k *
-   theta) = T_k(cos theta) and its recurrence T_(k+1) = 2 * cos(theta) * T_k -
-   T_(k-1), so a single cosine per sample carries the whole sum. Requires [m >=
-   2] and at least two coefficients. *)
+   (the parametrization the parity contract fixes). Writing theta_i as (2i - (m
+   - 1)) * pi / (m - 1) makes the reflection i -> m - 1 - i negate an integer
+   factor, hence theta exactly. The harmonics follow from the Chebyshev identity
+   cos(k * theta) = T_k(cos theta) and its recurrence T_(k+1) = 2 * cos(theta) *
+   T_k - T_(k-1), so a single cosine per sample carries the whole sum. Requires
+   [m >= 2] and at least two coefficients. *)
 let cosine_fill buf len coefficients m =
   let step = Float.pi /. Float.of_int (m - 1) in
   let order = Array.length coefficients in
@@ -322,9 +322,9 @@ let kaiser_fill buf len beta m =
     done
 
 (* [fill buf len w m] writes the [m]-point symmetric window [w] into the [len]
-   slots of [buf], following the scipy signal windows formula by formula.
-   Requires [m >= 2], a validated [w], and a [buf] of exactly [len] elements
-   with [len] equal to [m] or to [m - 1]. *)
+   slots of [buf], one reference formula per variant (see the parity note in the
+   interface). Requires [m >= 2], a validated [w], and a [buf] of exactly [len]
+   elements with [len] equal to [m] or to [m - 1]. *)
 let rec fill buf len w m =
   match w with
   | Rectangular ->
@@ -357,8 +357,8 @@ let rec fill buf len w m =
 (* [fill_window buf w ~periodic n] writes the [n]-point window [w] into [buf].
    Requires [n >= 1], a validated [w], and a [buf] of exactly [n] elements. A
    one-point window is [1.] in both forms (the guard applies before the periodic
-   extension, as in scipy); for [n >= 2] the periodic window is the symmetric
-   window of length [n + 1] with the last sample dropped. *)
+   extension); for [n >= 2] the periodic window is the symmetric window of
+   length [n + 1] with the last sample dropped. *)
 let fill_window buf w ~periodic n =
   if n = 1 then Bigarray.Array1.unsafe_set buf 0 1.
   else fill buf n w (if periodic then n + 1 else n)

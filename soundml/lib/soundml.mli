@@ -98,16 +98,15 @@ val mfcc :
     [[...; n_mfcc; frames]]: the orthonormal type-II DCT along the mel axis
     of the log-mel spectrogram, keeping the first [n_mfcc] coefficients.
     [n_mfcc] defaults to [20]. The log-mel spectrogram is
-    {!Convert.power_to_db} of [mel_spectrogram stft mel x] with librosa's
-    [mfcc] settings: reference [1.], floor [1e-10], and the 80 dB
-    dynamic-range clamp under the global maximum that [librosa.feature.mfcc]
-    inherits from its [power_to_db] call.
+    {!Convert.power_to_db} of [mel_spectrogram stft mel x] with reference
+    [1.], floor [1e-10], and the 80 dB dynamic-range clamp under the global
+    maximum.
 
-    The DCT is orthonormal exactly as scipy's [dct norm='ortho']: the raw
-    type-II transform scaled by [1 / sqrt (4 * n_mels)] on coefficient zero
-    and [1 / sqrt (2 * n_mels)] elsewhere. [lifter], when positive, applies
-    sinusoidal liftering — coefficient [k], counted from zero, is multiplied
-    by [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)] (librosa) — and [0.]
+    The DCT is orthonormal: the raw type-II transform scaled by
+    [1 / sqrt (4 * n_mels)] on coefficient zero and [1 / sqrt (2 * n_mels)]
+    elsewhere. [lifter], when positive, applies sinusoidal liftering —
+    coefficient [k], counted from zero, is multiplied by
+    [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)] — and [0.]
     or absent applies none. The log-mel scaling, the DCT and the liftering
     are computed in double precision and rounded to the dtype of [x] once,
     at the boundary; the mel spectrogram beneath carries its own boundary
@@ -178,7 +177,8 @@ val spectral_centroid :
 (** [spectral_centroid ~sample_rate s] is the spectral centroid of the
     magnitude spectrogram [s] — {!Stft.power_spectrum}[ ~power:1.] output, or
     any non-negative [[...; bins; frames]] tensor — shaped [[...; 1; frames]]
-    (librosa's keepdims shape): each frame, normalised to unit magnitude sum,
+    (the bin axis kept, reduced to one): each frame, normalised to unit
+    magnitude sum,
     is read as a distribution over the bin frequencies and reduced to its
     mean [Σₖ freq k * S k t / Σⱼ S j t], in hertz. Leading axes broadcast, so
     a batch of spectrograms is one call; values are computed in double
@@ -186,18 +186,18 @@ val spectral_centroid :
 
     The bin frequencies default to the FFT grid implied by the bin count —
     bin [k] of a [[...; bins; frames]] spectrogram sits at
-    [k * sample_rate / (2 * (bins - 1))], with librosa's exact arithmetic —
-    and [freqs], a rank-one tensor of [bins] frequencies, replaces that grid
-    for non-uniformly spaced bins (librosa's [freq] vector; the per-frame
-    frequency {e matrix} of a reassigned spectrogram is not supported). When
+    [k * sample_rate / (2 * (bins - 1))], evaluated as one reciprocal and one
+    multiply per bin — and [freqs], a rank-one tensor of [bins] frequencies,
+    replaces that grid for non-uniformly spaced bins (the per-frame frequency
+    {e matrix} of a reassigned spectrogram is not supported). When
     [freqs] is given, [sample_rate] is validated but not otherwise consulted.
 
     Frames whose magnitudes sum below the smallest positive normal double are
-    left unnormalised (librosa's underflow guard), so an all-zero frame has
+    left unnormalised (the underflow guard), so an all-zero frame has
     centroid [0]; the guard is evaluated in double precision, so on float32
     input it sits far below float32's own tiny threshold — a deviation from
-    librosa run natively on float32 data, visible only on subnormal-magnitude
-    frames. A spectrogram with no frames, or a zero-size axis, maps to zeros
+    the reference implementation run natively on float32 data, visible only
+    on subnormal-magnitude frames. A spectrogram with no frames, or a zero-size axis, maps to zeros
     of the result shape.
 
     Raises [Invalid_argument] if [s] has rank below two or holds a negative
@@ -235,8 +235,8 @@ val spectral_bandwidth :
     [(Σₖ S~ k t * |freq k - centroid t| ^ p) ^ (1/p)] in hertz, where [S~]
     is the frame-normalised spectrogram. [p] defaults to [2.], the frequency
     standard deviation. Frames are always normalised to unit magnitude sum,
-    with the underflow guard of {!spectral_centroid}; librosa's [norm=False]
-    variant is not exposed.
+    with the underflow guard of {!spectral_centroid}; an unnormalised variant
+    is not exposed.
 
     [centroid] supplies precomputed per-frame centroid frequencies, shaped
     [[...; 1; frames]] and broadcastable against [s], sparing the second pass
@@ -276,8 +276,7 @@ val spectral_rolloff :
     frame rolls off at the first bin's frequency.
 
     [freqs] and [sample_rate] behave exactly as in {!spectral_centroid};
-    [freqs] must be sorted in increasing order (librosa's assumption,
-    inherited).
+    [freqs] must be sorted in increasing order (assumed, not checked).
 
     Raises [Invalid_argument] as {!spectral_centroid} does, or if
     [roll_percent] does not lie strictly between [0] and [1]. *)
@@ -298,14 +297,14 @@ val spectral_flatness :
     [max amin (S k t ^ power)] over the bins divided by its arithmetic mean —
     [1.] for a perfectly flat (noise-like) frame, near [0.] for a tonal one.
     [power] defaults to [2.]: the magnitudes are squared to the power
-    spectrum before averaging, librosa's choice; pass [~power:1.] for a
-    spectrogram that is already a power spectrum. [amin] defaults to [1e-10]
+    spectrum before averaging; pass [~power:1.] for a spectrogram that is
+    already a power spectrum. [amin] defaults to [1e-10]
     and floors the powered magnitudes, keeping the logarithms finite.
     Flatness is rate-agnostic — no frequency grid is involved.
 
     Raises [Invalid_argument] if [s] has rank below two or holds a negative
     or NaN value, or if [amin] or [power] is not finite and positive (the
-    domain librosa documents for [power] but does not enforce). *)
+    domain is enforced here, not merely documented). *)
 
 val spectral_flatness_stage :
      ?amin:float
@@ -327,14 +326,14 @@ val rms : ?frame_length:int -> ?hop:int -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     axis is the last axis of [x]; leading axes broadcast, so a batch of
     clips is one call.
 
-    [frame_length] defaults to [2048] and [hop] to [512] (librosa 0.11's
-    [librosa.feature.rms]). The analysis is centered: frame [p] is centered
-    at sample [p * hop], the signal extended by [frame_length / 2] zeros on
-    each side (librosa's [pad_mode="constant"]; other pad modes and
-    uncentered analysis are not exposed). The mean and root are computed in
-    double precision and rounded to the dtype of [x] once, at the boundary
-    (librosa returns float32 by default regardless of the input dtype).
-    An empty signal produces no frames, [[...; 1; 0]] — librosa instead
+    [frame_length] defaults to [2048] and [hop] to [512]. The analysis is
+    centered: frame [p] is centered at sample [p * hop], the signal extended
+    by [frame_length / 2] zeros on each side (constant zero padding; other
+    pad modes and uncentered analysis are not exposed). The mean and root are
+    computed in double precision and rounded to the dtype of [x] once, at the
+    boundary — the result dtype follows the input, where the reference
+    implementation returns float32 regardless. An empty signal produces no
+    frames, [[...; 1; 0]] — a deviation: the reference implementation instead
     pads an all-zero frame for even frame lengths and rejects empty input
     for odd ones.
 
@@ -345,12 +344,12 @@ val rms_of_spectrogram :
   ?frame_length:int -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [rms_of_spectrogram s] is the frame energy recovered from the magnitude
     spectrogram [s], mapping [[...; bins; frames]] to [[...; 1; frames]] —
-    librosa's [rms (S=...)] path. By Parseval's identity for the one-sided
-    spectrum layout, the frame power is twice the sum of the squared
+    the spectrogram-input companion of {!rms}. By Parseval's identity for the
+    one-sided spectrum layout, the frame power is twice the sum of the squared
     magnitudes over the bins — the DC bin halved, and the Nyquist bin
     halved for even frame lengths — divided by [frame_length] squared.
-    Windowed spectra weigh the estimate by their window; librosa's parity
-    companion to {!rms} is a rectangular-window, uncentered spectrogram.
+    Windowed spectra weigh the estimate by their window; the exact companion
+    of {!rms} is a rectangular-window, uncentered spectrogram.
     [frame_length] defaults to [2048]. The sum is computed in double
     precision and rounded to the dtype of [s] once, at the boundary.
 
@@ -386,19 +385,19 @@ val zero_crossing_rate :
     call.
 
     [frame_length] defaults to [2048], [hop] to [512] and [threshold] to
-    [1e-10] (librosa 0.11's [librosa.feature.zero_crossing_rate]). The
-    analysis is centered: frame [p] is centered at sample [p * hop], the
-    signal extended by [frame_length / 2] edge copies on each side
-    (librosa's fixed choice; uncentered analysis is not exposed). Signs
-    follow librosa's clamped convention: samples in
+    [1e-10]. The analysis is centered: frame [p] is centered at sample
+    [p * hop], the signal extended by [frame_length / 2] edge copies on each
+    side (edge copies are the only padding; uncentered analysis is not
+    exposed). Signs follow a clamped convention: samples in
     [[-threshold, threshold]] count as positive zero, so a sample is
     negative iff it lies strictly below [-threshold], and a crossing is a
     change of that sign between a sample and its predecessor — the first
     position of a frame carries no crossing. The count is exact in any
     dtype; the division is computed in double precision and rounded to the
-    dtype of [x] once, at the boundary (librosa returns float64
-    regardless). An empty signal produces no frames, [[...; 1; 0]] —
-    librosa rejects empty input.
+    dtype of [x] once, at the boundary — the result dtype follows the input,
+    where the reference implementation returns float64 regardless. An empty
+    signal produces no frames, [[...; 1; 0]] — a deviation: the reference
+    implementation rejects empty input.
 
     Raises [Invalid_argument] if [frame_length] or [hop] is smaller than
     [1], if [threshold] is not finite and non-negative, or if [x] has rank
@@ -436,29 +435,29 @@ val spectral_contrast :
 (** [spectral_contrast c ~sample_rate x] is the spectral contrast of [x],
     shaped [[...; n_bands + 1; frames]]: per frame of the magnitude spectrum
     on the analysis geometry [c], the peak-to-valley difference of each of
-    [n_bands + 1] octave-spaced frequency bands (Jiang et al., 2002, as
-    librosa computes it). The time axis is the last axis of [x]; leading axes
-    broadcast, so a batch of clips is one call. This face mirrors librosa's
-    [y=] input mode; {!spectral_contrast_of_spectrogram} is the [S=] mode,
-    over an already-computed magnitude spectrogram. librosa's [freq] vector
-    is not exposed: the band plan always uses the FFT bin grid of [c].
+    [n_bands + 1] octave-spaced frequency bands (Jiang et al., 2002). The
+    time axis is the last axis of [x]; leading axes broadcast, so a batch of
+    clips is one call. This face consumes raw audio;
+    {!spectral_contrast_of_spectrogram} consumes an already-computed
+    magnitude spectrogram. A custom frequency grid is not exposed: the band
+    plan always uses the FFT bin grid of [c].
 
     Band [b] collects the FFT bins whose center frequency lies in
     [[edge b, edge (b + 1)]] inclusive, where [edge 0] is [0] Hz and
     [edge j] is [f_min * 2^(j-1)] beyond — band [0] spans [[0, f_min]] and
-    each later band one octave. Following librosa, every band above the first
-    is extended one bin below its lower edge, the top band runs to the top of
-    the spectrum, and every band below the top yields its highest bin back to
-    its successor. Per band and frame, the valley is the mean of the [take]
+    each later band one octave. Every band above the first is extended one
+    bin below its lower edge, the top band runs to the top of the spectrum,
+    and every band below the top yields its highest bin back to its
+    successor. Per band and frame, the valley is the mean of the [take]
     smallest magnitudes and the peak the mean of the [take] largest, where
     [take] is [quantile] of the extended band's bin count, rounded half to
     even and never below one bin.
 
     [n_bands] defaults to [6], [f_min] to [200.] Hz and [quantile] to
     [0.02]. [linear] defaults to [false]: the contrast is
-    [power_to_db peak - power_to_db valley] with librosa's [power_to_db]
-    defaults — reference [1.], floor [1e-10] and the 80 dB dynamic-range
-    clamp under each tensor's {e global} maximum, a whole-signal reduction.
+    [power_to_db peak - power_to_db valley] with reference [1.], floor
+    [1e-10] and the 80 dB dynamic-range clamp under each tensor's {e global}
+    maximum, a whole-signal reduction.
     [~linear:true] is the plain difference [peak - valley] instead. The
     interior runs in double precision and rounds to the dtype of [x] once,
     at the boundary.
@@ -466,9 +465,9 @@ val spectral_contrast :
     Raises [Invalid_argument] if [n_bands < 1], if [f_min] is not finite and
     positive, if [quantile] does not lie strictly between [0] and [1], if
     [sample_rate < 1], if the top band would start at or above the Nyquist
-    frequency (librosa's precondition), if some band spans no FFT bin —
-    librosa degrades to NaN means there; raise [fft_size] or lower [n_bands]
-    instead — or if [x] has rank zero. *)
+    frequency, if some band spans no FFT bin — rejected outright, where the
+    reference implementation degrades to NaN means; raise [fft_size] or lower
+    [n_bands] instead — or if [x] has rank zero. *)
 
 val spectral_contrast_of_spectrogram :
      ?n_bands:int
@@ -482,7 +481,7 @@ val spectral_contrast_of_spectrogram :
     over an already-computed magnitude spectrogram [s] —
     {!Stft.power_spectrum}[ ~power:1.] output, or any non-negative
     [[...; bins; frames]] tensor — mapping [[...; bins; frames]] to
-    [[...; n_bands + 1; frames]]: librosa's [S=] input mode, as
+    [[...; n_bands + 1; frames]]: the spectrogram-input mode, as
     {!rms_of_spectrogram} is to {!rms}. The band plan is built on the FFT bin
     grid the bin count implies ([fft_size = 2 * (bins - 1)]); the parameters,
     the contrast and the clamped logarithmic path are exactly those of
@@ -525,16 +524,16 @@ val onset_strength :
   -> (float, 'a) Nx.t
   -> (float, 'a) Nx.t
 (** [onset_strength stft mel x] is the spectral-flux onset strength envelope
-    of [x], shaped [[...; frames]] — librosa's default onset chain: the mel
+    of [x], shaped [[...; frames]] — the log-power mel flux chain: the mel
     axis mean of [max 0 (D[f, t] - D[f, t - lag])] over the log-power mel
     spectrogram [D], which is [mel_spectrogram stft mel x] through
-    [Convert.power_to_db] with librosa's defaults — reference [1.], floor
-    [1e-10] and the 80 dB dynamic-range clamp under the global maximum, a
-    whole-signal reduction. The time axis is the last axis of [x]; leading
+    [Convert.power_to_db] with reference [1.], floor [1e-10] and the 80 dB
+    dynamic-range clamp under the global maximum, a whole-signal
+    reduction. The time axis is the last axis of [x]; leading
     axes broadcast, so a batch of clips is one call.
 
     [lag] is the frame lag of the difference and defaults to [1]. The first
-    [lag] envelope values are zero (librosa's lag compensation), and centered
+    [lag] envelope values are zero (the lag compensation), and centered
     analysis shifts the envelope right by a further [fft_size / (2 * hop)]
     zeros, trimmed back to the frame grid, so onsets land on the frames whose
     grid position they precede — the shift is derived from the [`Centered]
@@ -544,7 +543,8 @@ val onset_strength :
     mel spectrogram beneath carries its own boundary roundings, exactly as
     [mel_spectrogram].
 
-    Documented deviations from librosa's [onset_strength], each absent here
+    Documented deviations from the reference implementation's onset
+    envelope, each absent here
     rather than renamed: no [max_size] local maximum filtering along the
     frequency axis and no precomputed [ref] spectrum (the reference is the
     spectrogram itself), no [detrend] DC-removal filter, no [aggregate]

@@ -32,14 +32,15 @@
     complex64 spectrum); OCaml has no implicit type-level mapping from float
     dtypes to complex ones, so the pairing is the caller's choice. Whatever
     the witness, values are computed in double precision and rounded once
-    into the requested storage, exactly as librosa rounds its double interior
-    into the complex dtype it pairs with the input. The real-valued
+    into the requested storage. The real-valued
     conveniences ({!power_spectrum}, {!power_stage}) are dtype-preserving and
     never expose a complex dtype.
 
     Defaults are the Hann window, [hop = fft_size / 4] and centered frames
-    over reflect padding; numerical parity with librosa 0.11 is enforced
-    against committed golden vectors in the test suite. librosa 0.11 itself
+    over reflect padding; numerical parity with librosa 0.11 — including the
+    double interior above — is enforced against committed golden vectors in
+    the test suite. [`Centered] and [`Left] alignment correspond to its
+    [center=True] and [center=False]; librosa 0.11 itself
     pads with zeros by default — pass [~pad:(`Constant 0.)] to reproduce its
     defaults exactly. *)
 
@@ -72,17 +73,15 @@ module Config : sig
       [alignment] places the analysis window relative to each frame's grid
       position [p * hop] and defaults to [`Centered]:
       - [`Centered] — the window is centered on the grid position; the signal
-        is padded by [fft_size / 2] samples on both sides (librosa
-        [center=true]).
-      - [`Left] — the window starts at the grid position; no padding (librosa
-        [center=false]).
+        is padded by [fft_size / 2] samples on both sides.
+      - [`Left] — the window starts at the grid position; no padding.
       - [`Right] — the window ends at the grid position; the signal is padded
         by [fft_size - 1] samples on the left. Whether frames stay strictly
         causal depends on [pad], below.
 
       [pad] selects the boundary extension used wherever the alignment pads
-      and defaults to [`Reflect] (mirror without repeating the edge sample,
-      numpy's [reflect] mode); [`Constant v] extends with [v] and [`Edge]
+      and defaults to [`Reflect] (mirror without repeating the edge
+      sample); [`Constant v] extends with [v] and [`Edge]
       repeats the boundary sample. With [`Right] alignment, [`Constant] and
       [`Edge] keep frames strictly causal — every frame reads only samples at
       or before its grid position — while [`Reflect] mirrors early samples

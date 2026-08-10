@@ -267,9 +267,9 @@ let ols_batch = true
 let ols_tile_lines = 1024
 
 (* The streaming emission-granularity ceiling: an OLS block may not span more
-   than ~130 ms at its stage rate (soxr's own DFT stages buffer 1-4 k samples,
-   the same class). A sharp stage whose block rule cannot fit under the ceiling
-   is not OLS-eligible and stays on the direct executor. *)
+   than ~130 ms at its stage rate — the same class as the 1-4 k-sample blocks
+   the interface documents. A sharp stage whose block rule cannot fit under the
+   ceiling is not OLS-eligible and stays on the direct executor. *)
 let ols_ceiling_ms = 130
 
 (* [ols_block_n ~rate ~f_div ~k] is the OLS block length for a sharp stage of
@@ -695,7 +695,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
       done
     done ;
   (* OLS ÷F: wide rational stage first, sharp integer decimator executed by
-     overlap-save at the lowest rate — soxr's own planner shape. *)
+     overlap-save at the lowest rate. *)
   if m > l then
     List.iter
       (fun f ->
