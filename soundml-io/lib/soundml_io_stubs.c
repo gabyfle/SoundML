@@ -428,7 +428,17 @@ static void *soundml_io_staging(int64_t block, int64_t channels, size_t elt) {
    decoding — runs its sequential body instead of queueing. The per-slot
    rendezvous is a sequence counter with a parked bit: a bounded yield spin
    covers the common handoff and a dispatch semaphore absorbs the rest, so a
-   handoff costs well under a microsecond against tasks measured in tens. */
+   handoff costs well under a microsecond against tasks measured in tens.
+
+   Every rendezvous word is accessed sequentially consistently. Each waiting
+   side stores its parked bit and then re-reads the counter it waits on,
+   while the waking side stores that counter and then reads the parked bit;
+   only one total order over those four accesses rules out both sides reading
+   the value from before the other's store, which is the shape that drops a
+   wakeup and parks the pair forever. Weaker orderings order each side's own
+   pair and leave that window open. A parked bit is only ever cleared with an
+   exchange, so exactly one side observes it set: every park is answered by
+   exactly one signal and the semaphore's count never drifts. */
 
 #if defined(__APPLE__) && defined(__aarch64__)
 #define SOUNDML_IO_PARALLEL 1
@@ -467,41 +477,57 @@ static struct {
   int width; /* forced split width from the environment, 0 = automatic */
 } soundml_io_pool = {PTHREAD_MUTEX_INITIALIZER, {{0}}, {0}, 0, 0};
 
+/* Wait for the slot's next task. Returns 1 with a task pending, 0 once the
+   slot is shutting down and nothing is left to run. A pending task outranks
+   shutdown, so every submitted task runs and publishes [done] whatever the
+   teardown does: a caller in soundml_io_join is never left without an
+   answer. Shutdown is re-read after the parked bit is stored for the same
+   reason the posted counter is — a teardown that lands in between would
+   otherwise never be observed and the atexit join would hang. */
+static int soundml_io_worker_wait(soundml_io_slot *s, uint64_t seen) {
+  int spin = 0;
+  for (;;) {
+    if (atomic_load_explicit(&s->posted, memory_order_seq_cst) != seen)
+      return 1;
+    if (atomic_load_explicit(&s->shutdown, memory_order_seq_cst)) return 0;
+    if (++spin <= SOUNDML_IO_SPIN) {
+      __asm__ volatile("yield");
+      continue;
+    }
+    atomic_store_explicit(&s->parked_worker, 1, memory_order_seq_cst);
+    if (atomic_load_explicit(&s->posted, memory_order_seq_cst) != seen ||
+        atomic_load_explicit(&s->shutdown, memory_order_seq_cst)) {
+      /* A waker that took the bit first owes this slot a signal: consume it
+         rather than leave it to fall through the next park. */
+      if (!atomic_exchange_explicit(&s->parked_worker, 0,
+                                    memory_order_seq_cst))
+        dispatch_semaphore_wait(s->sem_worker, DISPATCH_TIME_FOREVER);
+    } else {
+      dispatch_semaphore_wait(s->sem_worker, DISPATCH_TIME_FOREVER);
+    }
+    spin = 0;
+  }
+}
+
 static void *soundml_io_worker(void *p) {
   soundml_io_slot *s = p;
   uint64_t seen = 0;
-  for (;;) {
-    int spin = 0;
-    while (atomic_load_explicit(&s->posted, memory_order_acquire) == seen) {
-      if (atomic_load_explicit(&s->shutdown, memory_order_relaxed)) return NULL;
-      if (++spin > SOUNDML_IO_SPIN) {
-        atomic_store_explicit(&s->parked_worker, 1, memory_order_release);
-        if (atomic_load_explicit(&s->posted, memory_order_acquire) != seen) {
-          atomic_store_explicit(&s->parked_worker, 0, memory_order_release);
-          break;
-        }
-        dispatch_semaphore_wait(s->sem_worker, DISPATCH_TIME_FOREVER);
-        atomic_store_explicit(&s->parked_worker, 0, memory_order_release);
-        spin = 0;
-      } else {
-        __asm__ volatile("yield");
-      }
-    }
-    if (atomic_load_explicit(&s->shutdown, memory_order_relaxed)) return NULL;
+  while (soundml_io_worker_wait(s, seen)) {
     seen++;
     if (s->run != NULL) s->run(s->arg);
-    atomic_store_explicit(&s->done, seen, memory_order_release);
-    if (atomic_exchange_explicit(&s->parked_caller, 0, memory_order_acq_rel))
+    atomic_store_explicit(&s->done, seen, memory_order_seq_cst);
+    if (atomic_exchange_explicit(&s->parked_caller, 0, memory_order_seq_cst))
       dispatch_semaphore_signal(s->sem_caller);
   }
+  return NULL;
 }
 
 static void soundml_io_pool_shutdown(void) {
   for (int i = 0; i < SOUNDML_IO_POOL_SLOTS; i++) {
     soundml_io_slot *s = &soundml_io_pool.slot[i];
     if (!s->started) continue;
-    atomic_store_explicit(&s->shutdown, 1, memory_order_release);
-    if (atomic_exchange_explicit(&s->parked_worker, 0, memory_order_acq_rel))
+    atomic_store_explicit(&s->shutdown, 1, memory_order_seq_cst);
+    if (atomic_exchange_explicit(&s->parked_worker, 0, memory_order_seq_cst))
       dispatch_semaphore_signal(s->sem_worker);
     pthread_join(s->thread, NULL);
     s->started = 0;
@@ -582,26 +608,29 @@ static void soundml_io_submit(soundml_io_slot *s, soundml_io_task run,
                               void *arg) {
   s->run = run;
   s->arg = arg;
-  atomic_fetch_add_explicit(&s->posted, 1, memory_order_release);
-  if (atomic_exchange_explicit(&s->parked_worker, 0, memory_order_acq_rel))
+  atomic_fetch_add_explicit(&s->posted, 1, memory_order_seq_cst);
+  if (atomic_exchange_explicit(&s->parked_worker, 0, memory_order_seq_cst))
     dispatch_semaphore_signal(s->sem_worker);
 }
 
 static void soundml_io_join(soundml_io_slot *s) {
   uint64_t want = atomic_load_explicit(&s->posted, memory_order_relaxed);
   int spin = 0;
-  while (atomic_load_explicit(&s->done, memory_order_acquire) < want) {
-    if (++spin > SOUNDML_IO_SPIN) {
-      atomic_store_explicit(&s->parked_caller, 1, memory_order_release);
-      if (atomic_load_explicit(&s->done, memory_order_acquire) >= want) {
-        atomic_store_explicit(&s->parked_caller, 0, memory_order_release);
-        break;
-      }
-      dispatch_semaphore_wait(s->sem_caller, DISPATCH_TIME_FOREVER);
-      spin = 0;
-    } else {
+  for (;;) {
+    if (atomic_load_explicit(&s->done, memory_order_seq_cst) >= want) return;
+    if (++spin <= SOUNDML_IO_SPIN) {
       __asm__ volatile("yield");
+      continue;
     }
+    atomic_store_explicit(&s->parked_caller, 1, memory_order_seq_cst);
+    if (atomic_load_explicit(&s->done, memory_order_seq_cst) >= want) {
+      if (!atomic_exchange_explicit(&s->parked_caller, 0,
+                                    memory_order_seq_cst))
+        dispatch_semaphore_wait(s->sem_caller, DISPATCH_TIME_FOREVER);
+      return;
+    }
+    dispatch_semaphore_wait(s->sem_caller, DISPATCH_TIME_FOREVER);
+    spin = 0;
   }
 }
 
