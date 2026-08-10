@@ -21,7 +21,10 @@
    per dtype, mirroring the librosa rows of [bench_soundml.py] one to one.
    [Config.create] is priced separately: it builds the frequency ladder, the
    octave plan and one filter kernel per octave once, and every call reuses them
-   — the reference implementation rebuilds its basis on every call.
+   — the reference implementation rebuilds its basis on every call. The same
+   group carries the incremental kernel over the same clip and ladder: three
+   chunk cadences and the whole-signal instance, which together separate the
+   per-chunk dispatch of the composition from the per-frame projection.
 
    The resample group covers every face of [Resample] on one-second mono clips:
    [apply] across the three presets, the six headline rate pairs — near-unity
@@ -125,6 +128,46 @@ let cqt_benchmarks () =
         Soundml.chroma_cqt chroma_cqt_config x64 )
   ; Thumper.bench "cqt config 84/12" (fun () ->
         Soundml.Cqt.Config.create ~n_bins:84 ~sample_rate () ) ]
+
+(* The streaming face of the same ladder: the incremental kernel fed the same 30
+   s clip at three chunk sizes, plus the whole-signal instance that anchors its
+   partition law. The chunk rows price the per-chunk dispatch of the composition
+   — one resampler step and one STFT step per octave — against the frame
+   projection, which the whole row isolates. *)
+let cqt_stream_benchmarks () =
+  let clip = Nx.rand Nx.float32 [|n_audio|] in
+  let one max_chunk =
+    let kernel =
+      Soundml.Cqt.Kernel.prepare Nx.complex64 cqt_config Nx.float32 ~channels:1
+        ~max_block:max_chunk
+    in
+    let chunks =
+      let rec cut off =
+        if off >= n_audio then []
+        else
+          let stop = min n_audio (off + max_chunk) in
+          Nx.shrink [|(off, stop)|] clip :: cut stop
+      in
+      cut 0
+    in
+    Thumper.bench
+      (Printf.sprintf "stream 30s f32 84/12 hop512 chunk %d" max_chunk)
+      (fun () ->
+        Soundml.Cqt.Kernel.reset kernel ;
+        List.iter (fun c -> ignore (Soundml.Cqt.Kernel.step kernel c)) chunks ;
+        ignore (Soundml.Cqt.Kernel.flush kernel) )
+  in
+  let whole =
+    let kernel =
+      Soundml.Cqt.Kernel.prepare Nx.complex64 cqt_config Nx.float32 ~channels:1
+        ~max_block:n_audio
+    in
+    Thumper.bench "stream 30s f32 84/12 hop512 whole" (fun () ->
+        Soundml.Cqt.Kernel.reset kernel ;
+        ignore (Soundml.Cqt.Kernel.step kernel clip) ;
+        ignore (Soundml.Cqt.Kernel.flush kernel) )
+  in
+  List.map one [1024; 4096; 16384] @ [whole]
 
 let n = 1_000_000
 
@@ -269,7 +312,7 @@ let () =
     ; Thumper.group "pipeline" (pipeline_benchmarks ())
     ; Thumper.group "stft" (stft_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
-    ; Thumper.group "cqt" (cqt_benchmarks ())
+    ; Thumper.group "cqt" (cqt_benchmarks () @ cqt_stream_benchmarks ())
     ; Thumper.group "resample"
         ( resample_apply_benchmarks ()
         @ resample_gemm_benchmarks ()

@@ -22,8 +22,9 @@
 (** Constant-Q and variable-Q transforms.
 
     A {!Config.t} fixes the filter geometry once — the frequency ladder, the
-    per-bin bandwidths, the octave plan and every filter kernel — and
-    {!transform} runs it over a signal. One configuration serves both
+    per-bin bandwidths, the octave plan and every filter kernel —
+    {!transform} runs it over a whole signal and {!Kernel} runs the same plan
+    incrementally over a stream. One configuration serves both
     transforms: the constant-Q transform is the variable-Q transform at
     [gamma = 0], so [`Constant_q] and the [gamma] variants differ only in how
     each filter's bandwidth is offset.
@@ -50,9 +51,13 @@
 
     Inverse transforms, invertible non-stationary Gabor frames, the hybrid and
     pseudo constant-Q approximations, tuning estimation, sparsified filter
-    bases, intervals other than equal temperament and a streaming
-    {!Pipeline} stage are all deliberately outside this module: the transform
-    here is offline and centered. *)
+    bases, intervals other than equal temperament and a {!Pipeline} stage for
+    the kernel are all deliberately outside this module. So is the sliced
+    real-time constant-Q transform of Holighaus, Doerfler, Velasco & Grill
+    2013: it buys low latency by analysing overlapping slices of the signal —
+    a different transform with different coefficients, not a lower-latency
+    execution of this one. {!Kernel} streams {e this} plan, and pays the
+    lookahead constant-Q analysis costs ({!Config.latency}). *)
 
 (** {1 Configuration} *)
 
@@ -188,6 +193,43 @@ module Config : sig
       rejects a configuration whose [cutoff] exceeds the Nyquist frequency,
       and the margin between the two is what licenses the early decimation. *)
 
+  val latency : t -> int
+  (** [latency c] is the analysis lookahead of the whole plan in input samples
+      at [sample_rate]: the number of samples past a frame's grid position
+      that must arrive before {!Kernel} can emit that frame's column. Column
+      [p] is complete once [p * hop + latency c] input samples have been fed.
+
+      It is the largest per-octave lookahead,
+
+      {[ latency = max_i (D_i * (L_i - 1) + K * (D_i - 1) + 1) ]}
+
+      over the octave plan, where [D_i = 2 ^ (early + halvings_i)] is how many
+      2:1 decimations octave [i] sits under, [L_i] is that octave's centered
+      analysis lookahead in decimated samples ([n_fft_i / 2], the
+      {!Stft.Config.latency} of its analysis), and [K] is the group delay of
+      one exact 2:1 conversion in its own input samples ([190] at the [`High]
+      preset the recursion runs).
+
+      Both terms are physics, not implementation slack. [D_i * L_i] is half
+      the octave's longest filter measured in input samples: constant-Q
+      analysis of a bin at [f] with quality factor [Q] spans [Q / f] seconds,
+      so its centered frame cannot close before [Q / (2 f)] seconds of
+      lookahead — [265] ms at the [84]-bin C1 default — and the plan rounds
+      that up to the power-of-two transform length the octave is analysed at.
+      [K * (D_i - 1)] is the composed group delay of the decimation chain
+      above the octave, the price of analysing the low bins at a low rate.
+
+      The default [84]-bin C1 ladder at 22.05 kHz declares [20099] samples,
+      [0.91] s: [8192] of them the bottom octave's analysis half-window
+      carried up to the input rate, the remaining [11907] the composed delay
+      of the six 2:1 stages below it. A plan that never decimates — an odd
+      [hop], where every octave runs at [sample_rate] — pays the analysis
+      half-window alone: [8192] samples, [0.37] s, at the same default ladder.
+
+      The offline {!transform} is not subject to this: it has the whole signal
+      in hand. Latency is what an incremental analysis of the same plan owes
+      its own frame grid. *)
+
   val pp : Format.formatter -> t -> unit
   (** [pp fmt c] prints [c] on [fmt] in a compact single-line form. *)
 
@@ -272,6 +314,104 @@ val power_spectrum :
     Raises [Invalid_argument] if [x] has rank zero, or for the dtype reason
     documented on {!transform}. *)
 
+(** {1:kernel Incremental kernel}
+
+    The same octave plan driven chunk by chunk. [step] consumes an
+    arbitrary-length chunk of samples — the time axis last, leading axes
+    broadcast — and emits the frame columns that became complete; [flush]
+    extends the signal with virtual silence and emits the remaining columns.
+    A column leaves only when every octave has produced its frame at that
+    grid position, so the emitted sequence is the same frame grid
+    {!frames} counts, gated on the slowest octave.
+
+    {2 The partition law}
+
+    Concatenating every emitted chunk along the time axis is bit-identical to
+    the one-chunk instance of the same kernel — one [step] on the whole signal
+    plus the drain — for {e every} partitioning of the input, including
+    one-sample chunks, chunks that straddle the frame cadence and interspersed
+    empty ones. The law is anchored on the kernel's own whole-signal instance,
+    the way {!Resample} words it: every sub-kernel in the composition
+    ({!Resample.Kernel} for the decimation chain, {!Stft.Kernel} for each
+    octave's analysis) carries that law already, the inter-stage scalars are
+    elementwise, and frames are projected one at a time indexed by frame
+    number — never by arrival shape — so no emitted value can depend on where
+    a chunk boundary fell.
+
+    {2 Against the offline transform}
+
+    The kernel and {!transform} evaluate the same plan by different
+    arithmetic: {!transform} decimates through {!Resample.apply_gemm} and
+    projects the whole octave in one matrix product, neither of which carries
+    a partition law, while the kernel decimates through {!Resample.Kernel} and
+    projects frame by frame. Both are the same filter bank; their summation
+    orders differ. Agreement is therefore documented, not promised: the test
+    suite pins it at [2e-6] of the frame peak in float32 and [1e-13] in
+    float64 across its configuration grid, where the worst measured values are
+    [9.8e-7] and [1.7e-14] — the latter at a resampler-free plan, whose long
+    undecimated transforms give the projection its longest reductions. Use
+    {!transform} when a signal is in hand and the offline goldens are the
+    reference; use {!Kernel} when the signal arrives over time.
+
+    {2 Cost}
+
+    Every [step] carries the dispatch cost of the small per-octave tensor
+    calls it makes, and the per-frame projection replaces one wide matrix
+    product with one narrow product per frame. Chunk size is a throughput
+    knob, never a correctness one — the law guarantees identical bits at
+    every chunking. *)
+
+module Kernel : sig
+  (** The type for prepared kernel states. Mutable; single-owner; not
+      domain-safe. One state carries all channels — never one object per
+      channel. *)
+  type ('a, 'c) t
+
+  val prepare :
+       (Complex.t, 'c) Nx.dtype
+    -> Config.t
+    -> (float, 'a) Nx.dtype
+    -> channels:int
+    -> max_block:int
+    -> ('a, 'c) t
+  (** [prepare cdtype c dtype ~channels ~max_block] is a fresh kernel state
+      for chunks of at most [max_block] samples of [channels]-channel [dtype]
+      audio, producing [cdtype] columns. It allocates the whole composition:
+      one resampler state per early decimation, and per octave one STFT state,
+      one resampler state where the plan halves, and the column buffer that
+      holds what that octave ran ahead of the slowest one — at most
+      [ceil ((Config.latency c - lookahead) / hop) + 1] columns each.
+
+      Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
+      the plan decimates and [dtype] is neither float32 nor float64: the
+      recursion runs the resampler at the caller's sample type, exactly as
+      {!transform} does. *)
+
+  val step : ('a, 'c) t -> (float, 'a) Nx.t -> (Complex.t, 'c) Nx.t option
+  (** [step k chunk] feeds [chunk] and is the newly completed columns, if any,
+      shaped [[...; n_bins; columns]]. [chunk] is borrowed: the kernel copies
+      what it must retain, and the returned tensor aliases neither [chunk] nor
+      kernel state. A chunk that completes no column — the common case below
+      the cadence — is [None], and a chunk that completes several emits them
+      as one tensor.
+
+      Raises [Invalid_argument] if [chunk] has rank zero, if it is longer than
+      [max_block], or if [k] was drained by {!flush} — {!reset} it before
+      feeding a new signal. *)
+
+  val flush : ('a, 'c) t -> (Complex.t, 'c) Nx.t option
+  (** [flush k] drains the kernel: it installs each octave's right boundary
+      extension, drains the decimation chain and is the remaining columns, if
+      any. Over a whole stream the emitted columns total [frames c ~n] for the
+      [n] samples fed; octaves that ran ahead of the slowest keep their
+      surplus columns unemitted, which is the same trim {!transform} applies.
+      Draining consumes the tail — a second [flush] is [None]; {!reset} the
+      kernel before reusing it. *)
+
+  val reset : ('a, 'c) t -> unit
+  (** [reset k] restores [k] to its freshly prepared state. *)
+end
+
 (** {1:parity Parity with librosa 0.11}
 
     Magnitudes match [librosa.cqt] and [librosa.vqt] at matching explicit
@@ -306,3 +446,18 @@ val power_spectrum :
       [5e-3] of peak on music, so parity is stated against [sparsity=0].
     - {b Tuning is explicit.} [tuning] defaults to [0.] and is never estimated
       from the signal; librosa's transforms estimate it by default. *)
+
+(** {1:references References}
+
+    - J. C. Brown, {e Calculation of a constant Q spectral transform}, JASA
+      89(1), 1991 — the transform and its geometric frequency ladder.
+    - J. C. Brown & M. S. Puckette, {e An efficient algorithm for the
+      calculation of a constant Q transform}, JASA 92(5), 1992 — the
+      frequency-domain kernel this module projects through.
+    - C. Schoerkhuber & A. Klapuri, {e Constant-Q transform toolbox for music
+      processing}, SMC 2010 — the octave-by-octave recursion over a decimated
+      signal, and the variable-Q generalisation.
+    - N. Holighaus, M. Doerfler, G. A. Velasco & T. Grill, {e A framework for
+      invertible, real-time constant-Q transforms}, IEEE TASLP 21(4), 2013 —
+      the sliced transform, a different construction with lower latency than
+      the one implemented here. *)
