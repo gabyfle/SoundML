@@ -29,14 +29,14 @@ let config ?(alignment = `Centered) () =
   Stft.Config.create ~fft_size:512 ~hop:128 ~alignment ()
 
 let signals =
+  let half = lcg_signal 1024 in
   [ ("lcg", Nx.create Nx.float64 [|2048|] (lcg_signal 2048))
   ; ( "impulse-train"
     , Nx.create Nx.float64 [|2048|]
         (Array.init 2048 (fun i -> if i mod 97 = 0 then 1. else 0.)) )
   ; ( "half-silent"
     , Nx.create Nx.float64 [|2048|]
-        (Array.init 2048 (fun i ->
-             if i < 1024 then (lcg_signal 1024).(i) else 0. ) ) ) ]
+        (Array.init 2048 (fun i -> if i < 1024 then half.(i) else 0.)) ) ]
 
 let magnitudes c x = Stft.power_spectrum ~power:1. c x
 
