@@ -66,9 +66,54 @@
    the products in parallel without any freedom over the summation order. */
 #define SOUNDML_DOT_LANES 8
 
-/* One instantiation per sample type. `dot` is the fixed-shape reduction (see
-   the floating-point discipline above); `run` walks channels serially so the
+/* The shortest bank row the run loop walks a group of outputs at a time. Under
+   it a reduction is mostly its leading partial lanes and the loop's own
+   bookkeeping rather than whole lane groups, and the outputs go one by one. */
+#define SOUNDML_DOT_GROUP_MIN_TAPS (5 * SOUNDML_DOT_LANES)
+
+/* The body of the run loop, once per bank layout: `ROW` is the layout's bank
+   row for the output the walk sits on and `ADVANCE_ROW` carries it forward.
+   The grouped call takes SOUNDML_DOT_GROUP consecutive outputs, whose window
+   offsets and bank rows are collected first; the trailing outputs, and every
+   output of a short bank, go through the single-output reduction. Which of the
+   two runs an output cannot move a bit: both spell the same reduction. */
+#define SOUNDML_RESAMPLE_WALK(GROUP, SUFFIX, ROW, ADVANCE_ROW)               \
+  if ((GROUP) > 1 && taps >= SOUNDML_DOT_GROUP_MIN_TAPS)                     \
+    for (; i + (GROUP) <= n_out; i += (GROUP)) {                             \
+      for (int g = 0; g < (GROUP); g++) {                                    \
+        xo[g] = s;                                                           \
+        ho[g] = (ROW) * taps;                                                \
+        ADVANCE_ROW;                                                         \
+        p += m;                                                              \
+        s += p / l;                                                          \
+        p %= l;                                                              \
+      }                                                                      \
+      soundml_resample_dotg_##SUFFIX(scratch, bank, xo, ho, out + i, taps);  \
+    }                                                                        \
+  for (; i < n_out; i++) {                                                   \
+    out[i] =                                                                 \
+        soundml_resample_dot_##SUFFIX(scratch + s, bank + ((ROW) * taps),    \
+                                      taps);                                 \
+    ADVANCE_ROW;                                                             \
+    p += m;                                                                  \
+    s += p / l;                                                              \
+    p %= l;                                                                  \
+  }
+
+/* One instantiation per sample type, each with the number of outputs its run
+   loop keeps in flight. `dot` is the fixed-shape reduction (see the
+   floating-point discipline above), `dotg` is that same reduction run over
+   GROUP independent outputs at once, and `run` walks channels serially so the
    bank and the scratch lane stay cache-hot across channels.
+
+   GROUP is bounded by the register file: a group holds GROUP *
+   SOUNDML_DOT_LANES accumulators live, so float32 carries four outputs and
+   float64 — whose accumulators are twice as wide — carries one, which is the
+   single-output walk. Nothing about a group is visible in the result. The
+   outputs of a stage are independent by construction (each is one dot product
+   over its own window against its own bank row), so grouping reorders no
+   addition inside any output: every lane set, tap-to-lane rule and fold tree
+   below is the single-output one, spelled once and instantiated GROUP times.
 
    The reduction, spelled out: the leading `taps % 8` taps are summed into four
    lanes, tap i into lane `i % 4`; the whole groups of eight behind them are
@@ -96,7 +141,7 @@
    resident or sequential banks (measured, Apple M4 Pro). Row contents and
    the summation order are identical in both layouts, so the choice cannot
    move a bit. Rows are stored reversed, so the window is read forward. */
-#define SOUNDML_RESAMPLE_KERNEL(SUFFIX, T)                                   \
+#define SOUNDML_RESAMPLE_KERNEL(SUFFIX, T, GROUP)                            \
   static T soundml_resample_dot_##SUFFIX(const T *restrict x,                \
                                          const T *restrict h,                \
                                          int64_t taps) {                     \
@@ -115,6 +160,33 @@
     }                                                                        \
     return body[0] + ((lead[0] + lead[1]) + (lead[2] + lead[3]));            \
   }                                                                          \
+  static void soundml_resample_dotg_##SUFFIX(                                \
+      const T *restrict x, const T *restrict h, const int64_t *restrict xo,  \
+      const int64_t *restrict ho, T *restrict out, int64_t taps) {           \
+    T body[GROUP][SOUNDML_DOT_LANES], lead[GROUP][4];                        \
+    int64_t i, j;                                                            \
+    int g;                                                                   \
+    const int64_t rem = taps % SOUNDML_DOT_LANES;                            \
+    for (g = 0; g < (GROUP); g++) {                                          \
+      for (j = 0; j < 4; j++) lead[g][j] = (T)0;                             \
+      for (j = 0; j < SOUNDML_DOT_LANES; j++) body[g][j] = (T)0;             \
+    }                                                                        \
+    for (i = 0; i < rem; i++)                                                \
+      for (g = 0; g < (GROUP); g++)                                          \
+        lead[g][i % 4] += x[xo[g] + i] * h[ho[g] + i];                       \
+    for (; i + SOUNDML_DOT_LANES <= taps; i += SOUNDML_DOT_LANES)            \
+      for (j = 0; j < SOUNDML_DOT_LANES; j++)                                \
+        for (g = 0; g < (GROUP); g++)                                        \
+          body[g][j] += x[xo[g] + i + j] * h[ho[g] + i + j];                 \
+    for (g = 0; g < (GROUP); g++) {                                          \
+      for (j = SOUNDML_DOT_LANES / 2; j >= 1; j /= 2) {                      \
+        int64_t q;                                                           \
+        for (q = 0; q < j; q++) body[g][q] = body[g][q] + body[g][q + j];    \
+      }                                                                      \
+      out[g] = body[g][0]                                                    \
+               + ((lead[g][0] + lead[g][1]) + (lead[g][2] + lead[g][3]));    \
+    }                                                                        \
+  }                                                                          \
   static void soundml_resample_run_##SUFFIX(                                 \
       const T *restrict bank, T *restrict hist, T *restrict scratch,         \
       const T *restrict x, T *restrict y, int64_t n, int64_t n_out,          \
@@ -123,42 +195,27 @@
       int is_flush) {                                                        \
     const int64_t taps = (2 * k) + 1, hlen = 2 * k;                          \
     const int64_t p0 = (row0 * m) % l;                                       \
+    int64_t xo[GROUP], ho[GROUP];                                            \
     for (int64_t c = 0; c < channels; c++) {                                 \
       memcpy(scratch, hist + (c * hlen), (size_t)hlen * sizeof(T));          \
       if (is_flush)                                                          \
         memset(scratch + hlen, 0, (size_t)n * sizeof(T));                    \
       else                                                                   \
         memcpy(scratch + hlen, x + (c * n), (size_t)n * sizeof(T));          \
-      int64_t p = p0, s = s0;                                                \
+      int64_t p = p0, s = s0, i = 0;                                         \
       T *out = y + y_off + (c * y_stride);                                   \
       if (visit) {                                                           \
         int64_t j = row0;                                                    \
-        for (int64_t i = 0; i < n_out; i++) {                                \
-          out[i] =                                                           \
-              soundml_resample_dot_##SUFFIX(scratch + s, bank + (j * taps),  \
-                                            taps);                           \
-          j++;                                                               \
-          if (j == l) j = 0;                                                 \
-          p += m;                                                            \
-          s += p / l;                                                        \
-          p %= l;                                                            \
-        }                                                                    \
+        SOUNDML_RESAMPLE_WALK(GROUP, SUFFIX, j, (j++, j = (j == l ? 0 : j))) \
       } else {                                                               \
-        for (int64_t i = 0; i < n_out; i++) {                                \
-          out[i] =                                                           \
-              soundml_resample_dot_##SUFFIX(scratch + s, bank + (p * taps),  \
-                                            taps);                           \
-          p += m;                                                            \
-          s += p / l;                                                        \
-          p %= l;                                                            \
-        }                                                                    \
+        SOUNDML_RESAMPLE_WALK(GROUP, SUFFIX, p, (void)0)                     \
       }                                                                      \
       memcpy(hist + (c * hlen), scratch + n, (size_t)hlen * sizeof(T));      \
     }                                                                        \
   }
 
-SOUNDML_RESAMPLE_KERNEL(f32, float)
-SOUNDML_RESAMPLE_KERNEL(f64, double)
+SOUNDML_RESAMPLE_KERNEL(f32, float, 4)
+SOUNDML_RESAMPLE_KERNEL(f64, double, 1)
 
 static int64_t soundml_resample_dim(value v) {
   return (int64_t)Caml_ba_array_val(v)->dim[0];
