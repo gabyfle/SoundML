@@ -7,8 +7,8 @@
 
 mel/mel_spectrogram-30s-f32-fft2048-hop512	alloc_words	exact	15740
 mel/mel_spectrogram-30s-f32-fft2048-hop512	wall_time	batch=1	n=20	5.340e-03	4.962e-03 4.969e-03 5.150e-03 5.202e-03 5.278e-03 5.286e-03 5.298e-03 5.310e-03 5.316e-03 5.333e-03 5.348e-03 5.369e-03 5.373e-03 5.374e-03 5.383e-03 5.388e-03 5.393e-03 5.425e-03 5.564e-03 5.653e-03
-mel/mel_spectrogram-30s-f64-fft2048-hop512	alloc_words	exact	15658
-mel/mel_spectrogram-30s-f64-fft2048-hop512	wall_time	batch=1	n=20	5.914e-03	5.444e-03 5.490e-03 5.553e-03 5.733e-03 5.812e-03 5.814e-03 5.889e-03 5.900e-03 5.906e-03 5.909e-03 5.918e-03 5.951e-03 6.006e-03 6.025e-03 6.048e-03 6.133e-03 6.202e-03 6.366e-03 6.655e-03 7.620e-03
+mel/mel_spectrogram-30s-f64-fft2048-hop512	alloc_words	exact	15670
+mel/mel_spectrogram-30s-f64-fft2048-hop512	wall_time	batch=1	n=20	6.914e-03	6.493e-03 6.555e-03 6.556e-03 6.693e-03 6.720e-03 6.780e-03 6.859e-03 6.860e-03 6.874e-03 6.913e-03 6.915e-03 6.956e-03 6.984e-03 7.036e-03 7.070e-03 7.072e-03 7.217e-03 7.229e-03 7.378e-03 7.973e-03
 pipeline/direct-gain-bias-abs-1M	alloc_words	exact	962
 pipeline/direct-gain-bias-abs-1M	wall_time	batch=8	n=20	6.951e-04	6.804e-04 6.877e-04 6.878e-04 6.880e-04 6.884e-04 6.901e-04 6.916e-04 6.928e-04 6.932e-04 6.944e-04 6.957e-04 6.970e-04 6.972e-04 6.978e-04 6.982e-04 6.998e-04 7.022e-04 7.029e-04 7.075e-04 7.122e-04
 pipeline/run-gain-bias-abs-1M	alloc_words	exact	970
@@ -119,8 +119,8 @@ resample/stream-high-48k-8k-f32-chunk-4096	alloc_words	exact	21557
 resample/stream-high-48k-8k-f32-chunk-4096	wall_time	batch=32	n=20	2.308e-04	2.189e-04 2.194e-04 2.211e-04 2.217e-04 2.240e-04 2.250e-04 2.255e-04 2.270e-04 2.274e-04 2.303e-04 2.313e-04 2.315e-04 2.316e-04 2.320e-04 2.340e-04 2.346e-04 2.358e-04 2.386e-04 2.392e-04 2.393e-04
 stft/power_spectrum-30s-f32-fft2048-hop512	alloc_words	exact	15450
 stft/power_spectrum-30s-f32-fft2048-hop512	wall_time	batch=1	n=40	4.533e-03	4.364e-03 4.380e-03 4.381e-03 4.423e-03 4.424e-03 4.439e-03 4.443e-03 4.444e-03 4.444e-03 4.446e-03 4.449e-03 4.481e-03 4.484e-03 4.486e-03 4.497e-03 4.499e-03 4.502e-03 4.513e-03 4.526e-03 4.526e-03 4.540e-03 4.549e-03 4.549e-03 4.559e-03 4.567e-03 4.582e-03 4.590e-03 4.597e-03 4.622e-03 4.628e-03 4.639e-03 4.646e-03 4.650e-03 4.686e-03 4.698e-03 4.720e-03 4.741e-03 4.814e-03 4.826e-03 4.982e-03
-stft/power_spectrum-30s-f64-fft2048-hop512	alloc_words	exact	15370
-stft/power_spectrum-30s-f64-fft2048-hop512	wall_time	batch=1	n=20	5.073e-03	4.962e-03 4.963e-03 4.984e-03 4.984e-03 5.000e-03 5.016e-03 5.017e-03 5.023e-03 5.032e-03 5.033e-03 5.112e-03 5.125e-03 5.148e-03 5.154e-03 5.158e-03 5.160e-03 5.247e-03 5.298e-03 5.328e-03 5.362e-03
+stft/power_spectrum-30s-f64-fft2048-hop512	alloc_words	exact	15382
+stft/power_spectrum-30s-f64-fft2048-hop512	wall_time	batch=1	n=20	6.145e-03	5.685e-03 5.801e-03 5.861e-03 5.880e-03 5.896e-03 5.897e-03 5.917e-03 5.937e-03 5.950e-03 6.117e-03 6.174e-03 6.214e-03 6.232e-03 6.246e-03 6.284e-03 6.288e-03 6.357e-03 6.515e-03 6.628e-03 9.038e-03
 window/bartlett-2048	alloc_words	exact	4319
 window/bartlett-2048	wall_time	batch=2048	n=20	2.777e-06	2.703e-06 2.709e-06 2.721e-06 2.729e-06 2.734e-06 2.763e-06 2.763e-06 2.771e-06 2.774e-06 2.774e-06 2.780e-06 2.793e-06 2.830e-06 2.841e-06 2.869e-06 2.874e-06 2.874e-06 2.886e-06 2.947e-06 3.085e-06
 window/blackman-2048	alloc_words	exact	4323
