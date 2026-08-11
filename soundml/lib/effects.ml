@@ -163,7 +163,7 @@ let peaks_of (m : doubles) base bins into =
    row [po] in place: each peak keeps its own, and every other bin of a peak's
    region takes the peak's phase offset by the phase difference the two bins
    have in the analysis frame at [ao]. Regions are split halfway between
-   consecutive peaks, the lower region keeping the middle bin of an odd gap. *)
+   consecutive peaks, a bin equidistant from both going to the upper one. *)
 let lock (phi : doubles) po (ang : doubles) ao bins peaks n =
   let start = ref 0 in
   for p = 0 to n - 1 do

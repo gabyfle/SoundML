@@ -2763,8 +2763,8 @@ class PvocVectorGenerator:
     @classmethod
     def owners(cls, peaks, bins):
         """The peak each bin belongs to: regions split halfway between
-        consecutive peaks, the lower region keeping the middle bin of an odd
-        gap."""
+        consecutive peaks, a bin equidistant from both going to the upper
+        one."""
         if len(peaks) == 0:
             return None
         owner = np.zeros(bins, dtype=np.int64)
