@@ -11,9 +11,11 @@
    c) + Config.synthesis_latency c] source samples, one made on the input side
    of the analysis and one on the output side of the synthesis. Brute force
    measures what the chain actually does — when its first sample appears and how
-   far its emission ever trails the input — and the two are compared position by
-   position, including where the declaration is a bound rather than an equality
-   and where [`Left] under-reports, which the interface states.
+   far its emission ever trails the input — and the declaration is classified
+   against that deficit, the quantity the pipeline guarantee is stated against:
+   exact, one sample high, a bound, or the [`Left] under-report, as the
+   interface states. Where the first sample lands is measured separately,
+   against the frame grid that fixes it.
 
    - the chain is the identity on the interior of the round trip, the positions
    the analysis windows fully cover, to the bound the offline suite proves.
@@ -180,6 +182,15 @@ let measure c =
   ignore (Pipeline.Stream.flush s) ;
   (!first, !worst)
 
+(* [`Right] with a border that does not itself look ahead — the two geometries
+   the grid, which pads by reflection everywhere, does not carry. *)
+let causal_right =
+  [ ( "right constant fft16 hop4"
+    , Stft.Config.create ~alignment:`Right ~pad:(`Constant 0.) ~fft_size:16
+        ~hop:4 () )
+  ; ( "right edge fft9 hop2"
+    , Stft.Config.create ~alignment:`Right ~pad:`Edge ~fft_size:9 ~hop:2 () ) ]
+
 let latency_tests =
   [ test "the composition reports the sum of the two declarations" (fun () ->
         List.iter
@@ -217,17 +228,7 @@ let latency_tests =
           (fun (name, c) ->
             let first, _ = measure c in
             equal ~msg:name int (first_emission c) first )
-          grid ;
-        List.iter
-          (fun (name, c) ->
-            let first, _ = measure c in
-            equal ~msg:name int (first_emission c) first )
-          [ ( "right constant fft16 hop4"
-            , Stft.Config.create ~alignment:`Right ~pad:(`Constant 0.)
-                ~fft_size:16 ~hop:4 () )
-          ; ( "right edge fft9 hop2"
-            , Stft.Config.create ~alignment:`Right ~pad:`Edge ~fft_size:9 ~hop:2
-                () ) ] )
+          (grid @ causal_right) )
   ; test "brute force: the deficit the chain really carries" (fun () ->
         (* the physical truth, independent of what is declared: the round trip
            trails its input by [fft_size - 1] samples plus whatever overshoot of
@@ -242,6 +243,34 @@ let latency_tests =
             let _, worst = measure c in
             equal ~msg:name int (fft - 1 + overshoot) worst )
           grid )
+  ; test "the declaration classifies against that deficit" (fun () ->
+        (* zero where the declaration is exact, one where [Config.latency]
+           rounds the half frame of an even [fft_size] up, [fft_size - 1] where
+           a reflecting [`Right] border makes the sum count the head trim twice,
+           and the head negated under [`Left], which declares nothing at either
+           end *)
+        let excess c =
+          let fft = Stft.Config.fft_size c in
+          match (Stft.Config.alignment c, Stft.Config.pad c) with
+          | `Centered, _ ->
+              if fft mod 2 = 0 then 1 else 0
+          | `Right, `Reflect ->
+              fft - 1
+          | `Right, (`Constant _ | `Edge) ->
+              0
+          | `Left, _ ->
+              1 - fft
+        in
+        List.iter
+          (fun (name, c) ->
+            let _, worst = measure c in
+            equal
+              ~msg:
+                (Printf.sprintf "%s: declared %d against the deficit %d" name
+                   (declared c) worst )
+              int (excess c)
+              (declared c - worst) )
+          (grid @ causal_right) )
   ; test "the declaration bounds the deficit, or is documented not to"
       (fun () ->
         List.iter

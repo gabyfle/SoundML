@@ -14,8 +14,8 @@
 
    Every declaration is checked twice: against the equation, and against a
    brute-force measurement of what the prepared stream actually emits. The
-   pipeline law itself is checked for the new toys, since a stage that reports
-   its lookahead wrongly is a bug, but a stage that emits the wrong samples is a
+   pipeline law itself is checked for these toys, since a stage that reports its
+   lookahead wrongly is a bug, but a stage that emits the wrong samples is a
    worse one. *)
 
 open Windtrap
@@ -134,9 +134,9 @@ let declaration_tests =
         equal ~msg:"expand3(2) >> block_sum 2 >> lookahead 1" rate_t (r 4 3)
           (Pipeline.latency
              Pipeline.(expand3 ~hold:2 >> Toys.block_sum 2 >> Toys.lookahead 1) ) )
-  ; test "omitting output_latency leaves every declaration unmoved" (fun () ->
-        (* the values the suite has always pinned, restated here so that the new
-           parameter is seen not to touch them *)
+  ; test "a stage naming no output_latency declares by latency alone" (fun () ->
+        (* declarations that name no output_latency: the term is zero, and the
+           lookahead is the integral one the input side states *)
         equal ~msg:"lookahead 3" rate_t (r 3 1)
           (Pipeline.latency (Toys.lookahead 3)) ;
         equal ~msg:"gain" rate_t (r 0 1) (Pipeline.latency (Toys.gain 2.)) ;
@@ -287,7 +287,7 @@ let threading_tests =
         equal ~msg:"latency" rate_t (Pipeline.latency p)
           (Pipeline.Stream.latency s) ) ]
 
-(* {1 The pipeline law for the new toys} *)
+(* {1 The pipeline law for these toys} *)
 
 let split x sizes =
   let rec go off = function
