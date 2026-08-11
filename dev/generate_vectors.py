@@ -2293,7 +2293,9 @@ class HpssVectorGenerator:
       not reach, and one batched cell pins the leading-axis mapping.
 
     - hpss_masks: the mask pair itself over the same spectrogram, including
-      both margins at infinite power, where the values are exactly 0 and 1.
+      both margins at infinite power, where the values are exactly 0 and 1,
+      and a wide-silence row at finite power and a margin above one, where
+      the denormal branch of the mask is 0 rather than an even split.
 
     - hpss_boundary: frame counts at and just below the kernel size, where
       every window overhangs the frame axis, plus a short pair kernel.
@@ -2456,18 +2458,29 @@ class HpssVectorGenerator:
     DTYPES = ["float64", "float32"]
 
     @staticmethod
-    def assert_denormal(s, kernel_size):
-        """The denormal branch of the mask must be reachable: both enhanced
-        values below the smallest positive normal somewhere."""
+    def assert_denormal(s, kernel_size, margin=(1.0, 1.0)):
+        """The denormal branch of the mask must be reachable: the pointwise
+        maximum that rescales a mask — (harm, margin_h * perc) for the
+        harmonic one, (perc, margin_p * harm) for the percussive one — below
+        the smallest positive normal somewhere. Returns where it binds for
+        both masks at once."""
         harm = scipy.ndimage.median_filter(
             s, size=[1, kernel_size[0]], mode="reflect"
         )
         perc = scipy.ndimage.median_filter(
             s, size=[kernel_size[1], 1], mode="reflect"
         )
+        bad = (
+            np.minimum(
+                np.maximum(harm, perc * margin[0]),
+                np.maximum(perc, harm * margin[1]),
+            )
+            < np.finfo(np.float64).tiny
+        )
         assert (
-            np.maximum(harm, perc) < np.finfo(np.float64).tiny
-        ).any(), "the silent band no longer reaches the denormal branch"
+            bad.any()
+        ), "the silent band no longer reaches the denormal branch"
+        return bad
 
     def component_cases(self):
         s = self.spectrogram(self.BINS, self.FRAMES, self.SEED, self.SILENT_BINS)
@@ -2504,26 +2517,45 @@ class HpssVectorGenerator:
             case["params"].setdefault("batched", False)
         return cases
 
+    # (kernel_size, power, margin, dtype, silent bins). The last row widens
+    # the silence until the default kernel zeroes both medians inside it: at
+    # a margin above one the pair is no longer a partition, so the undefined
+    # quotient there is 0 rather than an even split of 0.5, and at finite
+    # power the mask is the emitted value itself rather than a factor
+    # multiplying a silent bin.
     MASK_CELLS = [
-        ((31, 31), 2.0, (1.0, 1.0), "float64"),
-        ((31, 31), 2.0, (1.0, 1.0), "float32"),
-        ((31, 31), 1.0, (1.0, 3.0), "float64"),
-        ((31, 31), np.inf, (1.0, 1.0), "float64"),
-        ((31, 31), np.inf, (1.0, 3.0), "float32"),
-        ((17, 31), np.inf, (1.0, 1.0), "float64"),
-        ((17, 31), np.inf, (1.0, 3.0), "float64"),
-        ((32, 32), np.inf, (1.0, 1.0), "float32"),
-        ((32, 32), 2.0, (1.0, 3.0), "float32"),
-        ((3, 5), 1.0, (1.0, 1.0), "float64"),
+        ((31, 31), 2.0, (1.0, 1.0), "float64", SILENT_BINS),
+        ((31, 31), 2.0, (1.0, 1.0), "float32", SILENT_BINS),
+        ((31, 31), 1.0, (1.0, 3.0), "float64", SILENT_BINS),
+        ((31, 31), np.inf, (1.0, 1.0), "float64", SILENT_BINS),
+        ((31, 31), np.inf, (1.0, 3.0), "float32", SILENT_BINS),
+        ((17, 31), np.inf, (1.0, 1.0), "float64", SILENT_BINS),
+        ((17, 31), np.inf, (1.0, 3.0), "float64", SILENT_BINS),
+        ((32, 32), np.inf, (1.0, 1.0), "float32", SILENT_BINS),
+        ((32, 32), 2.0, (1.0, 3.0), "float32", SILENT_BINS),
+        ((3, 5), 1.0, (1.0, 1.0), "float64", SILENT_BINS),
+        ((31, 31), 2.0, (1.0, 3.0), "float64", SILENT_WIDE),
     ]
 
     def mask_cases(self):
-        s = self.spectrogram(self.BINS, self.FRAMES, self.SEED, self.SILENT_BINS)
         cases = []
-        for kernel_size, power, margin, dtype in self.MASK_CELLS:
-            cases += self.cell(
-                s, kernel_size, power, margin, dtype, mask=True
+        for kernel_size, power, margin, dtype, silent_bins in self.MASK_CELLS:
+            s = self.spectrogram(
+                self.BINS, self.FRAMES, self.SEED, silent_bins
             )
+            wide = silent_bins != self.SILENT_BINS
+            bad = self.assert_denormal(s, kernel_size, margin) if wide else None
+            emitted = self.cell(
+                s, kernel_size, power, margin, dtype, mask=True,
+                silent_bins=silent_bins, prefix="silent_" if wide else "",
+            )
+            if wide:
+                for case in emitted:
+                    values = np.asarray(case["values"]).reshape(case["shape"])
+                    assert (
+                        values[bad] == 0.0
+                    ).all(), "the denormal branch off the equal margins is 0"
+            cases += emitted
         for case in cases:
             case["params"]["batched"] = False
             if case["params"]["power"] == "inf":
