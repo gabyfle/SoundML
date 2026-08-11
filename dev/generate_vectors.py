@@ -61,6 +61,7 @@ SUITE_DIRECTORIES = {
     "cqt": "soundml/test/cqt/vectors",
     "chroma": "soundml/test/chroma/vectors",
     "resample": "soundml/test/resample/vectors",
+    "pvoc": "soundml/test/pvoc/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -2563,6 +2564,271 @@ class IoVectorGenerator:
         self.malformed()
 
 
+class PvocVectorGenerator:
+    """Golden vectors for Soundml.Effects.
+
+    Four kinds of file, all over deterministic 31-bit LCG signals reproduced
+    bit-for-bit in OCaml through the same integer arithmetic:
+
+    - stretch: librosa.effects.time_stretch over the geometry axis (fft size,
+      hop, including non-divisible and odd combinations), the rate axis
+      (compressing, expanding, unity and a non-round rate), two signal
+      lengths, both float dtypes, short signals, and one batched pair. The
+      analysis is librosa's default zero padding, which is this library's
+      `Constant 0.` rather than its own `Reflect` default.
+
+    - pitchstretch: the stretch stage of the pitch cases alone, at the exact
+      float64 quotient the rational ratio produces, so the composition's rate
+      is pinned independently of the resampler beneath it.
+
+    - pitch: the whole librosa.effects.pitch_shift composition -- that same
+      stretch, then librosa.resample at soxr_hq between the two terms of the
+      ratio, then a crop to the input length. SoundML resamples with its own
+      polyphase bank, so these cases carry the resampler substitution and are
+      compared at a tolerance the suite justifies against soxr's own tier
+      spread.
+
+    - locked: the identity phase-locked variant, from the replica below --
+      this script is the oracle for those cases, and the file records it as
+      such. Peaks are picked on the analysis frame the output frame floors to,
+      regions split halfway between consecutive peaks, and the locked phases
+      are what the next frame accumulates from.
+
+    float32 cases quantize the input to float32 and compute the reference in
+    float64, so the vectors isolate input rounding from the accumulator's
+    precision -- librosa propagates float32 phases for float32 audio, whose
+    own spread against its float64 path is four to six orders above what
+    separates the two implementations.
+    """
+
+    SUITE = "pvoc"
+
+    # (case key, fft_size, hop)
+    GEOMETRY = [
+        ("fft64_hop16", 64, 16),
+        ("fft32_hop7", 32, 7),
+        ("fft256_hop64", 256, 64),
+        ("fft2048_hop512", 2048, 512),
+        ("fft2048_hop500", 2048, 500),
+        ("fft31_hop5", 31, 5),
+    ]
+
+    RATES = [0.5, 0.75, 1.0, 1.25, 1.37, 2.0]
+
+    RATE_GEOMETRY = [("fft256_hop64", 256, 64), ("fft2048_hop512", 2048, 512)]
+
+    LENGTHS = [128, 1000]
+
+    SHORT = 127
+
+    # (case key, numerator, denominator) -- the frequency ratio L / M, which
+    # stretches by M / L and then converts from L to M.
+    PITCH_RATIOS = [
+        ("octave_up", 2, 1),
+        ("octave_down", 1, 2),
+        ("major_third_up", 3524, 2797),
+        ("fifth_up", 2655, 1772),
+        ("tritone_down", 2378, 3363),
+    ]
+
+    # (case key, fft_size, hop, rate, n)
+    LOCKED_CELLS = [
+        ("fft256_hop64_r1p37", 256, 64, 1.37, 1000),
+        ("fft2048_hop512_r0p5", 2048, 512, 0.5, 1000),
+        ("fft64_hop16_r2", 64, 16, 2.0, 127),
+    ]
+
+    @staticmethod
+    def lcg(n, seed=20250803):
+        """A length-n float64 stream from a 31-bit LCG: every operation is
+        integer arithmetic plus one exact float64 division, so OCaml
+        reproduces the values bit-for-bit."""
+        values = []
+        state = seed
+        for _ in range(n):
+            state = (1103515245 * state + 12345) % (1 << 31)
+            values.append(state / float(1 << 30) - 1.0)
+        return np.asarray(values, dtype=np.float64)
+
+    @classmethod
+    def signal(cls, n, channels=1):
+        stream = cls.lcg(n * channels)
+        return stream if channels == 1 else stream.reshape(channels, n)
+
+    @staticmethod
+    def quantized(y, dtype):
+        return y.astype(np.float32).astype(np.float64) if dtype == "float32" else y
+
+    @staticmethod
+    def tag(rate):
+        return ("r" + f"{rate:g}").replace(".", "p")
+
+    @staticmethod
+    def stretch(y, fft_size, hop, rate):
+        return librosa.effects.time_stretch(y, rate=rate, n_fft=fft_size,
+                                            hop_length=hop)
+
+    @classmethod
+    def case(cls, name, params, expected):
+        return {"name": name, "params": params,
+                "shape": list(expected.shape), "values": expected.ravel().tolist()}
+
+    def stretch_cases(self):
+        cases = []
+        for key, fft_size, hop in self.GEOMETRY:
+            y = self.signal(self.SHORT)
+            expected = self.stretch(y, fft_size, hop, 1.37)
+            cases.append(self.case(
+                f"geometry_{key}_r1p37_float64",
+                {"fft_size": fft_size, "hop": hop, "rate": 1.37,
+                 "n": self.SHORT, "channels": 1, "dtype": "float64"},
+                expected))
+        for rate in self.RATES:
+            for key, fft_size, hop in self.RATE_GEOMETRY:
+                for n in self.LENGTHS:
+                    for dtype in ("float32", "float64"):
+                        y = self.quantized(self.signal(n), dtype)
+                        expected = self.stretch(y, fft_size, hop, rate)
+                        cases.append(self.case(
+                            f"rate_{key}_{self.tag(rate)}_n{n}_{dtype}",
+                            {"fft_size": fft_size, "hop": hop, "rate": rate,
+                             "n": n, "channels": 1, "dtype": dtype},
+                            expected))
+        for rate in self.RATES:
+            dtypes = ("float32", "float64") if rate in (0.5, 2.0) else ("float64",)
+            for dtype in dtypes:
+                y = self.quantized(self.signal(self.SHORT), dtype)
+                expected = self.stretch(y, 64, 16, rate)
+                cases.append(self.case(
+                    f"short_fft64_hop16_{self.tag(rate)}_{dtype}",
+                    {"fft_size": 64, "hop": 16, "rate": rate,
+                     "n": self.SHORT, "channels": 1, "dtype": dtype},
+                    expected))
+        y = self.signal(1000, channels=2)
+        cases.append(self.case(
+            "batched_fft256_hop64_r1p37_float64",
+            {"fft_size": 256, "hop": 64, "rate": 1.37, "n": 1000,
+             "channels": 2, "dtype": "float64"},
+            self.stretch(y, 256, 64, 1.37)))
+        return cases
+
+    def pitch_cells(self):
+        cells = []
+        for key, num, den in self.PITCH_RATIOS:
+            for dtype in ("float32", "float64"):
+                cells.append((key, num, den, "fft2048_hop512", 2048, 512, 1000, dtype))
+        cells.append(("major_third_up", 3524, 2797, "fft256_hop64", 256, 64, 1000,
+                      "float64"))
+        return cells
+
+    def pitch_stretch_cases(self):
+        cases = []
+        for key, num, den, gkey, fft_size, hop, n, dtype in self.pitch_cells():
+            y = self.quantized(self.signal(n), dtype)
+            expected = self.stretch(y, fft_size, hop, den / num)
+            cases.append(self.case(
+                f"pitchstretch_{key}_{gkey}_n{n}_{dtype}",
+                {"fft_size": fft_size, "hop": hop, "num": num, "den": den,
+                 "rate": den / num, "n": n, "channels": 1, "dtype": dtype},
+                expected))
+        return cases
+
+    def pitch_cases(self):
+        cases = []
+        for key, num, den, gkey, fft_size, hop, n, dtype in self.pitch_cells():
+            y = self.quantized(self.signal(n), dtype)
+            stretched = self.stretch(y, fft_size, hop, den / num)
+            shifted = librosa.resample(stretched, orig_sr=num, target_sr=den,
+                                       res_type="soxr_hq")
+            expected = librosa.util.fix_length(shifted, size=n)
+            cases.append(self.case(
+                f"pitch_{key}_{gkey}_n{n}_{dtype}",
+                {"fft_size": fft_size, "hop": hop, "num": num, "den": den,
+                 "n": n, "channels": 1, "dtype": dtype},
+                expected))
+        return cases
+
+    @staticmethod
+    def peaks_of(magnitudes):
+        """The bins whose magnitude strictly exceeds every one of the four
+        neighbours they have."""
+        n = len(magnitudes)
+        padded = np.pad(magnitudes, 2, mode="constant")
+        core = padded[2:2 + n]
+        return np.flatnonzero(
+            (core > padded[0:n]) & (core > padded[1:1 + n])
+            & (core > padded[3:3 + n]) & (core > padded[4:4 + n])
+        )
+
+    @classmethod
+    def owners(cls, peaks, bins):
+        """The peak each bin belongs to: regions split halfway between
+        consecutive peaks, the lower region keeping the middle bin of an odd
+        gap."""
+        if len(peaks) == 0:
+            return None
+        owner = np.zeros(bins, dtype=np.int64)
+        bounds = ([0] + [(peaks[i] + peaks[i + 1] + 1) // 2
+                         for i in range(len(peaks) - 1)] + [bins])
+        for i, peak in enumerate(peaks):
+            owner[bounds[i]:bounds[i + 1]] = peaks[i]
+        return owner
+
+    @classmethod
+    def vocode_locked(cls, spectrum, rate, hop, fft_size):
+        """The identity phase-locked phase vocoder: librosa's recurrence with
+        each frame's phases rewritten, before they are emitted and before the
+        next frame accumulates from them, so that the bins around a spectral
+        peak carry the peak's accumulated phase offset by the phase
+        difference they have in the analysis frame."""
+        steps = np.arange(0, spectrum.shape[-1], rate, dtype=np.float64)
+        bins = spectrum.shape[0]
+        out = np.zeros((bins, len(steps)), dtype=np.complex128)
+        advance = hop * librosa.fft_frequencies(sr=2 * np.pi, n_fft=fft_size)
+        accumulator = np.angle(spectrum[:, 0]).copy()
+        padded = np.pad(spectrum, [(0, 0), (0, 2)])
+        for t, step in enumerate(steps):
+            i = int(step)
+            first, second = padded[:, i], padded[:, i + 1]
+            alpha = np.mod(step, 1.0)
+            magnitudes = ((1.0 - alpha) * np.abs(first)
+                          + alpha * np.abs(second))
+            owner = cls.owners(cls.peaks_of(np.abs(first)), bins)
+            if owner is not None:
+                reference = np.angle(first)
+                locked = accumulator[owner] + (reference - reference[owner])
+                accumulator = locked
+            out[:, t] = librosa.util.phasor(accumulator, mag=magnitudes)
+            deviation = np.angle(second) - np.angle(first) - advance
+            deviation -= 2.0 * np.pi * np.round(deviation / (2.0 * np.pi))
+            accumulator = accumulator + (advance + deviation)
+        return out
+
+    def locked_cases(self):
+        cases = []
+        for key, fft_size, hop, rate, n in self.LOCKED_CELLS:
+            y = self.signal(n)
+            spectrum = librosa.stft(y, n_fft=fft_size, hop_length=hop,
+                                    dtype=np.complex128)
+            stretched = self.vocode_locked(spectrum, rate, hop, fft_size)
+            expected = librosa.istft(stretched, hop_length=hop, n_fft=fft_size,
+                                     dtype=np.float64,
+                                     length=int(round(n / rate)))
+            cases.append(self.case(
+                f"locked_{key}_n{n}_float64",
+                {"fft_size": fft_size, "hop": hop, "rate": rate, "n": n,
+                 "channels": 1, "dtype": "float64"},
+                expected))
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "stretch", self.stretch_cases())
+        write_suite(self.SUITE, "pitchstretch", self.pitch_stretch_cases())
+        write_suite(self.SUITE, "pitch", self.pitch_cases())
+        write_suite(self.SUITE, "locked", self.locked_cases(),
+                    dict(GENERATOR_VERSIONS, oracle="dev/generate_vectors.py"))
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -2574,6 +2840,7 @@ GENERATORS = [
     OnsetFeaturesVectorGenerator,
     CqtVectorGenerator,
     ChromaVectorGenerator,
+    PvocVectorGenerator,
     IoVectorGenerator,
 ]
 
