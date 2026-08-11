@@ -31,7 +31,10 @@
    32-iteration [Stft.griffin_lim] of a precomputed magnitude spectrogram, which
    is 32 analysis-synthesis pairs and prices both of them together. Their inputs
    are built outside the timed thunk, so the rows carry the synthesis and
-   nothing else; librosa rows mirror them one to one.
+   nothing else; librosa rows mirror them one to one. The istft group also
+   carries the incremental synthesis over the same spectrum at three frame
+   cadences, which separates the per-batch dispatch of the streaming form from
+   the arithmetic the offline row shares with it.
 
    The resample group covers every face of [Resample] on one-second mono clips:
    [apply] across the three presets, the six headline rate pairs — near-unity
@@ -112,6 +115,41 @@ let istft_benchmarks () =
         Soundml.Stft.invert Nx.float32 stft_config z32 )
   ; Thumper.bench "invert 30s f64 fft2048 hop512" (fun () ->
         Soundml.Stft.invert Nx.float64 stft_config z64 ) ]
+
+(* The streaming face of the same synthesis: the incremental kernel fed the
+   spectrum of the same clip at three frame cadences, beside the offline row it
+   must total to. The cadence rows price the per-batch dispatch — one inverse
+   transform, one window multiply and one overlap-add per batch, however few
+   frames it holds — against the per-frame arithmetic the offline row runs in
+   one pass. *)
+let istft_stream_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let z32 = Soundml.Stft.transform Nx.complex64 stft_config x32 in
+  let frames = Nx.dim (Nx.ndim z32 - 1) z32 in
+  let one cadence =
+    let kernel =
+      Soundml.Stft.Synthesis.prepare Nx.float32 stft_config Nx.complex64
+        ~channels:1 ~max_block:cadence
+    in
+    let batches =
+      let rec cut off =
+        if off >= frames then []
+        else
+          let stop = min frames (off + cadence) in
+          Nx.shrink [|(0, Nx.dim 0 z32); (off, stop)|] z32 :: cut stop
+      in
+      cut 0
+    in
+    Thumper.bench
+      (Printf.sprintf "stream invert 30s f32 fft2048 hop512 chunk %d" cadence)
+      (fun () ->
+        Soundml.Stft.Synthesis.reset kernel ;
+        List.iter
+          (fun b -> ignore (Soundml.Stft.Synthesis.step kernel b))
+          batches ;
+        ignore (Soundml.Stft.Synthesis.flush kernel) )
+  in
+  List.map one [1; 16; 256]
 
 let griffin_lim_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
@@ -351,7 +389,7 @@ let () =
     [ Thumper.group "window" (window_benchmarks ())
     ; Thumper.group "pipeline" (pipeline_benchmarks ())
     ; Thumper.group "stft" (stft_benchmarks ())
-    ; Thumper.group "istft" (istft_benchmarks ())
+    ; Thumper.group "istft" (istft_benchmarks () @ istft_stream_benchmarks ())
     ; Thumper.group "griffinlim" (griffin_lim_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
     ; Thumper.group "cqt" (cqt_benchmarks () @ cqt_stream_benchmarks ())

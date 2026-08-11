@@ -2,4 +2,5 @@ open Windtrap
 
 let () =
   run "Soundml.Stft synthesis"
-    (Istft_goldens.suite @ Istft_law.suite @ Gl_goldens.suite @ Gl_law.suite)
+    ( Istft_goldens.suite @ Istft_law.suite @ Sistft_law.suite
+    @ Sistft_stage.suite @ Gl_goldens.suite @ Gl_law.suite )

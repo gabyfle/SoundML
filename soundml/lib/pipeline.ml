@@ -205,7 +205,15 @@ type ('a, 'b, 'k) t =
 
 let ceil_scale n r = ((n * r.Rate.num) + r.Rate.den - 1) / r.Rate.den
 
-let stage_thread ~latency ~rate ~out_format fmt =
+(* [lookahead ~latency ~output_latency ~rate] is the one number the accounting
+   folds: the stage's involuntary lookahead in input items. A stage withholds
+   [latency] input items before mapping them, and [output_latency] items of its
+   own output beyond that; the second measures in output items, so the rate
+   converts it, and the sum is exact rather than integral. *)
+let lookahead ~latency ~output_latency ~rate =
+  Rate.add (Rate.of_int latency) Rate.(of_int output_latency * inv rate)
+
+let stage_thread ~latency ~output_latency ~rate ~out_format fmt =
   let out =
     match out_format with
     | Some f ->
@@ -233,22 +241,30 @@ let stage_thread ~latency ~rate ~out_format fmt =
           in
           Format.with_max_items bound (Format.with_items_per_second ips fmt)
   in
-  (* the drained tail of a latency-[d] stage may arrive as one chunk of up to
-     [d] input items' worth of output: widen the threaded bound so downstream
-     stages sized to their incoming bound accommodate drain, not only pushes *)
+  (* the drained tail of a stage withholding [latency] input items and
+     [output_latency] output items may arrive as one chunk of that much output:
+     widen the threaded bound so downstream stages sized to their incoming bound
+     accommodate drain, not only pushes *)
   let out =
     match Format.max_items out with
-    | Some n when latency > 0 ->
-        Format.with_max_items (Some (max n (ceil_scale latency rate))) out
+    | Some n when latency > 0 || output_latency > 0 ->
+        Format.with_max_items
+          (Some (max n (ceil_scale latency rate + output_latency)))
+          out
     | _ ->
         out
   in
-  Format.add_latency (Format.latency_to_samples (Rate.of_int latency) fmt) out
+  Format.add_latency
+    (Format.latency_to_samples (lookahead ~latency ~output_latency ~rate) fmt)
+    out
 
-let kernel ?(latency = 0) ?(rate = Rate.identity) ?out_format
-    ?(flush = fun _ -> []) ?(reset = fun _ -> ()) ~concat ~prepare ~step () =
+let kernel ?(latency = 0) ?(output_latency = 0) ?(rate = Rate.identity)
+    ?out_format ?(flush = fun _ -> []) ?(reset = fun _ -> ()) ~concat ~prepare
+    ~step () =
   if latency < 0 then
     invalid_arg "Soundml.Pipeline.kernel: latency must be non-negative" ;
+  if output_latency < 0 then
+    invalid_arg "Soundml.Pipeline.kernel: output_latency must be non-negative" ;
   if not (Rate.is_positive rate) then
     invalid_arg "Soundml.Pipeline.kernel: rate must be positive" ;
   let rate = Rate.normalize rate in
@@ -261,8 +277,8 @@ let kernel ?(latency = 0) ?(rate = Rate.identity) ?out_format
         let s = prepare fmt in
         let out = match step s a with Some b -> [b] | None -> [] in
         concat (out @ flush s) )
-  ; thread= stage_thread ~latency ~rate ~out_format
-  ; lat= Rate.of_int latency
+  ; thread= stage_thread ~latency ~output_latency ~rate ~out_format
+  ; lat= lookahead ~latency ~output_latency ~rate
   ; rt= rate }
 
 let stateless f =

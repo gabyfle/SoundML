@@ -1,5 +1,11 @@
 (test
  (name test_pipeline)
  (package soundml)
- (modules toys test_law test_alloc accept_causal_stream test_pipeline)
+ (modules
+  toys
+  test_law
+  latency_law
+  test_alloc
+  accept_causal_stream
+  test_pipeline)
  (libraries soundml nx windtrap))

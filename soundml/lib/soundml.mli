@@ -35,8 +35,10 @@ module Window = Window
 (** The short-time Fourier transform: offline {!Stft.transform}, the
     incremental {!Stft.Kernel} and the {!Stft.stage}/{!Stft.power_stage}
     pipeline stages, all driving one frame grid; and its synthesis side,
-    {!Stft.invert} for the least-squares inverse and {!Stft.griffin_lim} for
-    magnitude-only reconstruction. *)
+    {!Stft.invert} for the least-squares inverse, {!Stft.griffin_lim} for
+    magnitude-only reconstruction, and the incremental {!Stft.Synthesis} with
+    its {!Stft.synthesis_stage}, which totals to {!Stft.invert} over a
+    stream. *)
 module Stft = Stft
 
 (** Unit and scale conversions: decibels, the mel and MIDI frequency scales,
