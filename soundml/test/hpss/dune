@@ -1,0 +1,7 @@
+(test
+ (name test_hpss)
+ (package soundml)
+ (modules hpss_goldens hpss_props test_hpss)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

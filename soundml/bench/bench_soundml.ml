@@ -163,6 +163,28 @@ let griffin_lim_benchmarks () =
         Soundml.Stft.griffin_lim ~n_iter:32 ~momentum:0.99 ~init:`Zero_phase
           griffin_lim_config s64 ) ]
 
+(* The hpss group separates the same 30 s clip: three spectrogram-domain rows
+   over the precomputed power spectrogram — the two dtypes at the default
+   exponent, and the hard mask, whose comparison replaces the four powers and
+   two divisions of the soft mask — and one signal-domain row, which adds the
+   analysis and the two syntheses to the same separation. The spectrogram is
+   built outside the timed thunk, so the three first rows carry the two median
+   filters and the mask arithmetic and nothing else; librosa rows mirror all
+   four one to one. *)
+let hpss_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let x64 = Nx.rand Nx.float64 [|n_audio|] in
+  let s32 = Soundml.Stft.power_spectrum stft_config x32 in
+  let s64 = Soundml.Stft.power_spectrum stft_config x64 in
+  [ Thumper.bench "hpss 30s f32 k31 p2 fft2048 hop512" (fun () ->
+        Soundml.hpss_of_spectrogram s32 )
+  ; Thumper.bench "hpss 30s f64 k31 p2 fft2048 hop512" (fun () ->
+        Soundml.hpss_of_spectrogram s64 )
+  ; Thumper.bench "hpss 30s f32 k31 pinf fft2048 hop512" (fun () ->
+        Soundml.hpss_of_spectrogram ~power:Float.infinity s32 )
+  ; Thumper.bench "hpss signal 30s f32 fft2048 hop512" (fun () ->
+        Soundml.hpss stft_config x32 ) ]
+
 let mel_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
   let x64 = Nx.rand Nx.float64 [|n_audio|] in
@@ -392,6 +414,7 @@ let () =
     ; Thumper.group "istft" (istft_benchmarks () @ istft_stream_benchmarks ())
     ; Thumper.group "griffinlim" (griffin_lim_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
+    ; Thumper.group "hpss" (hpss_benchmarks ())
     ; Thumper.group "cqt" (cqt_benchmarks () @ cqt_stream_benchmarks ())
     ; Thumper.group "resample"
         ( resample_apply_benchmarks ()

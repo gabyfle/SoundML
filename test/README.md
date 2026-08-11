@@ -85,6 +85,19 @@ Current suites:
   `librosa.onset.onset_strength` end-to-end on its default log-power-mel
   chain (lags 1-3, centered and left alignment, degenerate short signals,
   the >80 dB envelope), both element dtypes.
+- `hpss` — `librosa.decompose.hpss` over a deterministic magnitude
+  spectrogram (harmonic ridges, percussive columns, an LCG noise floor and a
+  silent band driving the denormal branch of the mask) across the
+  kernel x power x margin x dtype grid, the mask pair on its own, frame
+  counts short enough that every window overhangs the frame axis, and
+  `librosa.effects.hpss` / `harmonic` / `percussive` end to end on a short
+  signal. Every emitted median stays inside `k <= 2n + 1`, the region where
+  `scipy.ndimage.median_filter` agrees with the reflection the library
+  documents; the generator asserts the bound and the agreement per case.
+  The spectrogram-domain float32 cases carry a genuine float32 reference —
+  separation selects values and multiplies them, with no accumulation whose
+  order could differ — while the effects cases have the STFT round trip
+  beneath them and follow the usual float64-reference convention.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which

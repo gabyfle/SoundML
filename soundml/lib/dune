@@ -15,7 +15,8 @@
   spectral
   energy
   contrast
-  onset)
+  onset
+  hpss)
  (foreign_stubs
   (language c)
   (names resample_stubs))
