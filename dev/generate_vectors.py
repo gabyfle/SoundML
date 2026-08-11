@@ -60,6 +60,7 @@ SUITE_DIRECTORIES = {
     "features_onset": "soundml/test/onset/vectors",
     "cqt": "soundml/test/cqt/vectors",
     "chroma": "soundml/test/chroma/vectors",
+    "hpss": "soundml/test/hpss/vectors",
     "resample": "soundml/test/resample/vectors",
     "io": "soundml-io/test/vectors",
 }
@@ -2276,6 +2277,366 @@ class ChromaVectorGenerator:
         write_suite(self.SUITE, "chroma_cqt", self.constant_q_cases())
 
 
+class HpssVectorGenerator:
+    """Golden vectors for the harmonic/percussive separation features.
+
+    Four files:
+
+    - hpss: librosa.decompose.hpss over a deterministic magnitude
+      spectrogram — harmonic ridges every seventh bin, percussive columns
+      every fifth frame, a 31-bit LCG noise floor and a silent top band,
+      rebuilt bit-exactly in OCaml — across the kernel x power x margin x
+      dtype grid, one case per component. The silent band drives the
+      denormal branch of the mask (both enhanced values below the smallest
+      positive normal), asserted to bind. One small-kernel cell keeps the
+      interior of the sliding window under test at a size the boundary does
+      not reach, and one batched cell pins the leading-axis mapping.
+
+    - hpss_masks: the mask pair itself over the same spectrogram, including
+      both margins at infinite power, where the values are exactly 0 and 1.
+
+    - hpss_boundary: frame counts at and just below the kernel size, where
+      every window overhangs the frame axis, plus a short pair kernel.
+
+    - hpss_effects: librosa.effects.hpss / harmonic / percussive on a short
+      signal, with the analysis geometry passed explicitly (constant padding,
+      the pad mode the OCaml configuration names) and the synthesis length
+      pinned to the input length.
+
+    Every emitted median stays inside k <= 2n + 1 on its axis, the region
+    where scipy.ndimage.median_filter agrees with the reflection the library
+    documents; the generator asserts both the bound and the agreement per
+    case and refuses to emit otherwise.
+
+    The spectrogram-domain float32 cases carry a genuine float32 reference,
+    not the float64 reference of the stft and mel suites: separation selects
+    values and multiplies them, with no accumulation whose order could
+    differ, so a float32-in/float32-out reference is exactly reproducible.
+    The effects cases have the STFT round trip beneath them and follow the
+    usual convention instead — the signal is quantized to float32 and the
+    reference computed in float64.
+    """
+
+    SUITE = "hpss"
+
+    SEED = 20260811
+
+    SIGNAL_SEED = 20260812
+
+    BINS = 17
+
+    FRAMES = 17
+
+    SILENT_BINS = 3
+
+    # a band wide enough that the frequency median of the default kernel is
+    # zero inside it, which is what drives the denormal branch of the mask
+    SILENT_WIDE = 9
+
+    @staticmethod
+    def spectrogram(bins, frames, seed, silent_bins):
+        """A deterministic magnitude spectrogram: the 31-bit LCG of the stft
+        suite folded to non-negative values, plus a constant ridge on every
+        seventh bin (sustained partials, horizontal), a constant column on
+        every fifth frame (transients, vertical), and a silent band of
+        `silent_bins` at the top. Every value is one LCG draw and at most two
+        additions of exactly representable constants, in this order, so the
+        OCaml side rebuilds the same doubles bit for bit."""
+        noise = np.abs(StftVectorGenerator.lcg_signal(bins * frames, seed=seed))
+        s = np.empty((bins, frames), dtype=np.float64)
+        for b in range(bins):
+            for t in range(frames):
+                v = noise[b * frames + t]
+                v = v + (3.0 if b % 7 == 3 else 0.0)
+                v = v + (2.0 if t % 5 == 2 else 0.0)
+                s[b, t] = 0.0 if b >= bins - silent_bins else v
+        return s
+
+    @staticmethod
+    def refl(i, n):
+        p = 2 * n
+        j = i % p
+        return j if j < n else p - 1 - j
+
+    @classmethod
+    def median_model(cls, s, k, axis):
+        """The library's documented filter: rank k // 2 of the window
+        [i - k // 2, i + k - 1 - k // 2], indices reflected
+        half-sample-symmetrically with period 2n."""
+        x = s if axis == -1 else np.swapaxes(s, -1, -2)
+        n = x.shape[-1]
+        gather = np.array(
+            [[cls.refl(i - k // 2 + t, n) for t in range(k)] for i in range(n)]
+        )
+        out = np.sort(x[..., gather], axis=-1)[..., k // 2]
+        return out if axis == -1 else np.swapaxes(out, -1, -2)
+
+    @classmethod
+    def assert_clean(cls, s, kernel_size):
+        """Refuse to emit a case whose kernel leaves the region where the
+        reference median filter and the documented reflection agree."""
+        k_h, k_p = kernel_size
+        bins, frames = s.shape[-2], s.shape[-1]
+        assert k_h <= 2 * frames + 1, f"k_h={k_h} exceeds 2 * {frames} + 1"
+        assert k_p <= 2 * bins + 1, f"k_p={k_p} exceeds 2 * {bins} + 1"
+        harm_shape = [1] * s.ndim
+        harm_shape[-1] = k_h
+        perc_shape = [1] * s.ndim
+        perc_shape[-2] = k_p
+        assert np.array_equal(
+            scipy.ndimage.median_filter(s, size=harm_shape, mode="reflect"),
+            cls.median_model(s, k_h, -1),
+        ), f"time median disagrees with the model at k={k_h}, n={frames}"
+        assert np.array_equal(
+            scipy.ndimage.median_filter(s, size=perc_shape, mode="reflect"),
+            cls.median_model(s, k_p, -2),
+        ), f"freq median disagrees with the model at k={k_p}, n={bins}"
+
+    @staticmethod
+    def key(kernel_size, power, margin, dtype):
+        k_h, k_p = kernel_size
+        m_h, m_p = margin
+        return (
+            f"k{k_h}x{k_p}_p{'inf' if np.isinf(power) else f'{power:g}'}"
+            f"_m{m_h:g}x{m_p:g}_{dtype}"
+        )
+
+    @classmethod
+    def cell(
+        cls, s, kernel_size, power, margin, dtype, silent_bins=None,
+        extra=None, mask=False, prefix="",
+    ):
+        """One (kernel, power, margin, dtype) cell as two cases, the harmonic
+        component (or mask) and the percussive one."""
+        cls.assert_clean(s, kernel_size)
+        source = s if dtype == "float64" else s.astype(np.float32)
+        harm, perc = librosa.decompose.hpss(
+            source, kernel_size=list(kernel_size), power=power,
+            margin=list(margin), mask=mask,
+        )
+        if not mask:
+            assert harm.dtype == source.dtype and perc.dtype == source.dtype
+        cases = []
+        for component, expected in (("harmonic", harm), ("percussive", perc)):
+            params = {
+                "bins": int(s.shape[-2]),
+                "frames": int(s.shape[-1]),
+                "planes": int(s.size // (s.shape[-2] * s.shape[-1])),
+                "seed": cls.SEED,
+                "silent_bins": cls.SILENT_BINS
+                if silent_bins is None
+                else silent_bins,
+                "kernel_h": kernel_size[0],
+                "kernel_p": kernel_size[1],
+                "power": "inf" if np.isinf(power) else f"{power:g}",
+                "margin_h": float(margin[0]),
+                "margin_p": float(margin[1]),
+                "dtype": dtype,
+                "component": component,
+            }
+            if extra:
+                params.update(extra)
+            cases.append(
+                {
+                    "name": f"{prefix}"
+                    f"{cls.key(kernel_size, power, margin, dtype)}_{component}",
+                    "params": params,
+                    "shape": list(expected.shape),
+                    "values": expected.astype(np.float64).flatten().tolist(),
+                }
+            )
+        return cases
+
+    KERNELS = [(31, 31), (17, 31), (32, 32)]
+
+    POWERS = [1.0, 2.0, np.inf]
+
+    MARGINS = [(1.0, 1.0), (1.0, 3.0)]
+
+    DTYPES = ["float64", "float32"]
+
+    @staticmethod
+    def assert_denormal(s, kernel_size):
+        """The denormal branch of the mask must be reachable: both enhanced
+        values below the smallest positive normal somewhere."""
+        harm = scipy.ndimage.median_filter(
+            s, size=[1, kernel_size[0]], mode="reflect"
+        )
+        perc = scipy.ndimage.median_filter(
+            s, size=[kernel_size[1], 1], mode="reflect"
+        )
+        assert (
+            np.maximum(harm, perc) < np.finfo(np.float64).tiny
+        ).any(), "the silent band no longer reaches the denormal branch"
+
+    def component_cases(self):
+        s = self.spectrogram(self.BINS, self.FRAMES, self.SEED, self.SILENT_BINS)
+        cases = []
+        for kernel_size in self.KERNELS:
+            for power in self.POWERS:
+                for margin in self.MARGINS:
+                    for dtype in self.DTYPES:
+                        cases += self.cell(s, kernel_size, power, margin, dtype)
+        # a kernel small enough that the window is interior over most of the
+        # spectrogram, which the 31-frame kernels never are at this size, and
+        # short enough for the silent band to zero both medians
+        self.assert_denormal(s, (3, 5))
+        for dtype in self.DTYPES:
+            cases += self.cell(s, (3, 5), 2.0, (1.0, 1.0), dtype)
+        # the denormal branch under the default kernel needs a wider silence
+        wide = self.spectrogram(
+            self.BINS, self.FRAMES, self.SEED, self.SILENT_WIDE
+        )
+        self.assert_denormal(wide, (31, 31))
+        for power in (2.0, np.inf):
+            for margin in self.MARGINS:
+                cases += self.cell(
+                    wide, (31, 31), power, margin, "float64",
+                    silent_bins=self.SILENT_WIDE, prefix="silent_",
+                )
+        # leading axes map independently: two planes, the second halved
+        batched = np.stack([s, s * 0.5])
+        cases += self.cell(
+            batched, (31, 31), 2.0, (1.0, 1.0), "float64",
+            extra={"batched": True}, prefix="batched_",
+        )
+        for case in cases:
+            case["params"].setdefault("batched", False)
+        return cases
+
+    MASK_CELLS = [
+        ((31, 31), 2.0, (1.0, 1.0), "float64"),
+        ((31, 31), 2.0, (1.0, 1.0), "float32"),
+        ((31, 31), 1.0, (1.0, 3.0), "float64"),
+        ((31, 31), np.inf, (1.0, 1.0), "float64"),
+        ((31, 31), np.inf, (1.0, 3.0), "float32"),
+        ((17, 31), np.inf, (1.0, 1.0), "float64"),
+        ((17, 31), np.inf, (1.0, 3.0), "float64"),
+        ((32, 32), np.inf, (1.0, 1.0), "float32"),
+        ((32, 32), 2.0, (1.0, 3.0), "float32"),
+        ((3, 5), 1.0, (1.0, 1.0), "float64"),
+    ]
+
+    def mask_cases(self):
+        s = self.spectrogram(self.BINS, self.FRAMES, self.SEED, self.SILENT_BINS)
+        cases = []
+        for kernel_size, power, margin, dtype in self.MASK_CELLS:
+            cases += self.cell(
+                s, kernel_size, power, margin, dtype, mask=True
+            )
+        for case in cases:
+            case["params"]["batched"] = False
+            if case["params"]["power"] == "inf":
+                values = np.asarray(case["values"])
+                assert np.isin(values, [0.0, 1.0]).all(), "hard mask is not 0/1"
+        return cases
+
+    # (frames, kernel_size): the kernel at, above and around the frame count,
+    # every window overhanging the frame axis
+    BOUNDARY_CELLS = [
+        (16, (31, 31)),
+        (16, (32, 32)),
+        (17, (31, 31)),
+        (17, (32, 32)),
+        (9, (17, 31)),
+    ]
+
+    def boundary_cases(self):
+        cases = []
+        for frames, kernel_size in self.BOUNDARY_CELLS:
+            s = self.spectrogram(
+                self.BINS, frames, self.SEED, self.SILENT_BINS
+            )
+            prefix = f"n{frames}_"
+            for dtype in self.DTYPES:
+                cases += self.cell(
+                    s, kernel_size, 2.0, (1.0, 1.0), dtype, prefix=prefix
+                )
+            cases += self.cell(
+                s, kernel_size, np.inf, (1.0, 1.0), "float64", prefix=prefix
+            )
+        for case in cases:
+            case["params"]["batched"] = False
+        return cases
+
+    EFFECTS_FFT = 512
+
+    EFFECTS_HOP = 128
+
+    EFFECTS_LENGTH = 3072
+
+    # (case key, face, kernel_size, power, margin, dtype)
+    EFFECTS_CELLS = [
+        ("defaults", "hpss", (31, 31), 2.0, (1.0, 1.0), "float64"),
+        ("defaults", "hpss", (31, 31), 2.0, (1.0, 1.0), "float32"),
+        ("hard", "harmonic", (17, 31), np.inf, (1.0, 1.0), "float64"),
+        ("margin", "percussive", (31, 31), 2.0, (1.0, 3.0), "float64"),
+    ]
+
+    def effects_cases(self):
+        base = StftVectorGenerator.lcg_signal(
+            self.EFFECTS_LENGTH, seed=self.SIGNAL_SEED
+        )
+        analysis = dict(
+            n_fft=self.EFFECTS_FFT,
+            hop_length=self.EFFECTS_HOP,
+            win_length=self.EFFECTS_FFT,
+            center=True,
+            pad_mode="constant",
+        )
+        cases = []
+        for key, face, kernel_size, power, margin, dtype in self.EFFECTS_CELLS:
+            y = (
+                base
+                if dtype == "float64"
+                else base.astype(np.float32).astype(np.float64)
+            )
+            spectrum = librosa.stft(y, **analysis)
+            self.assert_clean(np.abs(spectrum), kernel_size)
+            shared = dict(
+                kernel_size=list(kernel_size), power=power, margin=list(margin)
+            )
+            if face == "hpss":
+                outputs = list(librosa.effects.hpss(y, **analysis, **shared))
+                components = ["harmonic", "percussive"]
+            elif face == "harmonic":
+                outputs = [librosa.effects.harmonic(y, **analysis, **shared)]
+                components = ["harmonic"]
+            else:
+                outputs = [librosa.effects.percussive(y, **analysis, **shared)]
+                components = ["percussive"]
+            for component, expected in zip(components, outputs):
+                assert expected.shape == (self.EFFECTS_LENGTH,)
+                cases.append(
+                    {
+                        "name": f"{key}_{face}_{component}_{dtype}",
+                        "params": {
+                            "fft_size": self.EFFECTS_FFT,
+                            "hop": self.EFFECTS_HOP,
+                            "length": self.EFFECTS_LENGTH,
+                            "seed": self.SIGNAL_SEED,
+                            "kernel_h": kernel_size[0],
+                            "kernel_p": kernel_size[1],
+                            "power": "inf" if np.isinf(power) else f"{power:g}",
+                            "margin_h": float(margin[0]),
+                            "margin_p": float(margin[1]),
+                            "dtype": dtype,
+                            "face": face,
+                            "component": component,
+                        },
+                        "shape": list(expected.shape),
+                        "values": expected.astype(np.float64).tolist(),
+                    }
+                )
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "hpss", self.component_cases())
+        write_suite(self.SUITE, "hpss_masks", self.mask_cases())
+        write_suite(self.SUITE, "hpss_boundary", self.boundary_cases())
+        write_suite(self.SUITE, "hpss_effects", self.effects_cases())
+
+
 class IoVectorGenerator:
     """Golden fixtures and decode-parity vectors for Soundml_io.
 
@@ -2574,6 +2935,7 @@ GENERATORS = [
     OnsetFeaturesVectorGenerator,
     CqtVectorGenerator,
     ChromaVectorGenerator,
+    HpssVectorGenerator,
     IoVectorGenerator,
 ]
 
