@@ -108,8 +108,9 @@ module Format : sig
       chunks are unbounded (the offline case). {!Stream.prepare} sets it to
       [max_chunk] on the source format; stages derive their own output bound
       through [out_format], and the library widens each stage's threaded
-      bound to cover the stage's declared latency (scaled by its rate), so
-      the bound holds for drained tails as well as steady pushes. *)
+      bound to cover the stage's declared latency (scaled by its rate) plus
+      its declared output latency, so the bound holds for drained tails as
+      well as steady pushes. *)
 
   val upstream_latency : t -> Rate.t
   (** [upstream_latency f] is the cumulative involuntary lookahead of every
@@ -163,6 +164,7 @@ val stateless : ('a -> 'b) -> ('a, 'b, 'k) t
 
 val kernel :
      ?latency:int
+  -> ?output_latency:int
   -> ?rate:Rate.t
   -> ?out_format:(Format.t -> Format.t)
   -> ?flush:('s -> 'b list)
@@ -202,22 +204,52 @@ val kernel :
     [concat []] must be well-defined and produce an empty chunk — capture
     whatever the empty chunk needs (dtype, shape) at construction.
 
-    [latency] is the stage's involuntary lookahead in input items and
-    defaults to [0]. [rate] is the stage's output items per input items and
-    defaults to {!Rate.identity}.
+    [rate] is the stage's output items per input items and defaults to
+    {!Rate.identity}.
+
+    {2:algebra The lookahead algebra}
+
+    A stage declares its involuntary lookahead on whichever side it holds
+    items back. [latency] counts the {e input} items it withholds before
+    mapping them and defaults to [0]; [output_latency] counts the {e output}
+    items it withholds beyond that — the items by which its emission trails
+    the naive rate map — and defaults to [0]. Both are integers, because both
+    count whole items of a stream that has them; the stage's lookahead in
+    input items is their sum through the rate,
+
+    {[ lookahead = latency + output_latency / rate ]}
+
+    which is exact and in general not an integer: a stage emitting [hop]
+    items per input item and trailing them by [d] holds back [d / hop] input
+    items, a quantity no [latency] can name. That number is what {!latency}
+    reports — converted to source-rate samples — and what composition folds,
+    by the rule
+
+    {[ lookahead (f >> g) = lookahead f + lookahead g / rate f ]}
+
+    The guarantee the declaration makes, and the one the two terms state
+    together: after [n] input items the stage has emitted at least
+    [ceil ((n - lookahead) * rate)] output items, and [flush] releases the
+    rest. A stage that consumes and emits at the same rate can express the
+    same withholding either way, and the two declarations agree. The
+    accounting is not read as a delay to undo: a stage whose emission
+    {e realigns} its output against its input — synthesis against analysis —
+    declares the alignment it holds, and a chain of the two reports the
+    lookahead that remains.
 
     [out_format] turns the stage's input format into its output format
     (dtype, channels, bound changes) and must scale items per second by
     exactly [rate]; it defaults to the identity, with items per second and
     the per-chunk bound scaled by [rate] when a non-identity rate is
-    declared. Upstream latency accounting is the library's: [latency] is
-    converted to source-rate samples and accumulated into the threaded format
-    automatically.
+    declared. Upstream latency accounting is the library's: the lookahead
+    above is converted to source-rate samples and accumulated into the
+    threaded format automatically, and the threaded per-chunk bound is
+    widened to cover the whole withheld tail, on both sides.
 
-    Raises [Invalid_argument] if [latency < 0] or if [rate] is not positive.
-    Threading the formats — inside {!run} or {!Stream.prepare} — raises
-    [Invalid_argument] if [out_format] disagrees with the declared [rate] or
-    does not derive from its argument. *)
+    Raises [Invalid_argument] if [latency < 0], if [output_latency < 0] or if
+    [rate] is not positive. Threading the formats — inside {!run} or
+    {!Stream.prepare} — raises [Invalid_argument] if [out_format] disagrees
+    with the declared [rate] or does not derive from its argument. *)
 
 val offline_only : ('a -> 'b) -> concat:('b list -> 'b) -> ('a, 'b, offline) t
 (** [offline_only f ~concat] is the whole-signal stage applying [f] to the

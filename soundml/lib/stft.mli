@@ -23,10 +23,12 @@
 
     A {!Config.t} fixes the analysis geometry once; {!transform} is the
     offline transform, {!invert} and {!griffin_lim} are its synthesis side,
-    {!Kernel} is the incremental form behind the analysis, and
-    {!stage}/{!power_stage} expose the same kernel as {!Pipeline} stages.
-    Offline is the one-chunk instance of streaming: {!transform} drives the
-    kernel on a single chunk, so the two cannot disagree.
+    {!Kernel} and {!Synthesis} are the incremental forms of the two
+    directions, and {!stage}/{!power_stage}/{!synthesis_stage} expose those
+    kernels as {!Pipeline} stages. Offline is the one-chunk instance of
+    streaming, in both directions: {!transform} drives {!Kernel} on a single
+    chunk and {!invert} is what {!Synthesis} totals over a stream, so no face
+    of this module can disagree with another.
 
     Complex-valued entry points take the spectrum dtype as an explicit
     dtype-first witness ([transform Nx.complex64 c x] maps float32 audio to a
@@ -129,6 +131,23 @@ module Config : sig
       latency, not offline-ness — centered analysis streams exactly, it
       merely emits each frame once the samples past its grid position have
       arrived. *)
+
+  val synthesis_latency : t -> int
+  (** [synthesis_latency c] is the lookahead incremental synthesis carries
+      ({!Synthesis}), in {e output} samples. Writing [L] for the head trim of
+      the alignment — [fft_size / 2] under [`Centered], [0] under [`Left] and
+      [fft_size - 1] under [`Right] — and [R] for its tail trim
+      ([fft_size / 2], [0], [0]), it is
+
+      {[ synthesis_latency = L + max 0 (hop + R - fft_size) ]}
+
+      the positions the alignment trims off the head, plus the positions one
+      hop opens past the trailing trim — nonzero only where the hop outruns
+      what the frame keeps, and released as soon as the next frame moves that
+      trim along. Synthesis withholds no {e frame}: output sample [q] is
+      final once frame [(q + synthesis_latency c) / hop] has been consumed,
+      so the whole of this number sits on the output side, which is where
+      {!synthesis_stage} declares it. *)
 
   val pp : Format.formatter -> t -> unit
   (** [pp fmt c] prints [c] on [fmt] in a compact single-line form. *)
@@ -451,6 +470,98 @@ module Kernel : sig
   (** [reset k] restores [k] to its freshly prepared state. *)
 end
 
+(** {1 Incremental synthesis}
+
+    The Mealy kernel behind {!invert}, and the dual of {!Kernel}: [step]
+    consumes a batch of spectral frames — the frame axis last, the bin axis
+    before it, leading axes broadcasting — and emits the signal samples those
+    frames completed; [flush] releases the trailing positions the last frame
+    reaches. Concatenating every emitted chunk along the time axis equals
+    {!invert} at its default length on the concatenated frames, for every
+    partitioning of the frame sequence, bit for bit.
+
+    Synthesis has no lookahead in frame coordinates: padded position [q] takes
+    its last tap from frame [q / hop], so it is settled the moment that frame
+    arrives, and every frame fed completes one hop of output. Writing [F] for
+    the frames fed, [N] for [fft_size], [H] for [hop] and [L], [R] for the
+    head and tail trims of the alignment (see {!Config.synthesis_latency}):
+
+    {[
+      positions released after F frames = F * H - max 0 (H + R - N)
+      samples emitted after F frames    = F * H - synthesis_latency
+      samples emitted over a whole stream, flush included
+                                        = (F - 1) * H + N - L - R
+    ]}
+
+    the last of which is exactly the default length of {!invert}, so the two
+    agree on every sample and on how many there are. That is the whole of the
+    relationship: feeding all the frames and flushing {e is} [invert] at its
+    default length. There is no [length] here and there cannot be — naming one
+    retroactively drops frames that opened past it, a decision about frames
+    already consumed and already emitted — so a caller who wants
+    {!invert}'s [~length] trims the returned signal, which {!invert} describes
+    frame by frame.
+
+    Reconstruction itself, its conditioning at the edges and the interior it
+    is exact on are {!invert}'s: this kernel computes the same quotient at the
+    same positions, and inherits them unchanged. What it adds is the memory
+    bound — the state is the last [ceil (fft_size / hop) - 1] windowed frames
+    and the held tail, so at most [(fft_size + hop) * ceil (fft_size / hop)]
+    doubles per channel, whatever the stream's length and however its frames
+    were chunked.
+
+    The streaming form is the weighted overlap-add of R. E. Crochiere,
+    {e A weighted overlap-add method of short-time Fourier analysis/synthesis},
+    IEEE TASSP 28(1), 1980, over the analysis-synthesis duality of J. B. Allen
+    & L. R. Rabiner, {e A unified approach to short-time Fourier analysis and
+    synthesis}, Proc. IEEE 65(11), 1977. *)
+
+module Synthesis : sig
+  (** The type for prepared synthesis states. Mutable; single-owner; not
+      domain-safe. One state carries all channels — never one object per
+      channel. *)
+  type ('a, 'c) t
+
+  val prepare :
+       (float, 'a) Nx.dtype
+    -> Config.t
+    -> (Complex.t, 'c) Nx.dtype
+    -> channels:int
+    -> max_block:int
+    -> ('a, 'c) t
+  (** [prepare dtype c cdtype ~channels ~max_block] is a fresh synthesis
+      state for batches of at most [max_block] frames of [channels]-channel
+      [cdtype] spectra, producing [dtype] audio. The witnesses read in the
+      order of the data, as {!Kernel.prepare}'s do: what comes out, the
+      geometry, what goes in.
+
+      Raises [Invalid_argument] if [channels < 1], if [max_block < 1], or if
+      [c] is not invertible — the condition {!invert} states, checked once
+      here rather than on every batch. *)
+
+  val step : ('a, 'c) t -> (Complex.t, 'c) Nx.t -> (float, 'a) Nx.t option
+  (** [step k z] feeds the frames [z], shaped [[...; bins; frames]], and is
+      the samples they completed, if any, shaped [[...; samples]] — [hop] per
+      frame once the head trim is paid. [z] is borrowed: the kernel copies
+      what it must retain, and the returned tensor aliases neither [z] nor
+      kernel state. Values are computed in double precision and rounded once
+      into [dtype], as {!invert} rounds them.
+
+      Raises [Invalid_argument] if [k] was drained by {!flush} — {!reset} it
+      before feeding new frames — if [z] has rank below two or a bin axis
+      that is not [bins c] long, or if a leading axis of [z] has size zero. *)
+
+  val flush : ('a, 'c) t -> (float, 'a) Nx.t option
+  (** [flush k] drains the kernel: it releases the positions the last frame
+      reaches past the hop grid, less the tail trim of the alignment, and is
+      those samples, if any — [max 0 (fft_size - hop - R)] of them, none at
+      all where the trim already covers them. Draining consumes the tail — a
+      second [flush] is [None]; {!reset} the kernel before reusing it. *)
+
+  val reset : ('a, 'c) t -> unit
+  (** [reset k] restores [k] to its freshly prepared state. *)
+end
+
 (** {1 Pipeline stages} *)
 
 val stage :
@@ -478,3 +589,50 @@ val power_stage :
     joining zero chunks yields an empty single-channel spectrum [[bins; 0]].
     Compose it downstream of causal stages without ever naming a complex
     dtype. *)
+
+val synthesis_stage :
+     (float, 'a) Nx.dtype
+  -> Config.t
+  -> ((Complex.t, 'c) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [synthesis_stage dtype c] is {!Synthesis} as a pipeline stage: causal,
+    rate [hop] — one output sample per hop of every frame that arrives — and
+    zero input-side latency, declaring instead {!Config.synthesis_latency}
+    samples of {e output} latency, which is precisely what it withholds. Its
+    lookahead is therefore [synthesis_latency c / hop] frames, not an integer
+    in general, and composing it under {!stage} on the same configuration
+    reports, in source samples,
+
+    {[
+      latency (stage cdtype c >> synthesis_stage dtype c)
+      = latency (stage cdtype c) + Config.synthesis_latency c
+    ]}
+
+    — each end declared on the side it acts on, and the composition adding
+    them where they meet, by the rule {!Pipeline.kernel} states. The chain is
+    the identity on the interior of the round trip, the region {!invert}
+    reconstructs: padded positions [\[fft_size - hop, frames * hop)], which in
+    signal coordinates is [\[max 0 (fft_size - hop - L), frames * hop - L)].
+
+    Measured against the deficit the chain carries — the greatest number of
+    samples by which its emission ever trails its input, the quantity the
+    guarantee of {!Pipeline.kernel} is stated against — the declaration is
+    exact under an odd [fft_size] with [`Centered] frames and under [`Right]
+    with a padding that does not look ahead, one sample high under an even
+    [fft_size], where {!Config.latency} rounds the half frame up, and a bound
+    under [`Right] with [`Reflect] padding, whose border lookahead is the same
+    [fft_size - 1] samples the head trim already covers and which the sum
+    therefore counts twice. Where the first sample lands is a separate
+    quantity, set by the frame grid — emission opens with the first frame
+    whose release passes the head trim — and it need not coincide with the
+    declaration. [`Left] under-reports, and does so at the analysis end: it
+    declares {!Config.latency}[ = 0], the lookahead of its frame grid, though
+    its first frame still needs [fft_size] samples to exist — the round trip
+    inherits that declaration exactly as the [`Left] analysis stage carries
+    it alone.
+
+    Chunks are joined by concatenation along the time axis; joining zero
+    chunks yields an empty signal. The threaded stream format carries [dtype]
+    as its element dtype.
+
+    Raises [Invalid_argument] if [c] is not invertible, under the condition
+    {!invert} states. *)
