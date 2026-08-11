@@ -223,7 +223,7 @@ val kernel :
     items per input item and trailing them by [d] holds back [d / hop] input
     items, a quantity no [latency] can name. That number is what {!latency}
     reports — converted to source-rate samples — and what composition folds,
-    by the same rule as ever:
+    by the rule
 
     {[ lookahead (f >> g) = lookahead f + lookahead g / rate f ]}
 

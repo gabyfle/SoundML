@@ -613,17 +613,22 @@ val synthesis_stage :
     reconstructs: padded positions [\[fft_size - hop, frames * hop)], which in
     signal coordinates is [\[max 0 (fft_size - hop - L), frames * hop - L)].
 
-    Against the truth measured by first emission, the declaration is exact
-    under an odd [fft_size] with [`Centered] frames and under [`Right] with a
-    padding that does not look ahead, one sample high under an even
+    Measured against the deficit the chain carries — the greatest number of
+    samples by which its emission ever trails its input, the quantity the
+    guarantee of {!Pipeline.kernel} is stated against — the declaration is
+    exact under an odd [fft_size] with [`Centered] frames and under [`Right]
+    with a padding that does not look ahead, one sample high under an even
     [fft_size], where {!Config.latency} rounds the half frame up, and a bound
     under [`Right] with [`Reflect] padding, whose border lookahead is the same
     [fft_size - 1] samples the head trim already covers and which the sum
-    therefore counts twice. [`Left] under-reports, and does so at the analysis
-    end: it declares {!Config.latency}[ = 0], the lookahead of its frame grid,
-    though its first frame still needs [fft_size] samples to exist — the round
-    trip inherits that declaration exactly as the [`Left] analysis stage
-    carries it alone.
+    therefore counts twice. Where the first sample lands is a separate
+    quantity, set by the frame grid — emission opens with the first frame
+    whose release passes the head trim — and it need not coincide with the
+    declaration. [`Left] under-reports, and does so at the analysis end: it
+    declares {!Config.latency}[ = 0], the lookahead of its frame grid, though
+    its first frame still needs [fft_size] samples to exist — the round trip
+    inherits that declaration exactly as the [`Left] analysis stage carries
+    it alone.
 
     Chunks are joined by concatenation along the time axis; joining zero
     chunks yields an empty signal. The threaded stream format carries [dtype]
