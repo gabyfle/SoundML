@@ -339,6 +339,38 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
             hpss_signal(y32),
         )
     )
+    def time_stretch(y: np.ndarray, rate: float) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.effects.time_stretch(
+                y, rate=rate, n_fft=N_FFT, hop_length=HOP
+            )
+
+        return run
+
+    def pitch_shift(y: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.effects.pitch_shift(
+                y, sr=SAMPLE_RATE, n_steps=4, n_fft=N_FFT, hop_length=HOP
+            )
+
+        return run
+
+    for rate in (2.0, 0.5):
+        for tag, y in (("f32", y32), ("f64", y64)):
+            benches.append(
+                bench(
+                    f"pvoc/time_stretch 30s r{rate} {tag} fft{N_FFT} hop{HOP}"
+                    " (librosa)",
+                    time_stretch(y, rate),
+                )
+            )
+    for tag, y in (("f32", y32), ("f64", y64)):
+        benches.append(
+            bench(
+                f"pvoc/pitch_shift 30s +4st {tag} fft{N_FFT} hop{HOP} (librosa)",
+                pitch_shift(y),
+            )
+        )
 
     benches.extend(cqt_benchmarks())
     benches.extend(resample_benchmarks())
