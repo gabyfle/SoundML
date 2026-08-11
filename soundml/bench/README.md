@@ -67,6 +67,35 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   mask is the cheapest row by a few percent: its comparison replaces four
   powers and two divisions, but the medians beneath it are unchanged, which
   is the shape of a cost dominated by the filter.
+- `pvoc` — `Effects.time_stretch` at rate 2.0 and 0.5 and
+  `Effects.pitch_shift` up four semitones, over the same 30 s of mono audio at
+  fft 2048 and hop 512, one row per dtype, mirroring the librosa rows one to
+  one. Each row carries the whole computation the caller asks for: the
+  analysis, the phase recurrence and the synthesis, plus — for the pitch rows
+  — the rational ratio `Effects.semitones` returns and the
+  `Resample.Config.create` it drives, both built inside the timed thunk,
+  because that is where a caller shifting by a named interval builds them.
+
+  The measured position, both sides on the maintainer machine in one session
+  (arm64, min-of-N over five interleaved alternations): `time_stretch` runs
+  0.49x `librosa.effects.time_stretch` at float32 and 0.35x at float64 on rate
+  2.0 (17.1 ms against 34.9, 17.0 against 49.2), and 0.36x / 0.29x on rate 0.5
+  (41.5 against 115.1, 41.1 against 143.6); `pitch_shift` runs 0.43x
+  `librosa.effects.pitch_shift` at float32 and 0.36x at float64 (34.3 ms
+  against 80.3, 36.6 against 102.3). Three terms carry it. The analysis and
+  the synthesis are the ones the `stft` and `istft` groups already price
+  against the same reference. The recurrence itself computes the magnitude and
+  the argument of every analysis frame once, where the reference recomputes
+  both for the two frames every output frame reads — the same total at rate
+  2.0 and four times as much at rate 0.5 — and closes with one phasor over the
+  whole phase matrix, which spreads across cores where a per-frame numpy call
+  cannot. And the pitch rows convert at an exact
+  rational whose terms `semitones` bounds at 512, which keeps the polyphase
+  bank inside cache and lets the planner run it as one banded matrix product:
+  1.1 ms for the conversion and 2.5 for the bank against a 30 s clip.
+  float64 widens every ratio because both directions of this library run their
+  interior in double precision at either dtype, while librosa takes its own
+  single-precision path at float32.
 - `cqt` — the constant-Q paths end to end over the same 30 s of mono audio at
   22.05 kHz and hop 512: `Cqt.power_spectrum` over the default seven-octave
   84-bin ladder and over the erb variable-Q ladder, and `chroma_cqt` over a

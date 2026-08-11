@@ -73,6 +73,13 @@ module Chroma = Chroma
     {!Resample.stage} pipeline stage — bit-identical on every partitioning. *)
 module Resample = Resample
 
+(** Time-scale and pitch modification: the phase vocoder behind
+    {!Effects.time_stretch}, the spectrum-level {!Effects.phase_vocoder} it is
+    built on, its identity phase-locked variant, and {!Effects.pitch_shift},
+    which composes the stretch with {!Resample} at the exact rational ratio
+    {!Effects.semitones} names. *)
+module Effects = Effects
+
 (** {1:features Flat features} *)
 
 val mel_spectrogram :

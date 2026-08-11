@@ -57,6 +57,18 @@ pipeline/direct-gain-bias-abs-1M	alloc_words	exact	962
 pipeline/direct-gain-bias-abs-1M	wall_time	batch=8	n=20	6.951e-04	6.804e-04 6.877e-04 6.878e-04 6.880e-04 6.884e-04 6.901e-04 6.916e-04 6.928e-04 6.932e-04 6.944e-04 6.957e-04 6.970e-04 6.972e-04 6.978e-04 6.982e-04 6.998e-04 7.022e-04 7.029e-04 7.075e-04 7.122e-04
 pipeline/run-gain-bias-abs-1M	alloc_words	exact	970
 pipeline/run-gain-bias-abs-1M	wall_time	batch=8	n=20	6.967e-04	6.851e-04 6.859e-04 6.899e-04 6.930e-04 6.946e-04 6.949e-04 6.950e-04 6.953e-04 6.961e-04 6.962e-04 6.973e-04 6.976e-04 6.985e-04 6.995e-04 6.998e-04 7.009e-04 7.095e-04 7.110e-04 7.110e-04 7.153e-04
+pvoc/pitch_shift-30s-4st-f32-fft2048-hop512	alloc_words	exact	18397865
+pvoc/pitch_shift-30s-4st-f32-fft2048-hop512	wall_time	batch=1	n=20	3.947e-02	3.834e-02 3.847e-02 3.847e-02 3.871e-02 3.891e-02 3.892e-02 3.919e-02 3.921e-02 3.947e-02 3.947e-02 3.948e-02 3.963e-02 3.977e-02 3.978e-02 4.026e-02 4.088e-02 4.231e-02 4.241e-02 4.544e-02 4.761e-02
+pvoc/pitch_shift-30s-4st-f64-fft2048-hop512	alloc_words	exact	18397785
+pvoc/pitch_shift-30s-4st-f64-fft2048-hop512	wall_time	batch=1	n=20	4.218e-02	4.142e-02 4.143e-02 4.147e-02 4.156e-02 4.160e-02 4.162e-02 4.163e-02 4.166e-02 4.189e-02 4.211e-02 4.224e-02 4.248e-02 4.249e-02 4.251e-02 4.252e-02 4.281e-02 4.521e-02 4.710e-02 4.834e-02 5.040e-02
+pvoc/time_stretch-30s-r0.5-f32-fft2048-hop512	alloc_words	exact	21267413
+pvoc/time_stretch-30s-r0.5-f32-fft2048-hop512	wall_time	batch=1	n=20	4.528e-02	4.435e-02 4.437e-02 4.448e-02 4.462e-02 4.487e-02 4.498e-02 4.503e-02 4.506e-02 4.517e-02 4.523e-02 4.534e-02 4.547e-02 4.549e-02 4.560e-02 4.592e-02 4.636e-02 4.906e-02 5.033e-02 5.050e-02 5.779e-02
+pvoc/time_stretch-30s-r0.5-f64-fft2048-hop512	alloc_words	exact	21267334
+pvoc/time_stretch-30s-r0.5-f64-fft2048-hop512	wall_time	batch=1	n=20	4.484e-02	4.424e-02 4.434e-02 4.437e-02 4.441e-02 4.443e-02 4.446e-02 4.457e-02 4.463e-02 4.468e-02 4.483e-02 4.485e-02 4.496e-02 4.511e-02 4.518e-02 4.535e-02 4.565e-02 4.590e-02 4.655e-02 5.116e-02 5.368e-02
+pvoc/time_stretch-30s-r2.0-f32-fft2048-hop512	alloc_words	exact	5362247
+pvoc/time_stretch-30s-r2.0-f32-fft2048-hop512	wall_time	batch=1	n=20	2.138e-02	1.989e-02 1.990e-02 1.992e-02 1.993e-02 2.005e-02 2.005e-02 2.010e-02 2.026e-02 2.051e-02 2.065e-02 2.211e-02 2.263e-02 2.299e-02 2.401e-02 2.455e-02 2.459e-02 2.642e-02 2.678e-02 2.743e-02 2.926e-02
+pvoc/time_stretch-30s-r2.0-f64-fft2048-hop512	alloc_words	exact	5362168
+pvoc/time_stretch-30s-r2.0-f64-fft2048-hop512	wall_time	batch=1	n=20	2.031e-02	1.963e-02 1.978e-02 1.979e-02 1.979e-02 1.981e-02 1.993e-02 1.997e-02 2.015e-02 2.024e-02 2.029e-02 2.033e-02 2.062e-02 2.079e-02 2.116e-02 2.133e-02 2.136e-02 2.165e-02 2.178e-02 2.238e-02 2.652e-02
 resample/apply-best-16k-44k1-f32	alloc_words	exact	2923
 resample/apply-best-16k-44k1-f32	wall_time	batch=32	n=20	2.125e-04	2.057e-04 2.060e-04 2.071e-04 2.084e-04 2.085e-04 2.088e-04 2.105e-04 2.117e-04 2.123e-04 2.124e-04 2.127e-04 2.131e-04 2.137e-04 2.152e-04 2.159e-04 2.161e-04 2.162e-04 2.164e-04 2.199e-04 2.239e-04
 resample/apply-best-16k-44k1-f64	alloc_words	exact	2922

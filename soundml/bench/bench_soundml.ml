@@ -184,6 +184,36 @@ let hpss_benchmarks () =
         Soundml.hpss_of_spectrogram ~power:Float.infinity s32 )
   ; Thumper.bench "hpss signal 30s f32 fft2048 hop512" (fun () ->
         Soundml.hpss stft_config x32 ) ]
+(* The phase-vocoder group: time stretching in both directions and a four
+   semitone pitch shift, over the same 30 s of mono audio and the same analysis
+   geometry, one row per dtype, mirroring the librosa rows of [bench_soundml.py]
+   one to one. Each row carries the whole computation the caller asks for — the
+   analysis, the recurrence and the synthesis, plus the rational ratio and the
+   resampler configuration for the pitch rows, which are built inside the timed
+   thunk because that is where a caller shifting by a named interval builds
+   them. *)
+let pvoc_config =
+  Soundml.Stft.Config.create ~fft_size:2048 ~hop:512 ~pad:(`Constant 0.) ()
+
+let pvoc_benchmarks () =
+  let x32 = Nx.rand Nx.float32 [|n_audio|] in
+  let x64 = Nx.rand Nx.float64 [|n_audio|] in
+  [ Thumper.bench "time_stretch 30s r2.0 f32 fft2048 hop512" (fun () ->
+        Soundml.Effects.time_stretch pvoc_config ~rate:2.0 x32 )
+  ; Thumper.bench "time_stretch 30s r2.0 f64 fft2048 hop512" (fun () ->
+        Soundml.Effects.time_stretch pvoc_config ~rate:2.0 x64 )
+  ; Thumper.bench "time_stretch 30s r0.5 f32 fft2048 hop512" (fun () ->
+        Soundml.Effects.time_stretch pvoc_config ~rate:0.5 x32 )
+  ; Thumper.bench "time_stretch 30s r0.5 f64 fft2048 hop512" (fun () ->
+        Soundml.Effects.time_stretch pvoc_config ~rate:0.5 x64 )
+  ; Thumper.bench "pitch_shift 30s +4st f32 fft2048 hop512" (fun () ->
+        Soundml.Effects.pitch_shift pvoc_config
+          ~ratio:(Soundml.Effects.semitones 4.)
+          x32 )
+  ; Thumper.bench "pitch_shift 30s +4st f64 fft2048 hop512" (fun () ->
+        Soundml.Effects.pitch_shift pvoc_config
+          ~ratio:(Soundml.Effects.semitones 4.)
+          x64 ) ]
 
 let mel_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
@@ -415,6 +445,7 @@ let () =
     ; Thumper.group "griffinlim" (griffin_lim_benchmarks ())
     ; Thumper.group "mel" (mel_benchmarks ())
     ; Thumper.group "hpss" (hpss_benchmarks ())
+    ; Thumper.group "pvoc" (pvoc_benchmarks ())
     ; Thumper.group "cqt" (cqt_benchmarks () @ cqt_stream_benchmarks ())
     ; Thumper.group "resample"
         ( resample_apply_benchmarks ()
