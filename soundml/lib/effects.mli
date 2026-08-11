@@ -104,17 +104,21 @@
       and an integer one, and so does not resample at the ratio it stretched
       by. Both resamplers are windowed-sinc designs at the same published
       specification, and they may differ arbitrarily above the passband both
-      keep flat. Substituting one for the other moves the shifted signal by at
-      most [1.1e-3] of peak over the tested ratios on two seconds of swept sine
-      in noise, against the [2.9e-4] to [5.2e-4] the reference moves itself by
-      switching its own soxr from its default HQ tier to VHQ; on the full-band
-      noise of the golden vectors, which puts a fifth of its energy in the
-      transition band, the two numbers are [2.6e-2] and [6.5e-3] to [9.0e-3].
-      The substitution is of the order of the reference's own choice of tier —
-      three times it at worst — which is the sense in which the pitch vectors
-      pin parity, and the stretch stage of those same cells is pinned exactly.
-      The final output sample is its own case: the two resamplers fill it from
-      different tail conventions and it can differ by [0.19] of peak.
+      keep flat; they also start and flush their filters differently, so the
+      substitution is not spread evenly over the output and is stated here in
+      three parts. On two seconds of swept sine in noise, over the tested
+      ratios, substituting one for the other moves the shifted signal by at
+      most [8.1e-4] of peak between the ends of the signal, by [4.2e-3] over
+      the first five output samples, and by [5.1e-2] in the final one —
+      against the [3.3e-4] to [6.3e-4] the reference moves itself by switching
+      its own soxr from its default HQ tier to VHQ. On the full-band noise of
+      the golden vectors, which puts a fifth of its energy in the transition
+      band, the same three figures are [6.8e-3], [2.6e-2] and [7.7e-3],
+      against a tier switch of [6.5e-3] to [9.0e-3]. Between the ends the
+      substitution is of the order of the reference's own choice of tier — two
+      and a half times it at worst — which is the sense in which the pitch
+      vectors pin parity, and the stretch stage of those same cells is pinned
+      exactly.
 
     Citations. Flanagan, J. L. and Golden, R. M., "Phase Vocoder", {e Bell
     System Technical Journal} 45(9), 1966. Portnoff, M. R., "Implementation of

@@ -53,9 +53,13 @@ let float64_atol = 1e-11
    the result by at most 2.7e-2 of peak, against the 6.5e-3 to 9.0e-3 librosa
    moves them itself by switching its own soxr from its default HQ tier to VHQ:
    the substitution is of the order of the reference's own choice of tier, three
-   times it at worst. On material with a spectrum that rolls off — two seconds
-   of swept sine in noise — the same measurement is 1.1e-3 of peak against
-   5.2e-4 for that tier switch. *)
+   times it at worst. It is not spread evenly over the output — the two
+   resamplers start and flush their filters differently — and the first five
+   samples carry that worst figure, against 6.8e-3 between the ends of the
+   signal and 7.7e-3 in the final sample. On material with a spectrum that rolls
+   off — two seconds of the swept sine the locking suite analyses — the same
+   three figures are 4.2e-3, 8.1e-4 and 5.1e-2, against 3.3e-4 to 6.3e-4 for
+   that tier switch. *)
 let pitch_fraction = 4e-2
 
 let lcg_stream seed n =
