@@ -589,6 +589,154 @@ val onset_strength_stage :
 
     Raises [Invalid_argument] if [lag < 1]. *)
 
+val hpss :
+     Stft.Config.t
+  -> ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t * (float, 'a) Nx.t
+(** [hpss c x] is the harmonic and percussive parts of the audio [x], each
+    shaped like [x]: the analysis of [x] on the geometry [c], the separation
+    of {!hpss_of_stft}, and one {!Stft.invert} per component back to the
+    length of [x]. The time axis is the last axis of [x]; leading axes
+    broadcast, so a batch of clips is one call. This face consumes and
+    returns raw audio; {!hpss_of_spectrogram} and {!hpss_of_stft} consume an
+    already-computed spectrogram, and {!hpss_masks} returns the masks
+    themselves. {!harmonic} and {!percussive} are this function keeping one
+    component.
+
+    Separation is median filtering (Fitzgerald, {e Harmonic/percussive
+    separation using median filtering}, DAFx 2010) with the soft masks of
+    Driedger, Müller and Disch ({e Extending harmonic-percussive separation
+    of audio signals}, ISMIR 2014). Sustained partials are horizontal ridges
+    of the magnitude spectrogram and transients vertical ones, so a median
+    along the frame axis enhances the first and a median along the bin axis
+    the second; the two enhanced spectrograms [harm] and [perc] then decide
+    the split bin by bin, as {!hpss_masks} defines it.
+
+    [kernel_size] is [(k_h, k_p)] and defaults to [(31, 31)]: [k_h] frames
+    for the harmonic median along time, [k_p] bins for the percussive median
+    along frequency. [power] is the mask exponent and defaults to [2.];
+    [Float.infinity] selects the hard mask. [margin] is [(m_h, m_p)] and
+    defaults to [(1., 1.)], the partition. Beyond [(1., 1.)] the two
+    components no longer sum to the input, and the difference
+    [x - harmonic - percussive] is the residual — the third component of the
+    margin split, computed by subtraction rather than returned.
+
+    Raises [Invalid_argument] if either kernel size is below [1], if [power]
+    is [nan] or not strictly positive, if either margin is not finite and at
+    least [1], if [x] has rank zero, or if the dtype of [x] is neither
+    [float32] nor [float64]. *)
+
+val harmonic :
+     Stft.Config.t
+  -> ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [harmonic c x] is the harmonic part of the audio [x]: [fst (hpss c x)],
+    at the same parameters and the same cost — the percussive component is
+    computed and dropped. Raises [Invalid_argument] as {!hpss} does. *)
+
+val percussive :
+     Stft.Config.t
+  -> ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [percussive c x] is the percussive part of the audio [x]:
+    [snd (hpss c x)], at the same parameters and the same cost — the harmonic
+    component is computed and dropped. Raises [Invalid_argument] as {!hpss}
+    does. *)
+
+val hpss_of_spectrogram :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t * (float, 'a) Nx.t
+(** [hpss_of_spectrogram s] is the harmonic and percussive components of an
+    already-computed spectrogram [s] — {!Stft.power_spectrum} output, or any
+    non-negative [\[...; bins; frames\]] tensor — each shaped and typed like
+    [s]: the masks of {!hpss_masks} multiplied into [s]. Phase is not
+    involved, so this face separates magnitude and power spectrograms alike;
+    it is to {!hpss} what {!spectral_contrast_of_spectrogram} is to
+    {!spectral_contrast}.
+
+    At the default margin the components partition [s] exactly:
+    [h + p = s] to rounding. Beyond it, [s - (h + p)] is the residual.
+
+    The parameters are those of {!hpss}, and [Invalid_argument] is raised on
+    the same conditions, with rank below two — a spectrogram carries a bin
+    axis and a frame axis — in place of rank zero. *)
+
+val hpss_of_stft :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (Complex.t, 'c) Nx.t
+  -> (Complex.t, 'c) Nx.t * (Complex.t, 'c) Nx.t
+(** [hpss_of_stft z] is the harmonic and percussive components of the complex
+    spectrum [z] — {!Stft.transform} output, shaped
+    [\[...; bins; frames\]] — each shaped and typed like [z]. The masks are
+    those of {!hpss_masks} on the magnitude of [z], and each component
+    carries the phase of [z] unchanged, so the two spectra invert to signals
+    the way [z] itself does. Component width follows the dtype of [z]:
+    [complex64] masks in [float32], [complex128] in [float64].
+
+    The unit phase is formed component by component, and a bin of magnitude
+    zero takes phase [1 + 0i] rather than a quotient of zeros.
+
+    The parameters are those of {!hpss}, and [Invalid_argument] is raised on
+    the same conditions, with rank below two in place of rank zero. *)
+
+val hpss_masks :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t * (float, 'a) Nx.t
+(** [hpss_masks s] is the harmonic and percussive mask pair of the
+    spectrogram [s], each shaped and typed like [s]: the weights
+    {!hpss_of_spectrogram} multiplies into [s], exposed for callers that
+    apply them elsewhere.
+
+    Let [harm] be [s] median-filtered along the frame axis over [k_h] frames
+    and [perc] be [s] median-filtered along the bin axis over [k_p] bins. The
+    window of index [i] on a line of [n] values is
+    [\[i - k / 2, i + k - 1 - k / 2\]] — left-biased for even [k] — and the
+    filtered value is rank [k / 2] of that window sorted ascending, the upper
+    middle for even [k] and never the average of two. Indices outside the
+    line reflect half-sample-symmetrically with period [2 n]: [-1] reads
+    [0], [n] reads [n - 1], and the pattern repeats, so a kernel may exceed
+    the line length by any amount. The rule holds for every kernel size and
+    every line length, boundaries included.
+
+    At finite [power] the harmonic mask is
+    [harm^p / (harm^p + (m_h * perc)^p)] and the percussive mask is
+    [perc^p / (perc^p + (m_p * harm)^p)], each computed on a pair rescaled by
+    its pointwise maximum — which leaves the quotient unchanged and keeps
+    both powers representable at any [p]. Where that maximum falls below the
+    smallest positive normal of the dtype the quotient is undefined and the
+    mask takes [0.5] at the default margin, [0.] otherwise.
+
+    At [power = Float.infinity] the masks are the strict comparisons
+    [harm > m_h * perc] and [perc > m_p * harm], carried as the floats [0.]
+    and [1.] rather than booleans. Both are zero where the two sides are
+    equal, so [h + p = s] does {e not} hold there: such a bin is dropped by
+    both components.
+
+    Masks lie in [\[0, 1\]]. At the default margin the finite-[power] pair
+    sums to [1.] everywhere and the infinite-[power] pair sums to [1.] away
+    from equality; beyond it the pair sums to at most [1.], the deficit being
+    the residual's share.
+
+    The parameters are those of {!hpss}, and [Invalid_argument] is raised on
+    the same conditions, with rank below two in place of rank zero. *)
+
 val version : string
 (** [version] is the version of the SoundML distribution this library was built
     from. *)

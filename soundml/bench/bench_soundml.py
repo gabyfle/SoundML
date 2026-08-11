@@ -248,6 +248,18 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
 
         return run
 
+    def hpss_spectrogram(s: np.ndarray, power: float) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.decompose.hpss(s, kernel_size=31, power=power)
+
+        return run
+
+    def hpss_signal(y: np.ndarray) -> Callable[[], Any]:
+        def run() -> None:
+            librosa.effects.hpss(y, n_fft=N_FFT, hop_length=HOP, kernel_size=31)
+
+        return run
+
     def istft(s: np.ndarray) -> Callable[[], Any]:
         def run() -> None:
             librosa.istft(s, n_fft=N_FFT, hop_length=HOP)
@@ -301,6 +313,32 @@ def build_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
             )
         )
 
+    # The separation rows: the power spectrogram is built once, outside the
+    # timed call, exactly as the OCaml rows precompute theirs.
+    for tag, y in (("f32", y32), ("f64", y64)):
+        spectrum = np.square(
+            np.abs(librosa.stft(y, n_fft=N_FFT, hop_length=HOP))
+        ).astype(y.dtype)
+        benches.append(
+            bench(
+                f"hpss/hpss 30s {tag} k31 p2 fft{N_FFT} hop{HOP} (librosa)",
+                hpss_spectrogram(spectrum, 2.0),
+            )
+        )
+        if tag == "f32":
+            benches.append(
+                bench(
+                    f"hpss/hpss 30s {tag} k31 pinf fft{N_FFT} hop{HOP}"
+                    " (librosa)",
+                    hpss_spectrogram(spectrum, np.inf),
+                )
+            )
+    benches.append(
+        bench(
+            f"hpss/hpss signal 30s f32 fft{N_FFT} hop{HOP} (librosa)",
+            hpss_signal(y32),
+        )
+    )
     def time_stretch(y: np.ndarray, rate: float) -> Callable[[], Any]:
         def run() -> None:
             librosa.effects.time_stretch(

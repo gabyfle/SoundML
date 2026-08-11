@@ -43,6 +43,30 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   single-precision path.
 - `mel` — `mel_spectrogram` of the same signal through a 128-band filterbank,
   one row per dtype, mirroring the librosa rows one to one.
+- `hpss` — harmonic/percussive separation over the same 30 s of mono audio at
+  22.05 kHz, fft 2048 and hop 512, at the default 31-frame/31-bin kernel:
+  `hpss_of_spectrogram` over a precomputed power spectrogram (1025 x 1292),
+  one row per dtype plus one for the hard mask, and one signal-domain
+  `hpss` row that adds the analysis and the two syntheses. The spectrogram
+  is built outside the timed thunk for the first three rows; librosa rows
+  mirror all four one to one.
+
+  The measured position, both sides on the maintainer machine in one session
+  (arm64, min-of-N over six interleaved alternations, librosa warmed before
+  recording — its first call runs about 3x steady state): 0.14x librosa on
+  the spectrogram-domain rows (100.99 ms against 733.19 at float32, 104.63
+  against 733.42 at float64, 99.59 against 718.85 for the hard mask) and
+  0.15x on the signal-domain row (119.21 against 773.69). The whole cost is
+  the median filter, and the two are computed differently: the reference
+  calls a generic n-dimensional rank filter, which walks a footprint per
+  output point, while both filters here are one-dimensional and run as
+  sliding-window medians over a sorted window — one binary search and one
+  contiguous shift per step, no re-sort. The frequency filter keeps all 1292
+  windows live at once and streams the source rows in storage order, so the
+  strided axis is never transposed and every read is contiguous. The hard
+  mask is the cheapest row by a few percent: its comparison replaces four
+  powers and two divisions, but the medians beneath it are unchanged, which
+  is the shape of a cost dominated by the filter.
 - `pvoc` — `Effects.time_stretch` at rate 2.0 and 0.5 and
   `Effects.pitch_shift` up four semitones, over the same 30 s of mono audio at
   fft 2048 and hop 512, one row per dtype, mirroring the librosa rows one to

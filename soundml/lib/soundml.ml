@@ -157,4 +157,19 @@ let onset_strength = Onset.onset_strength
 
 let onset_strength_stage = Onset.stage
 
+(* Harmonic/percussive separation: flat delegations to the private [Hpss]
+   module. *)
+
+let hpss_of_spectrogram = Hpss.hpss_of_spectrogram
+
+let hpss_of_stft = Hpss.hpss_of_stft
+
+let hpss_masks = Hpss.hpss_masks
+
+let hpss = Hpss.hpss
+
+let harmonic = Hpss.harmonic
+
+let percussive = Hpss.percussive
+
 let version = "0.1.0-dev"
