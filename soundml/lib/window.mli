@@ -22,7 +22,7 @@
 (** Window functions for spectral analysis and filter design.
 
     A window is described by a {!t} specification and instantiated with
-    {!make} once a dtype and a length are chosen. Values match librosa 0.11
+    {!make} once a dtype and a length are chosen. Values match librosa 1.0
     (which delegates to the scipy signal windows) to double-precision
     rounding error; parity is enforced against committed golden vectors in
     the test suite. *)

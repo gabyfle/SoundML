@@ -21,9 +21,9 @@
 
 (** Shared test utilities: the golden-file parity harness.
 
-    Golden vectors are generated once by [test/generate_vectors.py] from
-    pinned reference versions (librosa 0.11) and committed under
-    [test/vectors/]; the tests replay them without Python. See
+    Golden vectors are generated once by [dev/generate_vectors.py] from
+    pinned reference versions (librosa 1.0) and committed under each suite's
+    [vectors/] directory; the tests replay them without Python. See
     [test/README.md]. *)
 
 module Golden : sig

@@ -293,25 +293,29 @@ let error_tests =
   [ test "the iteration parameters are checked" (fun () ->
         let c = config () in
         let s = Nx.zeros Nx.float64 [|257; 4|] in
-        raises_invalid_arg ~msg:"no iterations"
-          "griffin_lim: cannot run 0 iterations (n_iter must be at least 1)"
-          (fun () -> ignore (Stft.griffin_lim ~n_iter:0 c s) ) ;
-        raises_invalid_arg ~msg:"negative momentum"
-          "griffin_lim: cannot use a momentum of -0.1 (momentum must be \
-           non-negative)" (fun () ->
+        raises ~msg:"no iterations"
+          (Invalid_argument
+             "griffin_lim: cannot run 0 iterations (n_iter must be at least 1)"
+          ) (fun () -> ignore (Stft.griffin_lim ~n_iter:0 c s) ) ;
+        raises ~msg:"negative momentum"
+          (Invalid_argument
+             "griffin_lim: cannot use a momentum of -0.1 (momentum must be \
+              non-negative)" ) (fun () ->
             ignore (Stft.griffin_lim ~momentum:(-0.1) c s) ) ;
-        raises_invalid_arg ~msg:"mismatched initial phase"
-          "griffin_lim: cannot start from a [257; 3] phase for a [257; 4] \
-           spectrogram (the initial phase must have the shape of the \
-           magnitudes)" (fun () ->
+        raises ~msg:"mismatched initial phase"
+          (Invalid_argument
+             "griffin_lim: cannot start from a [257; 3] phase for a [257; 4] \
+              spectrogram (the initial phase must have the shape of the \
+              magnitudes)" ) (fun () ->
             ignore
               (Stft.griffin_lim
                  ~init:(`Phase (Nx.zeros Nx.float64 [|257; 3|]))
                  c s ) ) ;
-        raises_invalid_arg ~msg:"wrong bin count"
-          "griffin_lim: cannot invert 128 frequency bins of a 512-point \
-           transform (the bin axis must hold fft_size / 2 + 1 = 257 values)"
-          (fun () ->
+        raises ~msg:"wrong bin count"
+          (Invalid_argument
+             "griffin_lim: cannot invert 128 frequency bins of a 512-point \
+              transform (the bin axis must hold fft_size / 2 + 1 = 257 values)"
+          ) (fun () ->
             ignore (Stft.griffin_lim c (Nx.zeros Nx.float64 [|128; 4|])) ) ) ]
 
 let suite =

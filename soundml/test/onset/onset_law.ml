@@ -20,7 +20,7 @@ let seed = 0xfea7
 
 let source () = Pipeline.Format.audio Nx.float32 ~sample_rate:1000 ~channels:1
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* stft geometry: fft 8, bins 5 over 0..500 Hz; contrast geometry: bands [0,
    150], [150, 300], [300, 600] Hz on that grid; mel geometry: 3 bands, every
@@ -107,8 +107,7 @@ let check_law ~name ~seed empty p x lengths_last =
       let got = Nx.to_array (concat_or empty outs) in
       equal
         ~msg:(Printf.sprintf "%s/%s/n=%d" name pname lengths_last)
-        (array (float 0.))
-        expected got )
+        (array float_exact) expected got )
     (partitions rng lengths_last)
 
 let spectral_chunk frames =
@@ -264,8 +263,7 @@ let capability_tests =
         (* [@] evaluates its right operand first: sequence push before flush *)
         let pushed = Option.to_list (Pipeline.Stream.push s x) in
         let outs = pushed @ Pipeline.Stream.flush s in
-        equal ~msg:"same value, two modes"
-          (array (float 0.))
+        equal ~msg:"same value, two modes" (array float_exact)
           (Nx.to_array expected)
           (Nx.to_array (concat_or (Nx.zeros Nx.float32 [|0|]) outs)) ;
         ignore shared_offline ) ]

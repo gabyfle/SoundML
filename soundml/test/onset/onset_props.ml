@@ -9,7 +9,7 @@
 open Windtrap
 open Soundml
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let source () = Pipeline.Format.audio Nx.float64 ~sample_rate:1000 ~channels:1
 
@@ -29,51 +29,58 @@ let contrast8 ?(n_bands = 2) ?(f_min = 150.) ?quantile ?linear x =
 
 let contrast_validation_tests =
   [ test "n_bands must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero bands"
-          "spectral_contrast: cannot divide the spectrum into 0 octave bands \
-           (n_bands must be at least 1)" (fun () ->
+        raises ~msg:"zero bands"
+          (Invalid_argument
+             "spectral_contrast: cannot divide the spectrum into 0 octave \
+              bands (n_bands must be at least 1)" ) (fun () ->
             ignore
               (spectral_contrast (stft8 ()) ~n_bands:0 ~sample_rate:1000
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "f_min must be finite and positive" (fun () ->
-        raises_invalid_arg ~msg:"zero f_min"
-          "spectral_contrast: cannot start the first octave band at 0 Hz \
-           (f_min must be finite and positive)" (fun () ->
+        raises ~msg:"zero f_min"
+          (Invalid_argument
+             "spectral_contrast: cannot start the first octave band at 0 Hz \
+              (f_min must be finite and positive)" ) (fun () ->
             ignore
               (spectral_contrast (stft8 ()) ~f_min:0. ~sample_rate:1000
                  (Nx.zeros Nx.float64 [|32|]) ) ) ;
-        raises_invalid_arg ~msg:"nan f_min"
-          "spectral_contrast: cannot start the first octave band at nan Hz \
-           (f_min must be finite and positive)" (fun () ->
+        raises ~msg:"nan f_min"
+          (Invalid_argument
+             "spectral_contrast: cannot start the first octave band at nan Hz \
+              (f_min must be finite and positive)" ) (fun () ->
             ignore
               (spectral_contrast (stft8 ()) ~f_min:Float.nan ~sample_rate:1000
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "quantile must lie strictly between 0 and 1" (fun () ->
         List.iter
           (fun (name, quantile) ->
-            raises_invalid_arg ~msg:name
-              (Printf.sprintf
-                 "spectral_contrast: cannot average the %g quantile of each \
-                  band (quantile must lie strictly between 0 and 1)"
-                 quantile ) (fun () ->
+            raises ~msg:name
+              (Invalid_argument
+                 (Printf.sprintf
+                    "spectral_contrast: cannot average the %g quantile of each \
+                     band (quantile must lie strictly between 0 and 1)"
+                    quantile ) )
+              (fun () ->
                 ignore
                   (spectral_contrast (stft8 ()) ~quantile ~sample_rate:1000
                      (Nx.zeros Nx.float64 [|32|]) ) ) )
           [("zero", 0.); ("one", 1.); ("nan", Float.nan)] )
   ; test "sample_rate must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero rate"
-          "spectral_contrast: cannot use a sample rate of 0 Hz (sample_rate \
-           must be at least 1)" (fun () ->
+        raises ~msg:"zero rate"
+          (Invalid_argument
+             "spectral_contrast: cannot use a sample rate of 0 Hz (sample_rate \
+              must be at least 1)" ) (fun () ->
             ignore
               (spectral_contrast (stft8 ()) ~sample_rate:0
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "every band must start below Nyquist" (fun () ->
         (* the librosa defaults at 8000 Hz: the top band starts at 200 * 2^5 =
            6400 Hz, beyond the 4000 Hz Nyquist *)
-        raises_invalid_arg ~msg:"top band beyond Nyquist"
-          "spectral_contrast: cannot start the top octave band at 6400 Hz at a \
-           sample rate of 8000 Hz (every band must start below the Nyquist \
-           frequency 4000; lower f_min or n_bands)" (fun () ->
+        raises ~msg:"top band beyond Nyquist"
+          (Invalid_argument
+             "spectral_contrast: cannot start the top octave band at 6400 Hz \
+              at a sample rate of 8000 Hz (every band must start below the \
+              Nyquist frequency 4000; lower f_min or n_bands)" ) (fun () ->
             ignore
               (spectral_contrast
                  (Stft.Config.create ~fft_size:64 ())
@@ -82,10 +89,11 @@ let contrast_validation_tests =
   ; test "a band spanning no bin raises instead of degrading" (fun () ->
         (* fft 32 at 22050 Hz: bins are 689 Hz apart, so [200, 400] Hz holds
            none — librosa would produce NaN means there *)
-        raises_invalid_arg ~msg:"empty band"
-          "spectral_contrast: cannot resolve the octave band [200, 400] Hz \
-           with an FFT of size 32 at a sample rate of 22050 Hz (the band spans \
-           no FFT bin; raise fft_size or lower n_bands)" (fun () ->
+        raises ~msg:"empty band"
+          (Invalid_argument
+             "spectral_contrast: cannot resolve the octave band [200, 400] Hz \
+              with an FFT of size 32 at a sample rate of 22050 Hz (the band \
+              spans no FFT bin; raise fft_size or lower n_bands)" ) (fun () ->
             ignore
               (spectral_contrast
                  (Stft.Config.create ~fft_size:32 ())
@@ -94,20 +102,22 @@ let contrast_validation_tests =
   ; test "a band emptied by yielding its top bin raises too" (fun () ->
         (* fft 64 at 8000 Hz: [0, 100] Hz holds bin 0 alone, and band 0 yields
            its only bin to band 1 *)
-        raises_invalid_arg ~msg:"single-bin band 0"
-          "spectral_contrast: cannot resolve the octave band [0, 100] Hz with \
-           an FFT of size 64 at a sample rate of 8000 Hz (the band spans no \
-           FFT bin below its top edge; raise fft_size or lower n_bands)"
-          (fun () ->
+        raises ~msg:"single-bin band 0"
+          (Invalid_argument
+             "spectral_contrast: cannot resolve the octave band [0, 100] Hz \
+              with an FFT of size 64 at a sample rate of 8000 Hz (the band \
+              spans no FFT bin below its top edge; raise fft_size or lower \
+              n_bands)" ) (fun () ->
             ignore
               (spectral_contrast
                  (Stft.Config.create ~fft_size:64 ())
                  ~n_bands:4 ~f_min:100. ~sample_rate:8000
                  (Nx.zeros Nx.float64 [|128|]) ) ) )
   ; test "the audio must have a time axis" (fun () ->
-        raises_invalid_arg ~msg:"rank zero"
-          "spectral_contrast: cannot analyse a rank-zero tensor (the time axis \
-           must exist)" (fun () ->
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "spectral_contrast: cannot analyse a rank-zero tensor (the time \
+              axis must exist)" ) (fun () ->
             ignore (contrast8 (Nx.scalar Nx.float64 1.)) ) ) ]
 
 (* {2 spectral_contrast: shapes and defaults} *)
@@ -173,16 +183,18 @@ let contrast_spectrogram_tests =
              (spectral_contrast_of_spectrogram ~n_bands:2 ~f_min:150.
                 ~sample_rate:1000 s ) ) )
   ; test "the spectrogram must be spectral" (fun () ->
-        raises_invalid_arg ~msg:"rank one"
-          "spectral_contrast_of_spectrogram: cannot analyse a rank-1 tensor \
-           (spectral contrast needs [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "spectral_contrast_of_spectrogram: cannot analyse a rank-1 tensor \
+              (spectral contrast needs [...; bins; frames])" ) (fun () ->
             ignore
               (spectral_contrast_of_spectrogram ~sample_rate:1000
                  (Nx.zeros Nx.float64 [|5|]) ) ) ;
-        raises_invalid_arg ~msg:"single bin"
-          "spectral_contrast_of_spectrogram: cannot derive bin frequencies for \
-           a 1-bin spectrogram (the implied FFT size is 0; a magnitude \
-           spectrogram holds fft_size / 2 + 1 bins)" (fun () ->
+        raises ~msg:"single bin"
+          (Invalid_argument
+             "spectral_contrast_of_spectrogram: cannot derive bin frequencies \
+              for a 1-bin spectrogram (the implied FFT size is 0; a magnitude \
+              spectrogram holds fft_size / 2 + 1 bins)" ) (fun () ->
             ignore
               (spectral_contrast_of_spectrogram ~sample_rate:1000
                  (Nx.zeros Nx.float64 [|1; 4|]) ) ) )
@@ -191,10 +203,11 @@ let contrast_spectrogram_tests =
           Nx.init Nx.float64 [|5; 2|] (fun i ->
               if i.(0) = 2 && i.(1) = 1 then -3. else 1. )
         in
-        raises_invalid_arg ~msg:"negative entry"
-          "spectral_contrast_of_spectrogram: cannot analyse a spectrogram with \
-           negative or NaN values (a magnitude spectrogram is non-negative)"
-          (fun () ->
+        raises ~msg:"negative entry"
+          (Invalid_argument
+             "spectral_contrast_of_spectrogram: cannot analyse a spectrogram \
+              with negative or NaN values (a magnitude spectrogram is \
+              non-negative)" ) (fun () ->
             ignore
               (spectral_contrast_of_spectrogram ~n_bands:2 ~f_min:150.
                  ~sample_rate:1000 poisoned ) ) ) ]
@@ -207,23 +220,26 @@ let contrast_stage_tests =
           spectral_contrast_stage (stft8 ()) ~n_bands:2 ~f_min:150.
             ~sample_rate:1000 ()
         in
-        raises_invalid_arg ~msg:"rank one"
-          "spectral_contrast_stage: cannot analyse a rank-1 tensor (spectral \
-           contrast needs [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "spectral_contrast_stage: cannot analyse a rank-1 tensor \
+              (spectral contrast needs [...; bins; frames])" ) (fun () ->
             ignore
               (Pipeline.run ~source:(source ()) p (Nx.zeros Nx.float64 [|5|])) ) ;
-        raises_invalid_arg ~msg:"bins mismatch"
-          "spectral_contrast_stage: cannot band 4 frequency bins with a plan \
-           built for an FFT of size 8 (5 bins)" (fun () ->
+        raises ~msg:"bins mismatch"
+          (Invalid_argument
+             "spectral_contrast_stage: cannot band 4 frequency bins with a \
+              plan built for an FFT of size 8 (5 bins)" ) (fun () ->
             ignore
               (Pipeline.run ~source:(source ())
                  (spectral_contrast_stage (stft8 ()) ~n_bands:2 ~f_min:150.
                     ~sample_rate:1000 () )
                  (Nx.zeros Nx.float64 [|4; 3|]) ) ) )
   ; test "stage construction validates the plan" (fun () ->
-        raises_invalid_arg ~msg:"invalid quantile at build time"
-          "spectral_contrast_stage: cannot average the 1 quantile of each band \
-           (quantile must lie strictly between 0 and 1)" (fun () ->
+        raises ~msg:"invalid quantile at build time"
+          (Invalid_argument
+             "spectral_contrast_stage: cannot average the 1 quantile of each \
+              band (quantile must lie strictly between 0 and 1)" ) (fun () ->
             ignore
               ( spectral_contrast_stage (stft8 ()) ~quantile:1.
                   ~sample_rate:1000 ()
@@ -236,15 +252,17 @@ let contrast_stage_tests =
 
 let onset_validation_tests =
   [ test "lag must be at least 1, on both faces" (fun () ->
-        raises_invalid_arg ~msg:"flat zero lag"
-          "onset_strength: cannot difference frames at a lag of 0 (lag must be \
-           at least 1)" (fun () ->
+        raises ~msg:"flat zero lag"
+          (Invalid_argument
+             "onset_strength: cannot difference frames at a lag of 0 (lag must \
+              be at least 1)" ) (fun () ->
             ignore
               (onset_strength (stft8 ()) (mel8 ()) ~lag:0
                  (Nx.zeros Nx.float64 [|32|]) ) ) ;
-        raises_invalid_arg ~msg:"stage negative lag"
-          "onset_strength_stage: cannot difference frames at a lag of -1 (lag \
-           must be at least 1)" (fun () ->
+        raises ~msg:"stage negative lag"
+          (Invalid_argument
+             "onset_strength_stage: cannot difference frames at a lag of -1 \
+              (lag must be at least 1)" ) (fun () ->
             ignore
               ( onset_strength_stage ~lag:(-1) ()
                 : ( (float, Nx.float64_elt) Nx.t
@@ -252,19 +270,21 @@ let onset_validation_tests =
                   , Pipeline.offline )
                   Pipeline.t ) ) )
   ; test "the configurations must agree on fft_size" (fun () ->
-        raises_invalid_arg ~msg:"disagreeing configs"
-          "onset_strength: cannot project a 16-point STFT through a filterbank \
-           built for an FFT of size 8 (the two configurations must agree on \
-           fft_size)" (fun () ->
+        raises ~msg:"disagreeing configs"
+          (Invalid_argument
+             "onset_strength: cannot project a 16-point STFT through a \
+              filterbank built for an FFT of size 8 (the two configurations \
+              must agree on fft_size)" ) (fun () ->
             ignore
               (onset_strength
                  (Stft.Config.create ~fft_size:16 ())
                  (mel8 ())
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "the audio must have a time axis" (fun () ->
-        raises_invalid_arg ~msg:"rank zero"
-          "onset_strength: cannot analyse a rank-zero tensor (the time axis \
-           must exist)" (fun () ->
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "onset_strength: cannot analyse a rank-zero tensor (the time axis \
+              must exist)" ) (fun () ->
             ignore
               (onset_strength (stft8 ()) (mel8 ()) (Nx.scalar Nx.float64 1.)) ) )
   ]
@@ -305,7 +325,7 @@ let onset_shape_tests =
         let left = Stft.Config.create ~alignment:`Left ~fft_size:8 ~hop:2 () in
         let x = Nx.create Nx.float64 [|41|] (signal 41) in
         let envelope = Nx.to_array (onset_strength left (mel8 ()) ~lag:1 x) in
-        equal ~msg:"first frame" (float 0.) 0. envelope.(0) ;
+        equal ~msg:"first frame" float_exact 0. envelope.(0) ;
         is_true ~msg:"the second frame moved"
           (Array.exists (fun v -> v > 0.) (Array.sub envelope 1 2)) )
   ; test "a lag beyond the frame count degenerates to zeros" (fun () ->
@@ -319,15 +339,17 @@ let onset_shape_tests =
 
 let onset_stage_tests =
   [ test "chunks must be spectral" (fun () ->
-        raises_invalid_arg ~msg:"rank one"
-          "onset_strength_stage: cannot aggregate a rank-1 tensor (the onset \
-           flux needs [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "onset_strength_stage: cannot aggregate a rank-1 tensor (the \
+              onset flux needs [...; bins; frames])" ) (fun () ->
             ignore
               (Pipeline.run ~source:(source ()) (onset_strength_stage ())
                  (Nx.zeros Nx.float64 [|5|]) ) ) ;
-        raises_invalid_arg ~msg:"zero-size bins axis"
-          "onset_strength_stage: cannot aggregate a chunk with a zero-size \
-           axis (bins and channels must be at least 1)" (fun () ->
+        raises ~msg:"zero-size bins axis"
+          (Invalid_argument
+             "onset_strength_stage: cannot aggregate a chunk with a zero-size \
+              axis (bins and channels must be at least 1)" ) (fun () ->
             ignore
               (Pipeline.run ~source:(source ()) (onset_strength_stage ())
                  (Nx.zeros Nx.float64 [|0; 3|]) ) ) ) ]

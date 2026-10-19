@@ -21,7 +21,7 @@ let sample_rate = 1000
 
 let source () = Pipeline.Format.audio Nx.float32 ~sample_rate ~channels:1
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* stft geometry: fft 8, five bins over 0..500 Hz; the feature grid is the FFT
    grid those five bins imply. *)
@@ -101,8 +101,7 @@ let check_law ~name ~seed p x lengths_last =
       let got = Nx.to_array (concat_or (Nx.zeros Nx.float32 [|0; 0|]) outs) in
       equal
         ~msg:(Printf.sprintf "%s/%s/n=%d" name pname lengths_last)
-        (array (float 0.))
-        expected got )
+        (array float_exact) expected got )
     (partitions rng lengths_last)
 
 (* The four stages under test, at the shared grid. *)

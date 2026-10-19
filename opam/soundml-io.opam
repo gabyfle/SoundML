@@ -19,7 +19,7 @@ depends: [
   "conf-sndfile" {build}
   "dune-configurator" {build}
   "odoc" {with-doc}
-  "windtrap" {with-test}
+  "windtrap" {with-test & >= "0.2.0"}
   "thumper" {with-test}
   "yojson" {with-test}
 ]

@@ -328,35 +328,41 @@ let frames8 n = synthetic c8 n
 
 let contract_tests =
   [ test "prepare rejects a geometry that determines no signal" (fun () ->
-        raises_invalid_arg ~msg:"a hop wider than the frame"
-          "prepare: cannot invert a 8-point window advanced by 9 samples \
-           inside a 8-point frame (the overlap-added squared window must stay \
-           above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"a hop wider than the frame"
+          (Invalid_argument
+             "prepare: cannot invert a 8-point window advanced by 9 samples \
+              inside a 8-point frame (the overlap-added squared window must \
+              stay above 1e-10 of its largest value at every position)" )
+          (fun () ->
             Stft.Synthesis.prepare Nx.float64
               (Stft.Config.create ~fft_size:8 ~hop:9 ())
               Nx.complex128 ~channels:1 ~max_block:4 ) ;
-        raises_invalid_arg ~msg:"a periodic Hann advanced by its own length"
-          "prepare: cannot invert a 8-point window advanced by 8 samples \
-           inside a 8-point frame (the overlap-added squared window must stay \
-           above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"a periodic Hann advanced by its own length"
+          (Invalid_argument
+             "prepare: cannot invert a 8-point window advanced by 8 samples \
+              inside a 8-point frame (the overlap-added squared window must \
+              stay above 1e-10 of its largest value at every position)" )
+          (fun () ->
             Stft.Synthesis.prepare Nx.float64
               (Stft.Config.create ~fft_size:8 ~hop:8 ())
               Nx.complex128 ~channels:1 ~max_block:4 ) ;
         (* the same geometry with a window that does overlap-add is accepted *)
-        no_raise ~msg:"a rectangular window at the frame boundary" (fun () ->
-            Stft.Synthesis.prepare Nx.float64
-              (Stft.Config.create ~window:Window.Rectangular ~fft_size:8 ~hop:8
-                 () )
-              Nx.complex128 ~channels:1 ~max_block:4 ) )
+        ignore
+          (Stft.Synthesis.prepare Nx.float64
+             (Stft.Config.create ~window:Window.Rectangular ~fft_size:8 ~hop:8
+                () )
+             Nx.complex128 ~channels:1 ~max_block:4 ) )
   ; test "prepare validates its allocation parameters" (fun () ->
-        raises_invalid_arg ~msg:"channels"
-          "prepare: cannot synthesise 0 channels (channels must be at least 1)"
-          (fun () ->
+        raises ~msg:"channels"
+          (Invalid_argument
+             "prepare: cannot synthesise 0 channels (channels must be at least \
+              1)" ) (fun () ->
             Stft.Synthesis.prepare Nx.float64 c8 Nx.complex128 ~channels:0
               ~max_block:4 ) ;
-        raises_invalid_arg ~msg:"max_block"
-          "prepare: cannot accept blocks of 0 frames (max_block must be at \
-           least 1)" (fun () ->
+        raises ~msg:"max_block"
+          (Invalid_argument
+             "prepare: cannot accept blocks of 0 frames (max_block must be at \
+              least 1)" ) (fun () ->
             Stft.Synthesis.prepare Nx.float64 c8 Nx.complex128 ~channels:1
               ~max_block:0 ) )
   ; test "a drained kernel refuses frames until reset" (fun () ->
@@ -365,9 +371,10 @@ let contract_tests =
         is_some ~msg:"step emitted" (Stft.Synthesis.step k z) ;
         is_some ~msg:"flush emitted" (Stft.Synthesis.flush k) ;
         is_none ~msg:"a second flush is empty" (Stft.Synthesis.flush k) ;
-        raises_invalid_arg ~msg:"drained step refuses frames"
-          "step: cannot feed a drained kernel (flush consumed the tail; reset \
-           before reusing)" (fun () -> Stft.Synthesis.step k z ) ;
+        raises ~msg:"drained step refuses frames"
+          (Invalid_argument
+             "step: cannot feed a drained kernel (flush consumed the tail; \
+              reset before reusing)" ) (fun () -> Stft.Synthesis.step k z ) ;
         Stft.Synthesis.reset k ;
         is_some ~msg:"reset revives the kernel" (Stft.Synthesis.step k z) )
   ; test "reset replays the stream from scratch" (fun () ->
@@ -394,17 +401,20 @@ let contract_tests =
         equal ~msg:"post-reset stream" bit_array first (bits (run ())) )
   ; test "the frame shape is checked before any transform" (fun () ->
         let k = prepare8 () in
-        raises_invalid_arg ~msg:"rank below two"
-          "step: cannot invert a rank-1 tensor (the bin and frame axes must \
-           exist)" (fun () ->
+        raises ~msg:"rank below two"
+          (Invalid_argument
+             "step: cannot invert a rank-1 tensor (the bin and frame axes must \
+              exist)" ) (fun () ->
             Stft.Synthesis.step k (Nx.zeros Nx.complex128 [|5|]) ) ;
-        raises_invalid_arg ~msg:"wrong bin axis"
-          "step: cannot invert 4 frequency bins of a 8-point transform (the \
-           bin axis must hold fft_size / 2 + 1 = 5 values)" (fun () ->
+        raises ~msg:"wrong bin axis"
+          (Invalid_argument
+             "step: cannot invert 4 frequency bins of a 8-point transform (the \
+              bin axis must hold fft_size / 2 + 1 = 5 values)" ) (fun () ->
             Stft.Synthesis.step k (Nx.zeros Nx.complex128 [|4; 3|]) ) ;
-        raises_invalid_arg ~msg:"zero-size leading axis"
-          "step: cannot synthesise frames with a zero-size leading axis \
-           (channels must be at least 1)" (fun () ->
+        raises ~msg:"zero-size leading axis"
+          (Invalid_argument
+             "step: cannot synthesise frames with a zero-size leading axis \
+              (channels must be at least 1)" ) (fun () ->
             Stft.Synthesis.step k (Nx.zeros Nx.complex128 [|0; 5; 3|]) ) )
   ; test "the emitted chunks own their samples" (fun () ->
         (* [step] borrows its frames: overwriting the caller's buffer after the

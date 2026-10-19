@@ -23,7 +23,7 @@
 
     Library-internal: [Soundml] re-exports these functions flat and this
     module is not part of the public interface — the reference documentation
-    lives on the re-exports. Semantics follow librosa 0.11
+    lives on the re-exports. Semantics follow librosa 1.0
     ([librosa.feature.rms], [librosa.feature.zero_crossing_rate]); parity is
     enforced against committed golden vectors in the test suite. *)
 

@@ -10,7 +10,7 @@ on:
     types: [opened, synchronize, reopened]
 
 env:
-  DUNE_VERSION: "3.24.1"
+  DUNE_VERSION: "3.24.2"
 
 jobs:
   build:
@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install libsndfile
         run: |
@@ -40,7 +40,7 @@ jobs:
       # Holds the solved opam repository, the fetched sources and the OCaml
       # toolchain dune builds itself. Without it, every run rebuilds the compiler.
       - name: Cache the dune package management artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/dune
           key: dune-${{ matrix.os }}-${{ env.DUNE_VERSION }}-${{ hashFiles('dune-project') }}

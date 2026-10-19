@@ -10,7 +10,7 @@
 open Windtrap
 open Soundml
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let signal n = Array.init n (fun i -> Float.sin (0.4 *. Float.of_int i))
 
@@ -18,25 +18,29 @@ let signal n = Array.init n (fun i -> Float.sin (0.4 *. Float.of_int i))
 
 let validation_tests =
   [ test "frame_length must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"rms"
-          "rms: cannot analyse frames of 0 samples (frame_length must be at \
-           least 1)" (fun () ->
+        raises ~msg:"rms"
+          (Invalid_argument
+             "rms: cannot analyse frames of 0 samples (frame_length must be at \
+              least 1)" ) (fun () ->
             ignore (rms ~frame_length:0 (Nx.zeros Nx.float64 [|8|])) ) ;
-        raises_invalid_arg ~msg:"zero_crossing_rate"
-          "zero_crossing_rate: cannot analyse frames of -3 samples \
-           (frame_length must be at least 1)" (fun () ->
+        raises ~msg:"zero_crossing_rate"
+          (Invalid_argument
+             "zero_crossing_rate: cannot analyse frames of -3 samples \
+              (frame_length must be at least 1)" ) (fun () ->
             ignore
               (zero_crossing_rate ~frame_length:(-3)
                  (Nx.zeros Nx.float64 [|8|]) ) ) ;
-        raises_invalid_arg ~msg:"rms_of_spectrogram"
-          "rms_of_spectrogram: cannot analyse frames of 0 samples \
-           (frame_length must be at least 1)" (fun () ->
+        raises ~msg:"rms_of_spectrogram"
+          (Invalid_argument
+             "rms_of_spectrogram: cannot analyse frames of 0 samples \
+              (frame_length must be at least 1)" ) (fun () ->
             ignore
               (rms_of_spectrogram ~frame_length:0
                  (Nx.zeros Nx.float64 [|1; 2|]) ) ) ;
-        raises_invalid_arg ~msg:"rms_stage"
-          "rms_stage: cannot analyse frames of 0 samples (frame_length must be \
-           at least 1)" (fun () ->
+        raises ~msg:"rms_stage"
+          (Invalid_argument
+             "rms_stage: cannot analyse frames of 0 samples (frame_length must \
+              be at least 1)" ) (fun () ->
             ignore
               ( rms_stage ~frame_length:0 ()
                 : ( (float, Nx.float64_elt) Nx.t
@@ -44,12 +48,14 @@ let validation_tests =
                   , Pipeline.causal )
                   Pipeline.t ) ) )
   ; test "hop must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"rms"
-          "rms: cannot advance frames by 0 samples (hop must be at least 1)"
-          (fun () -> ignore (rms ~hop:0 (Nx.zeros Nx.float64 [|8|])) ) ;
-        raises_invalid_arg ~msg:"zero_crossing_rate_stage"
-          "zero_crossing_rate_stage: cannot advance frames by -1 samples (hop \
-           must be at least 1)" (fun () ->
+        raises ~msg:"rms"
+          (Invalid_argument
+             "rms: cannot advance frames by 0 samples (hop must be at least 1)"
+          ) (fun () -> ignore (rms ~hop:0 (Nx.zeros Nx.float64 [|8|])) ) ;
+        raises ~msg:"zero_crossing_rate_stage"
+          (Invalid_argument
+             "zero_crossing_rate_stage: cannot advance frames by -1 samples \
+              (hop must be at least 1)" ) (fun () ->
             ignore
               ( zero_crossing_rate_stage ~hop:(-1) ()
                 : ( (float, Nx.float64_elt) Nx.t
@@ -57,34 +63,40 @@ let validation_tests =
                   , Pipeline.causal )
                   Pipeline.t ) ) )
   ; test "threshold must be finite and non-negative" (fun () ->
-        raises_invalid_arg ~msg:"negative"
-          "zero_crossing_rate: cannot clamp signs with a threshold of -1 \
-           (threshold must be finite and non-negative)" (fun () ->
+        raises ~msg:"negative"
+          (Invalid_argument
+             "zero_crossing_rate: cannot clamp signs with a threshold of -1 \
+              (threshold must be finite and non-negative)" ) (fun () ->
             ignore
               (zero_crossing_rate ~threshold:(-1.) (Nx.zeros Nx.float64 [|8|])) ) ;
-        raises_invalid_arg ~msg:"nan"
-          "zero_crossing_rate: cannot clamp signs with a threshold of nan \
-           (threshold must be finite and non-negative)" (fun () ->
+        raises ~msg:"nan"
+          (Invalid_argument
+             "zero_crossing_rate: cannot clamp signs with a threshold of nan \
+              (threshold must be finite and non-negative)" ) (fun () ->
             ignore
               (zero_crossing_rate ~threshold:Float.nan
                  (Nx.zeros Nx.float64 [|8|]) ) ) )
   ; test "rank-zero tensors are rejected" (fun () ->
-        raises_invalid_arg ~msg:"rms"
-          "rms: cannot analyse a rank-zero tensor (the time axis must exist)"
-          (fun () -> ignore (rms (Nx.zeros Nx.float64 [||])) ) ;
-        raises_invalid_arg ~msg:"zero_crossing_rate"
-          "zero_crossing_rate: cannot analyse a rank-zero tensor (the time \
-           axis must exist)" (fun () ->
+        raises ~msg:"rms"
+          (Invalid_argument
+             "rms: cannot analyse a rank-zero tensor (the time axis must exist)"
+          ) (fun () -> ignore (rms (Nx.zeros Nx.float64 [||])) ) ;
+        raises ~msg:"zero_crossing_rate"
+          (Invalid_argument
+             "zero_crossing_rate: cannot analyse a rank-zero tensor (the time \
+              axis must exist)" ) (fun () ->
             ignore (zero_crossing_rate (Nx.zeros Nx.float64 [||])) ) )
   ; test "the spectrogram path validates rank and bins" (fun () ->
-        raises_invalid_arg ~msg:"rank one"
-          "rms_of_spectrogram: cannot analyse a rank-1 tensor (the spectrogram \
-           path needs [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "rms_of_spectrogram: cannot analyse a rank-1 tensor (the \
+              spectrogram path needs [...; bins; frames])" ) (fun () ->
             ignore (rms_of_spectrogram (Nx.zeros Nx.float64 [|9|])) ) ;
-        raises_invalid_arg ~msg:"bins mismatch"
-          "rms_of_spectrogram: cannot read 8 frequency bins as frames of 16 \
-           samples (a magnitude spectrogram holds frame_length / 2 + 1 bins)"
-          (fun () ->
+        raises ~msg:"bins mismatch"
+          (Invalid_argument
+             "rms_of_spectrogram: cannot read 8 frequency bins as frames of 16 \
+              samples (a magnitude spectrogram holds frame_length / 2 + 1 \
+              bins)" ) (fun () ->
             ignore
               (rms_of_spectrogram ~frame_length:16
                  (Nx.zeros Nx.float64 [|8; 4|]) ) ) ) ]

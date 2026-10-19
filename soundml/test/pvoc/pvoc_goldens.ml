@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11 for the phase vocoder, replayed from the
+(* Golden parity against librosa 1.0 for the phase vocoder, replayed from the
    committed vectors under the suite's vectors/ directory. Inputs are the
    generator's 31-bit LCG stream, reproduced here with the same integer
    arithmetic, so the float64 signals are bit-identical; float32 cases quantize
@@ -34,13 +34,17 @@ let vectors_dir = "vectors"
    pointwise map: a difference in the analysis spectrum — which is all an FFT
    implementation can differ by — re-enters the phase of every later output
    frame, and the amplification from the analysis gap to the output reaches
-   2.9e4x through this grid. The worst deviation actually observed against
-   librosa over the committed cases is 8e-14 absolute, 4.3e-14 of the case's
-   peak, on the longest expanding cell; this tolerance clears it by more than a
-   hundred times. It is looser than the 1e-12 the synthesis suite uses for
-   exactly that reason — that suite's map is pointwise, this one's is a
-   recurrence — and the two are consistent: the shortest cells here, where the
-   recurrence has no room to run, land at 1e-16. *)
+   2.9e4x through this grid. librosa 1.0 also sums the raw phase differences
+   where this implementation adds the expected advance and the principal value
+   of the deviation: the same phase modulo 2 pi, rounded differently, and that
+   rounding re-enters the recurrence as well. The worst deviation actually
+   observed against librosa over the committed cases is 8.3e-13 absolute,
+   4.5e-13 of the case's peak, on the expanding fft256/hop64 cell at rate 0.5;
+   this tolerance clears it by more than ten times. It is looser than the 1e-12
+   the synthesis suite uses for exactly that reason — that suite's map is
+   pointwise, this one's is a recurrence — and the two are consistent: the cells
+   where the recurrence has the least room to run, two analysis frames at
+   fft2048/hop512, land below 1e-15. *)
 let float64_atol = 1e-11
 
 (* The pitch tolerance, as a fraction of the case's peak. The stretch stages of
@@ -50,7 +54,7 @@ let float64_atol = 1e-11
    to 0.913 of the lower Nyquist), and they may differ arbitrarily in the
    transition band above that passband — which is where a full-band LCG signal
    puts a fifth of its energy. Measured on these vectors, the substitution moves
-   the result by at most 2.7e-2 of peak, against the 6.5e-3 to 9.0e-3 librosa
+   the result by at most 2.7e-2 of peak, against the 6.7e-3 to 8.5e-3 librosa
    moves them itself by switching its own soxr from its default HQ tier to VHQ:
    the substitution is of the order of the reference's own choice of tier, three
    times it at worst. It is not spread evenly over the output — the two
@@ -58,7 +62,7 @@ let float64_atol = 1e-11
    samples carry that worst figure, against 6.8e-3 between the ends of the
    signal and 7.7e-3 in the final sample. On material with a spectrum that rolls
    off — two seconds of the swept sine the locking suite analyses — the same
-   three figures are 4.2e-3, 8.1e-4 and 5.1e-2, against 3.3e-4 to 6.3e-4 for
+   three figures are 4.2e-3, 8.1e-4 and 5.0e-2, against 3.3e-4 to 6.3e-4 for
    that tier switch. *)
 let pitch_fraction = 4e-2
 

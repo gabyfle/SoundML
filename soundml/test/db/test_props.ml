@@ -146,7 +146,7 @@ let scales =
 
 (* {1 The frame grid} *)
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let grid_inverse (type b) (dtype : (float, b) Nx.dtype) ~sample_rate ~hop () =
   (* [hop / sample_rate] is exactly representable on these grids, so the floor
@@ -187,7 +187,7 @@ let grid =
 
 let rejects_invalid_parameters () =
   let raises msg message thunk =
-    raises_invalid_arg ~msg message (fun () -> ignore (thunk ()))
+    raises ~msg (Invalid_argument message) (fun () -> ignore (thunk ()))
   in
   let power = Nx.ones Nx.float32 [|1|] in
   raises "zero amin"

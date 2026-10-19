@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11 for the least-squares synthesis, replayed
+(* Golden parity against librosa 1.0 for the least-squares synthesis, replayed
    from the committed vectors under the suite's vectors/ directory. The spectra
    are two 31-bit LCG streams — one per complex component — reproduced here with
    the same integer arithmetic as the generator, so the float64 inputs are

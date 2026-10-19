@@ -61,8 +61,7 @@ let suite =
               | l ->
                   Nx.concatenate ~axis:(-1) l
             in
-            equal ~msg:"same value, two modes"
-              (array (float 0.))
+            equal ~msg:"same value, two modes" (array float_exact)
               (Nx.to_array expected) (Nx.to_array streamed) ;
             (* the projected decibel values are finite and shaped by the mel
                grid: 3 bands per emitted frame *)

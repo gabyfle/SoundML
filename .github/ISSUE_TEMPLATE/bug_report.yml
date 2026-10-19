@@ -68,7 +68,7 @@ body:
       description: "Please provide details about the environment where you encountered the bug."
       placeholder: |
         - SoundML Version: 0.0.1 (or commit hash)
-        - OCaml Version: 5.5.0
+        - OCaml Version: 5.5.1
         - Operating System: Ubuntu 22.04
   - type: textarea
     id: additional-context

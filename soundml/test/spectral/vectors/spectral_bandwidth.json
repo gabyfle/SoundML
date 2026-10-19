@@ -1,7 +1,7 @@
 {
 "schema": 1,
 "suite": "features_spectral",
-"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"generator": {"python": "3.15.0", "numpy": "2.5.4", "scipy": "1.18.1", "librosa": "1.0.0"},
 "cases": [
   {"name": "s9x12_p2_float64", "params": {"function": "spectral_bandwidth", "source": "spectrogram", "shape_s": [9, 12], "dtype": "float64", "p": 2.0, "sample_rate": 22050, "freqs": "fft", "squared": false}, "shape": [1, 12], "values": [3118.5837376856966, 3366.8269283845825, 3529.258689158599, 3696.9327010525844, 3452.5026680337996, 3282.4072119484454, 3458.705068664753, 3409.3827059930863, 3695.163968018614, 3306.0454596157124, 2858.9698878237064, 3682.8627400561986]},
   {"name": "s9x12_p2_float32", "params": {"function": "spectral_bandwidth", "source": "spectrogram", "shape_s": [9, 12], "dtype": "float32", "p": 2.0, "sample_rate": 22050, "freqs": "fft", "squared": false}, "shape": [1, 12], "values": [3118.583761632333, 3366.8269437792837, 3529.2586911647873, 3696.9327153655045, 3452.502677173361, 3282.407212322955, 3458.7050581563967, 3409.382690420186, 3695.1639605548626, 3306.045472664562, 2858.969897874347, 3682.8627523866376]},

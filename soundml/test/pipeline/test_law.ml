@@ -16,9 +16,9 @@ let seed = 0x5eed
 let source ?(sample_rate = 1000) ?(channels = 1) () =
   Pipeline.Format.audio Nx.float32 ~sample_rate ~channels
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 (* {1 Partitionings} *)
 

@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: librosa.feature.rms over audio and over
+(* Golden parity against librosa 1.0: librosa.feature.rms over audio and over
    magnitude spectrograms (the S= path), and librosa.feature.zero_crossing_rate,
    replayed from the committed vectors under the suite's vectors/ directory. The
    test input is the stft suite's 31-bit LCG under this suite's seed, reproduced

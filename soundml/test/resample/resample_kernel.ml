@@ -119,7 +119,7 @@ let latency_tests =
         is_true ~msg:"interior at unit gain" (Float.abs (y.(200) -. 1.) < 1e-6) )
   ; test "latency is exact in both domains" (fun () ->
         let rate_t =
-          testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+          Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
         in
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
         equal ~msg:"input domain" int 95 (Resample.Config.latency cfg) ;
@@ -289,9 +289,10 @@ let dtype_tests =
           y64 )
   ; test "half floats are refused with a clear message" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
-        raises_invalid_arg ~msg:"prepare f16"
-          "prepare: cannot resample float16 audio (the executor carries \
-           float32 and float64)" (fun () ->
+        raises ~msg:"prepare f16"
+          (Invalid_argument
+             "prepare: cannot resample float16 audio (the executor carries \
+              float32 and float64)" ) (fun () ->
             ignore
               (Resample.Kernel.prepare cfg Nx.float16 ~channels:1 ~max_block:8) ) )
   ]
@@ -301,14 +302,16 @@ let dtype_tests =
 let error_tests =
   [ test "prepare validates channels and max_block" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
-        raises_invalid_arg ~msg:"channels"
-          "prepare: cannot resample 0 channels (channels must be at least 1)"
-          (fun () ->
+        raises ~msg:"channels"
+          (Invalid_argument
+             "prepare: cannot resample 0 channels (channels must be at least 1)"
+          ) (fun () ->
             ignore
               (Resample.Kernel.prepare cfg Nx.float64 ~channels:0 ~max_block:8) ) ;
-        raises_invalid_arg ~msg:"max_block"
-          "prepare: cannot accept blocks of 0 samples (max_block must be at \
-           least 1)" (fun () ->
+        raises ~msg:"max_block"
+          (Invalid_argument
+             "prepare: cannot accept blocks of 0 samples (max_block must be at \
+              least 1)" ) (fun () ->
             ignore
               (Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:0) ) )
   ; test "step validates the chunk against the prepared state" (fun () ->
@@ -316,16 +319,19 @@ let error_tests =
         let k =
           Resample.Kernel.prepare cfg Nx.float64 ~channels:1 ~max_block:16
         in
-        raises_invalid_arg ~msg:"over-long chunk"
-          "step: cannot feed a 17-sample chunk (max_block is 16)" (fun () ->
-            ignore (Resample.Kernel.step k (signal Nx.float64 17)) ) ;
-        raises_invalid_arg ~msg:"channel mismatch"
-          "step: cannot feed 2-channel chunks (the kernel was prepared for 1 \
-           channel)" (fun () ->
+        raises ~msg:"over-long chunk"
+          (Invalid_argument
+             "step: cannot feed a 17-sample chunk (max_block is 16)" )
+          (fun () -> ignore (Resample.Kernel.step k (signal Nx.float64 17)) ) ;
+        raises ~msg:"channel mismatch"
+          (Invalid_argument
+             "step: cannot feed 2-channel chunks (the kernel was prepared for \
+              1 channel)" ) (fun () ->
             ignore (Resample.Kernel.step k (Nx.zeros Nx.float64 [|2; 8|])) ) ;
-        raises_invalid_arg ~msg:"rank zero"
-          "step: cannot resample a rank-zero tensor (the time axis must exist)"
-          (fun () ->
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "step: cannot resample a rank-zero tensor (the time axis must \
+              exist)" ) (fun () ->
             ignore (Resample.Kernel.step k (Nx.zeros Nx.float64 [||])) ) )
   ; test "draining consumes the tail; reset restores the initial state"
       (fun () ->
@@ -342,9 +348,11 @@ let error_tests =
         is_true ~msg:"emitted" (Option.is_some stepped && Option.is_some drained) ;
         is_true ~msg:"second flush is None"
           (Option.is_none (Resample.Kernel.flush k)) ;
-        raises_invalid_arg ~msg:"drained step refuses samples"
-          "step: cannot feed a drained kernel (flush consumed the tail; reset \
-           before reusing)" (fun () -> ignore (Resample.Kernel.step k x) ) ;
+        raises ~msg:"drained step refuses samples"
+          (Invalid_argument
+             "step: cannot feed a drained kernel (flush consumed the tail; \
+              reset before reusing)" ) (fun () ->
+            ignore (Resample.Kernel.step k x) ) ;
         Resample.Kernel.reset k ;
         (* the reset kernel replays the same signal to the same bits: the
            history really is zeroed, not merely rewound *)
@@ -358,18 +366,21 @@ let error_tests =
             fail "reset kernel emitted a different chunk pattern" )
   ; test "apply rejects rank zero" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
-        raises_invalid_arg ~msg:"rank zero"
-          "apply: cannot resample a rank-zero tensor (the time axis must exist)"
-          (fun () -> ignore (Resample.apply cfg (Nx.zeros Nx.float64 [||])) ) )
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "apply: cannot resample a rank-zero tensor (the time axis must \
+              exist)" ) (fun () ->
+            ignore (Resample.apply cfg (Nx.zeros Nx.float64 [||])) ) )
   ; test "the stage rejects a mismatched source rate at prepare" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
         let p = Resample.stage cfg in
         let src =
           Pipeline.Format.audio Nx.float64 ~sample_rate:22050 ~channels:1
         in
-        raises_invalid_arg ~msg:"format mismatch"
-          "prepare: cannot resample a stream at 22050 items/s (the \
-           configuration converts from 44100 Hz)" (fun () ->
+        raises ~msg:"format mismatch"
+          (Invalid_argument
+             "prepare: cannot resample a stream at 22050 items/s (the \
+              configuration converts from 44100 Hz)" ) (fun () ->
             ignore (Pipeline.Stream.prepare p ~source:src ~max_chunk:64) ) ) ]
 
 let suite =

@@ -140,10 +140,11 @@ let io_benchmarks () =
   @ io_resample_benchmarks ()
 
 let () =
-  Nx.Rng.with_key (Nx.Rng.key 42)
+  exit
+  @@ Nx.Rng.with_key (Nx.Rng.key 42)
   @@ fun () ->
   Thumper.run "soundml_io"
     ~budgets:
-      [ Thumper.Budget.no_slower_than ~metric:Thumper.Metric.wall_time 0.05
+      [ Thumper.Budget.no_slower_than 0.05
       ; Thumper.Budget.no_more_alloc_than 0.01 ]
     [Thumper.group "io" (io_benchmarks ())]

@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: the chroma filterbank
+(* Golden parity against librosa 1.0: the chroma filterbank
    (librosa.filters.chroma), the constant-Q assignment matrix
    (librosa.filters.cq_to_chroma), and both chromagrams
    (librosa.feature.chroma_stft and librosa.feature.chroma_cqt), replayed from

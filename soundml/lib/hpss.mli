@@ -45,7 +45,7 @@
 
     {2 Parity}
 
-    Semantics follow librosa 0.11 ([librosa.decompose.hpss],
+    Semantics follow librosa 1.0 ([librosa.decompose.hpss],
     [librosa.util.softmask] and the [librosa.effects] signal-domain
     wrappers), whose median filter is [scipy.ndimage.median_filter] under
     [mode="reflect"]; parity is enforced against committed golden vectors in

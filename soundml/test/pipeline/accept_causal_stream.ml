@@ -37,11 +37,12 @@ let suite =
             let s = p_stream () in
             let pushed = Option.to_list (Pipeline.Stream.push s x) in
             let y_stream = Array.concat (pushed @ Pipeline.Stream.flush s) in
-            equal ~msg:"same value, two modes" (array (float 0.)) y_run y_stream ;
+            equal ~msg:"same value, two modes" (array float_exact) y_run
+              y_stream ;
             let s = q_stream () in
             let pushed = Option.to_list (Pipeline.Stream.push s x) in
             let z_stream = Array.concat (pushed @ Pipeline.Stream.flush s) in
             let z_run = Pipeline.run ~source:(source ()) q x in
-            equal ~msg:"prepare before run" (array (float 0.)) z_run z_stream ;
+            equal ~msg:"prepare before run" (array float_exact) z_run z_stream ;
             ignore p_offline ;
             ignore q_offline ) ] ]

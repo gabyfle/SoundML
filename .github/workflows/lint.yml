@@ -8,7 +8,7 @@ on:
     types: [opened, synchronize, reopened]
 
 env:
-  DUNE_VERSION: "3.24.1"
+  DUNE_VERSION: "3.24.2"
 
 jobs:
   lint-fmt:
@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install libsndfile
         run: |
@@ -31,7 +31,7 @@ jobs:
         shell: bash
 
       - name: Cache the dune package management artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/dune
           key: dune-lint-ubuntu-latest-${{ env.DUNE_VERSION }}-${{ hashFiles('dune-project', '.ocamlformat') }}

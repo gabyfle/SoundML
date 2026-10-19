@@ -200,12 +200,12 @@ def cqt_benchmarks() -> List[Tuple[str, Callable[[], Any]]]:
     benches: List[Tuple[str, Callable[[], Any]]] = []
     for tag, y in (("f32", y32), ("f64", y64)):
         benches.append(
-            bench(f"cqt/cqt 30s {tag} 84/12 hop{HOP} (librosa)",
+            bench(f"cqt/cqt 30s {tag} 84-12 hop{HOP} (librosa)",
                   transform(y, 84, 12, 0))
         )
     for tag, y in (("f32", y32), ("f64", y64)):
         benches.append(
-            bench(f"cqt/vqt 30s {tag} 84/12 gamma-erb hop{HOP} (librosa)",
+            bench(f"cqt/vqt 30s {tag} 84-12 gamma-erb hop{HOP} (librosa)",
                   transform(y, 84, 12, None))
         )
     for tag, y in (("f32", y32), ("f64", y64)):

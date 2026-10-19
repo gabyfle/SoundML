@@ -9,7 +9,7 @@ open Soundml
 
 let seed = 0x5eed
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let log_uniform rng low high n =
   Array.init n (fun _ ->

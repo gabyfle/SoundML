@@ -8,7 +8,7 @@
 open Windtrap
 open Soundml
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let mel_config ?f_min ?f_max ?scale ?norm ?(n_mels = 8) ?(sample_rate = 8000)
     ?(fft_size = 64) () =
@@ -18,42 +18,52 @@ let mel_config ?f_min ?f_max ?scale ?norm ?(n_mels = 8) ?(sample_rate = 8000)
 
 let validation_tests =
   [ test "n_mels must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero bands"
-          "create: cannot build 0 mel bands (n_mels must be at least 1)"
+        raises ~msg:"zero bands"
+          (Invalid_argument
+             "create: cannot build 0 mel bands (n_mels must be at least 1)" )
           (fun () -> ignore (mel_config ~n_mels:0 ()) ) )
   ; test "sample_rate must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero rate"
-          "create: cannot use a sample rate of 0 Hz (sample_rate must be at \
-           least 1)" (fun () -> ignore (mel_config ~sample_rate:0 ()) ) )
+        raises ~msg:"zero rate"
+          (Invalid_argument
+             "create: cannot use a sample rate of 0 Hz (sample_rate must be at \
+              least 1)" ) (fun () -> ignore (mel_config ~sample_rate:0 ()) ) )
   ; test "fft_size must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero fft"
-          "create: cannot use an FFT of size 0 (fft_size must be at least 1)"
-          (fun () -> ignore (mel_config ~fft_size:0 ()) ) )
+        raises ~msg:"zero fft"
+          (Invalid_argument
+             "create: cannot use an FFT of size 0 (fft_size must be at least 1)"
+          ) (fun () -> ignore (mel_config ~fft_size:0 ()) ) )
   ; test "f_min must be finite and non-negative" (fun () ->
-        raises_invalid_arg ~msg:"negative f_min"
-          "create: cannot start the filterbank at -1 Hz (f_min must be finite \
-           and non-negative)" (fun () -> ignore (mel_config ~f_min:(-1.) ()) ) ;
-        raises_invalid_arg ~msg:"nan f_min"
-          "create: cannot start the filterbank at nan Hz (f_min must be finite \
-           and non-negative)" (fun () ->
+        raises ~msg:"negative f_min"
+          (Invalid_argument
+             "create: cannot start the filterbank at -1 Hz (f_min must be \
+              finite and non-negative)" ) (fun () ->
+            ignore (mel_config ~f_min:(-1.) ()) ) ;
+        raises ~msg:"nan f_min"
+          (Invalid_argument
+             "create: cannot start the filterbank at nan Hz (f_min must be \
+              finite and non-negative)" ) (fun () ->
             ignore (mel_config ~f_min:Float.nan ()) ) )
   ; test "f_max must exceed f_min" (fun () ->
-        raises_invalid_arg ~msg:"inverted bounds"
-          "create: cannot span [2000, 1000] Hz (f_max must be finite and \
-           greater than f_min)" (fun () ->
+        raises ~msg:"inverted bounds"
+          (Invalid_argument
+             "create: cannot span [2000, 1000] Hz (f_max must be finite and \
+              greater than f_min)" ) (fun () ->
             ignore (mel_config ~f_min:2000. ~f_max:1000. ()) ) )
   ; test "f_max must not exceed Nyquist" (fun () ->
-        raises_invalid_arg ~msg:"beyond Nyquist"
-          "create: cannot extend the filterbank to 4001 Hz at a sample rate of \
-           8000 Hz (f_max must not exceed the Nyquist frequency 4000)"
+        raises ~msg:"beyond Nyquist"
+          (Invalid_argument
+             "create: cannot extend the filterbank to 4001 Hz at a sample rate \
+              of 8000 Hz (f_max must not exceed the Nyquist frequency 4000)" )
           (fun () -> ignore (mel_config ~f_max:4001. ()) ) )
   ; test "empty filters raise instead of warning" (fun () ->
         (* 64 bands over 17 bins: most filters span no bin — librosa emits a
            warning and returns zero rows, this configuration is rejected *)
-        raises_invalid_arg ~msg:"unsupported resolution"
-          "create: cannot support 64 mel bands with an FFT of size 32 (at \
-           least one filter spans no FFT bin; raise fft_size or lower n_mels)"
-          (fun () -> ignore (mel_config ~n_mels:64 ~fft_size:32 ()) ) ) ]
+        raises ~msg:"unsupported resolution"
+          (Invalid_argument
+             "create: cannot support 64 mel bands with an FFT of size 32 (at \
+              least one filter spans no FFT bin; raise fft_size or lower \
+              n_mels)" ) (fun () ->
+            ignore (mel_config ~n_mels:64 ~fft_size:32 ()) ) ) ]
 
 (* {2 Accessors, pp, equal} *)
 
@@ -67,14 +77,14 @@ let accessor_tests =
         equal ~msg:"sample_rate" int 8000 (Mel.Config.sample_rate c) ;
         equal ~msg:"fft_size" int 128 (Mel.Config.fft_size c) ;
         equal ~msg:"bins" int 65 (Mel.Config.bins c) ;
-        equal ~msg:"f_min" (float 0.) 100. (Mel.Config.f_min c) ;
-        equal ~msg:"f_max" (float 0.) 3500. (Mel.Config.f_max c) ;
+        equal ~msg:"f_min" float_exact 100. (Mel.Config.f_min c) ;
+        equal ~msg:"f_max" float_exact 3500. (Mel.Config.f_max c) ;
         is_true ~msg:"scale" (Mel.Config.scale c = `Htk) ;
         is_true ~msg:"norm" (Mel.Config.norm c = `None) )
   ; test "defaults are 0 Hz to Nyquist on the Slaney scale" (fun () ->
         let c = mel_config () in
-        equal ~msg:"f_min" (float 0.) 0. (Mel.Config.f_min c) ;
-        equal ~msg:"f_max is Nyquist" (float 0.) 4000. (Mel.Config.f_max c) ;
+        equal ~msg:"f_min" float_exact 0. (Mel.Config.f_min c) ;
+        equal ~msg:"f_max is Nyquist" float_exact 4000. (Mel.Config.f_max c) ;
         is_true ~msg:"scale" (Mel.Config.scale c = `Slaney) ;
         is_true ~msg:"norm" (Mel.Config.norm c = `Slaney) )
   ; test "pp prints the compact single-line form" (fun () ->
@@ -162,13 +172,15 @@ let apply_tests =
           (Nx.shape (Mel.apply c (Nx.zeros Nx.float64 [|0; bins; 4|]))) )
   ; test "rank and bins preconditions" (fun () ->
         let c = mel_config () in
-        raises_invalid_arg ~msg:"rank one"
-          "apply: cannot project a rank-1 tensor (the mel projection needs \
-           [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "apply: cannot project a rank-1 tensor (the mel projection needs \
+              [...; bins; frames])" ) (fun () ->
             ignore (Mel.apply c (Nx.zeros Nx.float64 [|33|])) ) ;
-        raises_invalid_arg ~msg:"bins mismatch"
-          "apply: cannot project 32 frequency bins through a filterbank built \
-           for an FFT of size 64 (33 bins)" (fun () ->
+        raises ~msg:"bins mismatch"
+          (Invalid_argument
+             "apply: cannot project 32 frequency bins through a filterbank \
+              built for an FFT of size 64 (33 bins)" ) (fun () ->
             ignore (Mel.apply c (Nx.zeros Nx.float64 [|32; 4|])) ) ) ]
 
 (* {2 The flat features} *)
@@ -193,32 +205,36 @@ let feature_tests =
                 (Stft.power_spectrum ~power:1. stft_config x) ) )
           (Nx.to_array (mel_spectrogram stft_config mel_config ~power:1. x)) )
   ; test "mel_spectrogram names both fft sizes on mismatch" (fun () ->
-        raises_invalid_arg ~msg:"disagreeing configs"
-          "mel_spectrogram: cannot project a 16-point STFT through a \
-           filterbank built for an FFT of size 8 (the two configurations must \
-           agree on fft_size)" (fun () ->
+        raises ~msg:"disagreeing configs"
+          (Invalid_argument
+             "mel_spectrogram: cannot project a 16-point STFT through a \
+              filterbank built for an FFT of size 8 (the two configurations \
+              must agree on fft_size)" ) (fun () ->
             ignore
               (mel_spectrogram
                  (Stft.Config.create ~fft_size:16 ())
                  (mel8 ())
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "mfcc validates n_mfcc against n_mels" (fun () ->
-        raises_invalid_arg ~msg:"too many coefficients"
-          "mfcc: cannot keep 4 cepstral coefficients of 3 mel bands (n_mfcc \
-           must lie in [1, n_mels])" (fun () ->
+        raises ~msg:"too many coefficients"
+          (Invalid_argument
+             "mfcc: cannot keep 4 cepstral coefficients of 3 mel bands (n_mfcc \
+              must lie in [1, n_mels])" ) (fun () ->
             ignore
               (mfcc (stft8 ()) (mel8 ()) ~n_mfcc:4
                  (Nx.zeros Nx.float64 [|32|]) ) ) ;
-        raises_invalid_arg ~msg:"zero coefficients"
-          "mfcc: cannot keep 0 cepstral coefficients of 3 mel bands (n_mfcc \
-           must lie in [1, n_mels])" (fun () ->
+        raises ~msg:"zero coefficients"
+          (Invalid_argument
+             "mfcc: cannot keep 0 cepstral coefficients of 3 mel bands (n_mfcc \
+              must lie in [1, n_mels])" ) (fun () ->
             ignore
               (mfcc (stft8 ()) (mel8 ()) ~n_mfcc:0
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
   ; test "mfcc validates the lifter domain" (fun () ->
-        raises_invalid_arg ~msg:"negative lifter"
-          "mfcc: cannot lifter with a coefficient of -1 (lifter must be finite \
-           and non-negative)" (fun () ->
+        raises ~msg:"negative lifter"
+          (Invalid_argument
+             "mfcc: cannot lifter with a coefficient of -1 (lifter must be \
+              finite and non-negative)" ) (fun () ->
             ignore
               (mfcc (stft8 ()) (mel8 ()) ~n_mfcc:3 ~lifter:(-1.)
                  (Nx.zeros Nx.float64 [|32|]) ) ) )

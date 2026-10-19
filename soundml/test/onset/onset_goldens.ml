@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: spectral_contrast over magnitude
+(* Golden parity against librosa 1.0: spectral_contrast over magnitude
    spectrograms (librosa.feature.spectral_contrast) and onset_strength
    end-to-end on its default log-power-mel chain (librosa.onset.onset_strength),
    replayed from the committed vectors under the suite's vectors/ directory. The

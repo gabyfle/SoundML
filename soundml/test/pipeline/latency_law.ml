@@ -24,9 +24,9 @@ open Soundml
 let source ?(sample_rate = 1000) ?(channels = 1) () =
   Pipeline.Format.audio Nx.float32 ~sample_rate ~channels
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 let r num den = {Pipeline.Rate.num; den}
 
@@ -345,8 +345,9 @@ let law_tests =
 
 let validation_tests =
   [ test "a negative output latency is rejected" (fun () ->
-        raises_invalid_arg ~msg:"negative output_latency"
-          "Soundml.Pipeline.kernel: output_latency must be non-negative"
+        raises ~msg:"negative output_latency"
+          (Invalid_argument
+             "Soundml.Pipeline.kernel: output_latency must be non-negative" )
           (fun () ->
             ignore
               (Pipeline.kernel ~output_latency:(-1) ~concat:Array.concat

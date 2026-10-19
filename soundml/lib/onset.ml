@@ -173,7 +173,8 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
     Nx.zeros dtype (collapsed_shape mel m)
   else begin
     (* The log-power mel: power_to_db with its defaults — reference 1, floor
-       1e-10 and the 80 dB whole-tensor clamp — in double precision. *)
+       1e-10 and the 80 dB clamp under each channel's maximum — in double
+       precision. *)
     let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
     (* The flat flux is the kernel on one chunk. *)
     let z = state_step fn (state_create lag) db in

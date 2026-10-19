@@ -27,7 +27,7 @@
     product, and {!stage} is the same projection as a memoryless {!Pipeline}
     stage consuming {!Stft.power_stage} output.
 
-    The weights follow librosa 0.11 ([librosa.filters.mel]): [n_mels]
+    The weights follow librosa 1.0 ([librosa.filters.mel]): [n_mels]
     triangular filters with breakpoints equally spaced on the mel scale
     between [f_min] and [f_max], on the Slaney or HTK variant of the scale
     ({!Convert.hz_to_mel}), optionally area-normalised. Parity is enforced

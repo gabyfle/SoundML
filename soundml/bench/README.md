@@ -327,10 +327,10 @@ SoXR's only appearance in the repository.
 dune build @bench
 ```
 
-runs the suite under `--quick` against the committed baseline and diffs the
-proposed `soundml.thumper.corrected` (promote it with `dune promote` when a
-confirmed improvement ratchets the baseline). For a full-precision run and the
-report only:
+runs the suite under `--quick` against the committed baseline. The check never
+writes the baseline: when a confirmed improvement should ratchet it, run the
+`bless` command that the report's `accept:` line names. For a full-precision
+run and the report only:
 
 ```bash
 dune exec soundml/bench/bench_soundml.exe
@@ -339,7 +339,7 @@ dune exec soundml/bench/bench_soundml.exe
 ### Librosa (Python)
 
 ```bash
-uv run --python 3.12 --with 'numpy<2.3' --with 'librosa==0.11.0' \
+uv run --python 3.15 --with 'numpy==2.5.4' --with 'librosa==1.0.0' \
   python soundml/bench/bench_soundml.py
 ```
 
@@ -347,24 +347,24 @@ Add `--with torch --with torchaudio` for the torchaudio resample rows; they
 are skipped (with a note) when torch is not installed.
 
 (or plain `python soundml/bench/bench_soundml.py` in any environment with `numpy` and
-`librosa` — the versions CI installs are in `.github/workflows/test.yml`;
-librosa's numba dependency needs Python <= 3.12 and numpy < 2.3). The
-window-generation rows are the seed; STFT and mel rows land together with
-their OCaml counterparts.
+`librosa` — the pins above are the oracle versions `dev/generate_vectors.py`
+records; CI never runs Python). The window-generation rows are the seed; STFT
+and mel rows land together with their OCaml counterparts.
 
 ## The baseline
 
 `soundml.thumper` stores measurement evidence keyed by machine
 (`host:` in the file header): verdicts only ever compare runs from the same
 machine, so the committed section is specific to the maintainer machine that
-recorded it. On any other machine the suite reports NEW rows (exit code 0)
-and proposes a section for that machine as `soundml.thumper.corrected`.
+recorded it. On any other machine the suite reports `proposed` rows (exit
+code 0) and an `accept:` line naming the `bless` command that records a section
+for that machine.
 
-To re-record the baseline for your machine:
+To re-record the baseline for your machine, which rewrites this machine's
+section of `soundml.thumper` in place:
 
 ```bash
 dune exec soundml/bench/bench_soundml.exe -- bless
-mv soundml/bench/soundml.thumper.corrected soundml/bench/soundml.thumper
 ```
 
 (`bless` refuses to record on a loaded host; close the noisy neighbours or

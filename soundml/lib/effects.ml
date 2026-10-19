@@ -40,6 +40,15 @@
 
    Y[k, i] = mag_i[k] (cos phi_i[k] + j sin phi_i[k])
 
+   over the [M] analysis frames but the last; over the final interval, [i0 = M -
+   1], the magnitudes extrapolate the line through the last two frames and the
+   accumulator holds, as librosa 1.0 does by clamping the next frame to the last
+   one:
+
+   mag_i[k] = (1 + a) |X[k, M - 1]| - a |X[k, M - 2]| phi_{i+1} = phi_i
+
+   and a single analysis frame is held as it is.
+
    with [pv x = x - 2 pi round (x / 2 pi)] the principal value, ties to even.
    [w_k H + D_i] is the heterodyned phase increment of Flanagan & Golden (1966)
    and Portnoff (1976): the deviation of the measured inter-frame phase advance
@@ -182,49 +191,74 @@ let lock (phi : doubles) po (ang : doubles) ao bins peaks n =
   done
 
 (* [propagate] is one signal's traversal: [mag] and [ang] hold its magnitudes
-   and arguments over [frames + 2] rows of [bins] (the two extra rows are zero,
-   so the last output frames read silence past the signal), and [amp] and [phi]
-   receive the interpolated magnitudes and the accumulated phases over [count]
-   rows. The accumulator starts at the argument of the first analysis frame. *)
-let propagate ~locked ~bins ~rate ~count ~omega ~(mag : doubles) ~mb
+   and arguments over [frames] rows of [bins], and [amp] and [phi] receive the
+   interpolated magnitudes and the accumulated phases over [count] rows. The
+   accumulator starts at the argument of the first analysis frame. Over the
+   final interval, from the last analysis frame on, the magnitudes extrapolate
+   the line through the last two frames and the accumulator holds; a single
+   frame is held as it is. *)
+let propagate ~locked ~bins ~frames ~rate ~count ~omega ~(mag : doubles) ~mb
     ~(ang : doubles) ~ab ~(amp : doubles) ~qb ~(phi : doubles) ~pb =
   let peaks = if locked then Array.make bins 0 else [||] in
+  let last = frames - 1 in
   for k = 0 to bins - 1 do
     Bigarray.Array1.unsafe_set phi (pb + k)
       (Bigarray.Array1.unsafe_get ang (ab + k))
   done ;
   for i = 0 to count - 1 do
     let position = Float.of_int i *. rate in
-    let i0 = Float.to_int position in
+    let i0 = Int.min (Float.to_int position) last in
     let alpha = position -. Float.of_int i0 in
     let m0 = mb + (i0 * bins) in
-    let m1 = m0 + bins in
     let a0 = ab + (i0 * bins) in
-    let a1 = a0 + bins in
     let po = pb + (i * bins) in
     let qo = qb + (i * bins) in
-    for k = 0 to bins - 1 do
-      Bigarray.Array1.unsafe_set amp (qo + k)
-        ( ((1. -. alpha) *. Bigarray.Array1.unsafe_get mag (m0 + k))
-        +. (alpha *. Bigarray.Array1.unsafe_get mag (m1 + k)) )
-    done ;
+    if i0 < last then begin
+      let m1 = m0 + bins in
+      for k = 0 to bins - 1 do
+        Bigarray.Array1.unsafe_set amp (qo + k)
+          ( ((1. -. alpha) *. Bigarray.Array1.unsafe_get mag (m0 + k))
+          +. (alpha *. Bigarray.Array1.unsafe_get mag (m1 + k)) )
+      done
+    end
+    else if last > 0 then begin
+      let mp = m0 - bins in
+      for k = 0 to bins - 1 do
+        Bigarray.Array1.unsafe_set amp (qo + k)
+          ( ((1. +. alpha) *. Bigarray.Array1.unsafe_get mag (m0 + k))
+          -. (alpha *. Bigarray.Array1.unsafe_get mag (mp + k)) )
+      done
+    end
+    else
+      for k = 0 to bins - 1 do
+        Bigarray.Array1.unsafe_set amp (qo + k)
+          (Bigarray.Array1.unsafe_get mag (m0 + k))
+      done ;
     if locked then begin
       let n = peaks_of mag m0 bins peaks in
       if n > 0 then lock phi po ang a0 bins peaks n
     end ;
     if i + 1 < count then begin
       let pn = po + bins in
-      for k = 0 to bins - 1 do
-        let deviation =
-          principal
-            ( Bigarray.Array1.unsafe_get ang (a1 + k)
-            -. Bigarray.Array1.unsafe_get ang (a0 + k)
-            -. Array.unsafe_get omega k )
-        in
-        Bigarray.Array1.unsafe_set phi (pn + k)
-          ( Bigarray.Array1.unsafe_get phi (po + k)
-          +. (Array.unsafe_get omega k +. deviation) )
-      done
+      if i0 < last then begin
+        let a1 = a0 + bins in
+        for k = 0 to bins - 1 do
+          let deviation =
+            principal
+              ( Bigarray.Array1.unsafe_get ang (a1 + k)
+              -. Bigarray.Array1.unsafe_get ang (a0 + k)
+              -. Array.unsafe_get omega k )
+          in
+          Bigarray.Array1.unsafe_set phi (pn + k)
+            ( Bigarray.Array1.unsafe_get phi (po + k)
+            +. (Array.unsafe_get omega k +. deviation) )
+        done
+      end
+      else
+        for k = 0 to bins - 1 do
+          Bigarray.Array1.unsafe_set phi (pn + k)
+            (Bigarray.Array1.unsafe_get phi (po + k))
+        done
     end
   done
 
@@ -242,10 +276,8 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
     Nx.swapaxes (-1) (-2) (Nx.zeros Nx.complex128 out)
   else begin
     let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
-    let widths = Array.make rank (0, 0) in
-    widths.(rank - 2) <- (0, 2) ;
-    let magnitudes = Nx.pad widths 0. (Nx.magnitude Nx.float64 framed) in
-    let arguments = Nx.pad widths 0. (Nx.angle Nx.float64 framed) in
+    let magnitudes = Nx.magnitude Nx.float64 framed in
+    let arguments = Nx.angle Nx.float64 framed in
     let amplitudes = Nx.zeros Nx.float64 [|signals; count; bins|] in
     let phases = Nx.zeros Nx.float64 [|signals; count; bins|] in
     let mag, mb = flat magnitudes in
@@ -253,10 +285,10 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
     let amp, ampb = flat amplitudes in
     let phi, phib = flat phases in
     let omega = advance c in
-    let span = (frames + 2) * bins in
+    let span = frames * bins in
     let stride = count * bins in
     for s = 0 to signals - 1 do
-      propagate ~locked ~bins ~rate ~count ~omega ~mag
+      propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
         ~mb:(mb + (s * span))
         ~ang
         ~ab:(ab + (s * span))

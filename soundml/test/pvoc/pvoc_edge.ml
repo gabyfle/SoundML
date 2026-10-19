@@ -65,6 +65,22 @@ let length_tests =
             (Nx.zeros Nx.complex128 [|Stft.Config.bins c; 0|])
         in
         equal ~msg:"shape" (array int) [|Stft.Config.bins c; 0|] (Nx.shape y) )
+  ; test "a single frame is held over every output frame" (fun () ->
+        let c = config () in
+        let bins = Stft.Config.bins c in
+        let part f = Nx.create Nx.float64 [|bins; 1|] (Array.init bins f) in
+        let frame =
+          Nx.complex Nx.complex128
+            ~re:(part (fun k -> Float.cos (Float.of_int k)))
+            ~im:(part (fun k -> Float.sin (Float.of_int (k * k))))
+        in
+        let y = Effects.phase_vocoder c ~rate:0.25 frame in
+        equal ~msg:"shape" (array int) [|bins; 4|] (Nx.shape y) ;
+        let held = Nx.concatenate ~axis:1 [frame; frame; frame; frame] in
+        let gap =
+          Nx.item [] (Nx.max (Nx.magnitude Nx.float64 (Nx.sub y held)))
+        in
+        is_true ~msg:(Printf.sprintf "%.3e from the frame" gap) (gap <= 1e-15) )
   ; test "the vocoded frame count is the analysis count over the rate"
       (fun () ->
         let c = config () in
@@ -128,7 +144,7 @@ let identity_tests =
         let c = config ~fft_size:2048 ~hop:512 () in
         let shifted = Effects.pitch_shift c ~ratio:Pipeline.Rate.identity x in
         let stretched = Effects.time_stretch c ~rate:1.0 x in
-        equal ~msg:"the identity conversion changes nothing" (float 0.) 0.
+        equal ~msg:"the identity conversion changes nothing" float_exact 0.
           (deviation shifted stretched) ) ]
 
 (* {2 Batching} *)
@@ -144,7 +160,7 @@ let batch_tests =
             let alone = Effects.time_stretch c ~rate:1.37 row in
             equal
               ~msg:(Printf.sprintf "row %d" i)
-              (float 0.) 0.
+              float_exact 0.
               (deviation
                  ( Nx.shrink [|(i, i + 1); (0, Nx.dim 1 stretched)|] stretched
                  |> Nx.reshape [|Nx.dim 1 stretched|] )
@@ -275,78 +291,91 @@ let validation_tests =
   [ test "the rate must be finite and positive" (fun () ->
         let c = config () in
         let x = Nx.zeros Nx.float64 [|64|] in
-        raises_invalid_arg ~msg:"zero rate"
-          "time_stretch: cannot stretch by a rate of 0 (the rate must be \
-           finite and positive)" (fun () ->
+        raises ~msg:"zero rate"
+          (Invalid_argument
+             "time_stretch: cannot stretch by a rate of 0 (the rate must be \
+              finite and positive)" ) (fun () ->
             ignore (Effects.time_stretch c ~rate:0. x) ) ;
-        raises_invalid_arg ~msg:"negative rate"
-          "time_stretch: cannot stretch by a rate of -1 (the rate must be \
-           finite and positive)" (fun () ->
+        raises ~msg:"negative rate"
+          (Invalid_argument
+             "time_stretch: cannot stretch by a rate of -1 (the rate must be \
+              finite and positive)" ) (fun () ->
             ignore (Effects.time_stretch c ~rate:(-1.) x) ) ;
-        raises_invalid_arg ~msg:"infinite rate"
-          "phase_vocoder: cannot stretch by a rate of inf (the rate must be \
-           finite and positive)" (fun () ->
+        raises ~msg:"infinite rate"
+          (Invalid_argument
+             "phase_vocoder: cannot stretch by a rate of inf (the rate must be \
+              finite and positive)" ) (fun () ->
             ignore
               (Effects.phase_vocoder c ~rate:Float.infinity
                  (Nx.zeros Nx.complex128 [|Stft.Config.bins c; 3|]) ) ) ;
-        raises_invalid_arg ~msg:"nan rate"
-          "phase_vocoder: cannot stretch by a rate of nan (the rate must be \
-           finite and positive)" (fun () ->
+        raises ~msg:"nan rate"
+          (Invalid_argument
+             "phase_vocoder: cannot stretch by a rate of nan (the rate must be \
+              finite and positive)" ) (fun () ->
             ignore
               (Effects.phase_vocoder c ~rate:Float.nan
                  (Nx.zeros Nx.complex128 [|Stft.Config.bins c; 3|]) ) ) )
   ; test "the spectrum must have a bin axis of the configured height" (fun () ->
         let c = config () in
-        raises_invalid_arg ~msg:"rank one"
-          "phase_vocoder: cannot vocode a rank-1 tensor (the bin and frame \
-           axes must exist)" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "phase_vocoder: cannot vocode a rank-1 tensor (the bin and frame \
+              axes must exist)" ) (fun () ->
             ignore
               (Effects.phase_vocoder c ~rate:1.37
                  (Nx.zeros Nx.complex128 [|4|]) ) ) ;
-        raises_invalid_arg ~msg:"wrong bin count"
-          "phase_vocoder: cannot vocode 64 frequency bins of a 256-point \
-           transform (the bin axis must hold fft_size / 2 + 1 = 129 values)"
-          (fun () ->
+        raises ~msg:"wrong bin count"
+          (Invalid_argument
+             "phase_vocoder: cannot vocode 64 frequency bins of a 256-point \
+              transform (the bin axis must hold fft_size / 2 + 1 = 129 values)"
+          ) (fun () ->
             ignore
               (Effects.phase_vocoder c ~rate:1.37
                  (Nx.zeros Nx.complex128 [|64; 3|]) ) ) )
   ; test "signals must have a time axis" (fun () ->
         let c = config () in
-        raises_invalid_arg ~msg:"rank zero"
-          "time_stretch: cannot process a rank-zero tensor (the time axis must \
-           exist)" (fun () ->
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "time_stretch: cannot process a rank-zero tensor (the time axis \
+              must exist)" ) (fun () ->
             ignore
               (Effects.time_stretch c ~rate:1.37 (Nx.zeros Nx.float64 [||])) ) ;
-        raises_invalid_arg ~msg:"rank zero"
-          "pitch_shift: cannot process a rank-zero tensor (the time axis must \
-           exist)" (fun () ->
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "pitch_shift: cannot process a rank-zero tensor (the time axis \
+              must exist)" ) (fun () ->
             ignore
               (Effects.pitch_shift c ~ratio:(Effects.semitones 4.)
                  (Nx.zeros Nx.float64 [||]) ) ) )
   ; test "both terms of the ratio must be positive" (fun () ->
         let c = config () in
         let x = Nx.zeros Nx.float64 [|64|] in
-        raises_invalid_arg ~msg:"zero numerator"
-          "pitch_shift: cannot shift by a frequency ratio of 0/1 (both terms \
-           must be at least 1)" (fun () ->
+        raises ~msg:"zero numerator"
+          (Invalid_argument
+             "pitch_shift: cannot shift by a frequency ratio of 0/1 (both \
+              terms must be at least 1)" ) (fun () ->
             ignore
               (Effects.pitch_shift c ~ratio:{Pipeline.Rate.num= 0; den= 1} x) ) ;
-        raises_invalid_arg ~msg:"negative denominator"
-          "pitch_shift: cannot shift by a frequency ratio of 3/-2 (both terms \
-           must be at least 1)" (fun () ->
+        raises ~msg:"negative denominator"
+          (Invalid_argument
+             "pitch_shift: cannot shift by a frequency ratio of 3/-2 (both \
+              terms must be at least 1)" ) (fun () ->
             ignore
               (Effects.pitch_shift c ~ratio:{Pipeline.Rate.num= 3; den= -2} x) ) )
   ; test "semitones validates its arguments" (fun () ->
-        raises_invalid_arg ~msg:"zero resolution"
-          "semitones: cannot divide the octave into 0 steps (bins_per_octave \
-           must be at least 1)" (fun () ->
+        raises ~msg:"zero resolution"
+          (Invalid_argument
+             "semitones: cannot divide the octave into 0 steps \
+              (bins_per_octave must be at least 1)" ) (fun () ->
             ignore (Effects.semitones ~bins_per_octave:0 4.) ) ;
-        raises_invalid_arg ~msg:"nan steps"
-          "semitones: cannot shift by nan steps (the step count must be finite)"
-          (fun () -> ignore (Effects.semitones Float.nan) ) ;
-        raises_invalid_arg ~msg:"past the cap"
-          "semitones: cannot represent a frequency ratio of 8192 within 512 \
-           (the step count is too far from unity)" (fun () ->
+        raises ~msg:"nan steps"
+          (Invalid_argument
+             "semitones: cannot shift by nan steps (the step count must be \
+              finite)" ) (fun () -> ignore (Effects.semitones Float.nan) ) ;
+        raises ~msg:"past the cap"
+          (Invalid_argument
+             "semitones: cannot represent a frequency ratio of 8192 within 512 \
+              (the step count is too far from unity)" ) (fun () ->
             ignore (Effects.semitones 156.) ) )
   ; test "a configuration that cannot be inverted is rejected" (fun () ->
         (* A periodic Hann advanced by its own length overlap-adds to zero at
@@ -354,10 +383,12 @@ let validation_tests =
         let c =
           Stft.Config.create ~fft_size:64 ~hop:64 ~pad:(`Constant 0.) ()
         in
-        raises_invalid_arg ~msg:"no overlap"
-          "invert: cannot invert a 64-point window advanced by 64 samples \
-           inside a 64-point frame (the overlap-added squared window must stay \
-           above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"no overlap"
+          (Invalid_argument
+             "invert: cannot invert a 64-point window advanced by 64 samples \
+              inside a 64-point frame (the overlap-added squared window must \
+              stay above 1e-10 of its largest value at every position)" )
+          (fun () ->
             ignore
               (Effects.time_stretch c ~rate:1.37 (Nx.zeros Nx.float64 [|512|])) ) )
   ]

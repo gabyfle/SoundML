@@ -34,7 +34,6 @@ let suite =
             let pushed = Option.to_list (Pipeline.Stream.push s x) in
             let outs = pushed @ Pipeline.Stream.flush s in
             let y_stream = Nx.concatenate ~axis:0 outs in
-            equal ~msg:"same value, two modes"
-              (array (float 0.))
+            equal ~msg:"same value, two modes" (array float_exact)
               (Nx.to_array y_run) (Nx.to_array y_stream) ;
             ignore p_offline ) ] ]

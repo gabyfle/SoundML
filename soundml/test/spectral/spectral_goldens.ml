@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: spectral_centroid, spectral_bandwidth,
+(* Golden parity against librosa 1.0: spectral_centroid, spectral_bandwidth,
    spectral_rolloff and spectral_flatness, replayed from the committed vectors
    under the suite's vectors/ directory. Direct-spectrogram cases rebuild the
    magnitude tensor bit-exactly — the stft suite's 31-bit LCG under this suite's

@@ -39,9 +39,14 @@ let to_db ~gain ~magnitude ~reference ~amin ~top_db s =
     match top_db with
     | None ->
         db
-    | Some range ->
+    | Some range when Nx.ndim db <= 2 ->
         let maximum = Nx.item [] (Nx.max db) in
         Nx.maximum db (Nx.scalar dtype (maximum -. range))
+    | Some range ->
+        (* one threshold per channel, under the maximum over the last two
+           axes *)
+        let maximum = Nx.max ~axes:[-2; -1] ~keepdims:true db in
+        Nx.maximum db (Nx.sub_s maximum range)
 
 let power_to_db ?(reference = 1.) ?(amin = 1e-10) ?top_db s =
   check_reference "power_to_db" reference ;

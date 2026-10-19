@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: filterbank weights (librosa.filters.mel),
+(* Golden parity against librosa 1.0: filterbank weights (librosa.filters.mel),
    mel spectrograms (librosa.feature.melspectrogram) and MFCCs
    (librosa.feature.mfcc), replayed from the committed vectors under the suite's
    vectors/ directory. The test signal is the stft suite's 31-bit LCG under this

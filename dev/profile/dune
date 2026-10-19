@@ -1,19 +1,24 @@
 (executable
  (name profile_resample)
+ (modules profile_resample)
  (libraries soundml nx unix))
 
 (executable
  (name bitdump)
+ (modules bitdump)
  (libraries soundml nx))
 
 (executable
  (name profile_fft)
+ (modules profile_fft)
  (libraries nx unix))
 
 (executable
  (name profile_io)
+ (modules profile_io)
  (libraries soundml_io nx nx.buffer unix))
 
 (executable
  (name gate_io)
+ (modules gate_io)
  (libraries soundml soundml_io io_bench_corpus nx unix))
