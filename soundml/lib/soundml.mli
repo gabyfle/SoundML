@@ -14,7 +14,7 @@
     Sample rates are explicit [~sample_rate] arguments on the functions whose
     result depends on one; rate-agnostic functions do not take it.
 
-    Numerical defaults follow librosa 0.11; every deviation is a named
+    Numerical defaults follow librosa 1.0; every deviation is a named
     option. Preconditions raise [Invalid_argument]; no [result] values in
     numeric paths.
 
@@ -112,8 +112,9 @@ val mfcc :
     of the log-mel spectrogram, keeping the first [n_mfcc] coefficients.
     [n_mfcc] defaults to [20]. The log-mel spectrogram is
     {!Convert.power_to_db} of [mel_spectrogram stft mel x] with reference
-    [1.], floor [1e-10], and the 80 dB dynamic-range clamp under the global
-    maximum.
+    [1.], floor [1e-10], and the 80 dB dynamic-range clamp under each
+    channel's maximum over mel bands and frames — the global maximum of a
+    single clip.
 
     The DCT is orthonormal: the raw type-II transform scaled by
     [1 / sqrt (4 * n_mels)] on coefficient zero and [1 / sqrt (2 * n_mels)]
@@ -469,8 +470,9 @@ val spectral_contrast :
     [n_bands] defaults to [6], [f_min] to [200.] Hz and [quantile] to
     [0.02]. [linear] defaults to [false]: the contrast is
     [power_to_db peak - power_to_db valley] with reference [1.], floor
-    [1e-10] and the 80 dB dynamic-range clamp under each tensor's {e global}
-    maximum, a whole-signal reduction.
+    [1e-10] and the 80 dB dynamic-range clamp under each channel's maximum
+    over bands and frames — the global maximum of a single clip — a
+    whole-signal reduction.
     [~linear:true] is the plain difference [peak - valley] instead. The
     interior runs in double precision and rounds to the dtype of [x] once,
     at the boundary.
@@ -541,7 +543,8 @@ val onset_strength :
     axis mean of [max 0 (D[f, t] - D[f, t - lag])] over the log-power mel
     spectrogram [D], which is [mel_spectrogram stft mel x] through
     [Convert.power_to_db] with reference [1.], floor [1e-10] and the 80 dB
-    dynamic-range clamp under the global maximum, a whole-signal
+    dynamic-range clamp under each channel's maximum over mel bands and
+    frames — the global maximum of a single clip — a whole-signal
     reduction. The time axis is the last axis of [x]; leading
     axes broadcast, so a batch of clips is one call.
 

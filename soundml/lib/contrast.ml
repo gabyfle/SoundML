@@ -42,9 +42,9 @@ type plan =
   ; linear: bool
   ; clamped: bool
         (* The flat function applies [power_to_db] with its defaults — including
-           the 80 dB whole-tensor clamp — on the log path; the per-frame stage
-           cannot (the clamp is a whole-signal reduction) and leaves it out,
-           documented. *)
+           the 80 dB clamp under each channel's maximum — on the log path; the
+           per-frame stage cannot (the clamp is a whole-signal reduction) and
+           leaves it out, documented. *)
   ; bands: band list }
 
 (* [rint x] is [x] rounded to the nearest integer, ties to even — the rounding

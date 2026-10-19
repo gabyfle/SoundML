@@ -350,6 +350,11 @@ module Config = struct
     for i = 0 to n_octaves - 1 do
       let first = Stdlib.max 0 (n_bins - (n_filters * (i + 1))) in
       let count = n_bins - (n_filters * i) - first in
+      (* the highest centre of the next octave down, which sits just below this
+         octave's lowest bin *)
+      let next_top =
+        if i < n_octaves - 1 then Some freqs.(first - 1) else None
+      in
       let freqs = sub_array freqs first count
       and alphas = sub_array alphas first count
       and gammas = sub_array gammas first count in
@@ -379,11 +384,17 @@ module Config = struct
       plan :=
         {count; first; n_fft; hop= !octave_hop; halvings= !halved; stft; kernel}
         :: !plan ;
-      if !octave_hop mod 2 = 0 then begin
-        octave_hop := !octave_hop / 2 ;
-        rate := !rate /. 2. ;
-        incr halved
-      end
+      (* Halving needs an even hop, and a next octave whose top centre sits at
+         most a fifth of the current rate: the decimator's rolloff starts near
+         80% of the halved Nyquist frequency, and the next octave's filters must
+         stay below it. The last octave has no next one to feed. *)
+      match next_top with
+      | Some top when !octave_hop mod 2 = 0 && top <= !rate /. 5. ->
+          octave_hop := !octave_hop / 2 ;
+          rate := !rate /. 2. ;
+          incr halved
+      | _ ->
+          ()
     done ;
     let octaves = Array.of_list (List.rev !plan) in
     let divisors =
@@ -593,15 +604,20 @@ let decimate (c : Config.t) y = Resample.apply_gemm c.Config.half y
    rescaled so that a band common to both rates keeps its magnitude. *)
 let halve (c : Config.t) y = Nx.div_s (decimate c y) (Float.sqrt 0.5)
 
-(* [resamples c] is [true] iff the plan decimates anywhere: an odd hop stops the
-   recursion from halving after its first octave, and a configuration whose
-   filters already fill the band needs no early stage either. *)
-let resamples (c : Config.t) =
+(* [halves c i] is [true] iff the plan decimates between octave [i] and the next
+   one: an odd hop stops the halving, and so does a next octave whose filters
+   would reach the decimator's rolloff. *)
+let halves (c : Config.t) i =
   let octaves = c.Config.octaves in
+  i + 1 < Array.length octaves
+  && octaves.(i + 1).Config.halvings > octaves.(i).Config.halvings
+
+(* [resamples c] is [true] iff the plan decimates anywhere: between octaves, or
+   in the early stage, which a configuration whose filters already fill the band
+   does not need. *)
+let resamples (c : Config.t) =
   c.Config.early > 0
-  || Array.exists
-       (fun (o : Config.octave) -> o.Config.hop mod 2 = 0)
-       (Array.sub octaves 0 (Array.length octaves - 1))
+  || List.exists (halves c) (List.init (Array.length c.Config.octaves) Fun.id)
 
 let slice_last t start stop =
   let nd = Nx.ndim t in
@@ -647,7 +663,7 @@ let transform : type c a.
       let o = c.Config.octaves.(i) in
       let d = Stft.transform Nx.complex128 o.Config.stft !y in
       parts := shrink_last (Nx.matmul o.Config.kernel d) count :: !parts ;
-      if i < last && o.Config.hop mod 2 = 0 then y := halve c !y
+      if halves c i then y := halve c !y
     done ;
     (* Stacking from the lowest octave up rebuilds the ladder in ascending
        order, and a partial bottom octave contributes only the bins it
@@ -697,9 +713,10 @@ let power_spectrum ?(power = 2.) c x =
    The composition, stage by stage: the input passes the [early] cascaded 2:1
    resamplers and the [2^(early/2)] rescaling to become the stream [u_0]; octave
    [i] analyses [u_i] through its rectangular STFT and projects each frame
-   through [kernel_i]; and, while [hop_i] is even, [u_i] passes one more 2:1
-   resampler and the [sqrt (1/2)] rescaling to become [u_(i+1)] — an odd hop
-   leaves [u_(i+1) = u_i].
+   through [kernel_i]; and, where the plan halves after octave [i], [u_i] passes
+   one more 2:1 resampler and the [sqrt (1/2)] rescaling to become [u_(i+1)] —
+   elsewhere, an odd hop or a next octave too close to the decimator's rolloff,
+   [u_(i+1) = u_i].
 
    Column [p] leaves once every octave has produced its frame [p]: with [H_i *
    D_i = hop] at every plan shape, frame [p] of every octave is the same instant
@@ -751,7 +768,7 @@ module Kernel = struct
     ; stft: ('a, Nx.complex64_elt) Stft.Kernel.t
     ; halver: 'a Resample.Kernel.t option
           (** the 2:1 stage feeding the next octave, absent at the last octave
-              and wherever an odd hop stops the recursion from halving *)
+              and wherever the plan does not halve *)
     ; columns: (Complex.t, Nx.complex64_elt) Nx.t Queue.t
           (** projected columns not yet released by the gate, oldest first *)
     ; mutable produced: int }
@@ -798,12 +815,11 @@ module Kernel = struct
         :: !stages ;
       block := consumer_block !block
     done ;
-    let last = Array.length c.Config.octaves - 1 in
     let states = ref [] in
     Array.iteri
       (fun i (o : Config.octave) ->
         let halver =
-          if i < last && o.Config.hop mod 2 = 0 then
+          if halves c i then
             Some
               (Resample.Kernel.prepare c.Config.half dtype ~channels
                  ~max_block:!block )
@@ -868,7 +884,7 @@ module Kernel = struct
         | None ->
             () )
       | None ->
-          (* an odd hop stops the halving: the next octave analyses the same
+          (* the plan does not halve here: the next octave analyses the same
              stream at the same rate *)
           if i < Array.length t.octaves - 1 then feed_octave t (i + 1) u
     end

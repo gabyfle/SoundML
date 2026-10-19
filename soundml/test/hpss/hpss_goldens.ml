@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: harmonic/percussive separation, replayed
+(* Golden parity against librosa 1.0: harmonic/percussive separation, replayed
    from the committed vectors under the suite's vectors/ directory.
 
    The spectrogram-domain files (hpss, hpss_masks, hpss_boundary) rebuild their

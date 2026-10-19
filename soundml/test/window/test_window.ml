@@ -63,7 +63,7 @@ let spec_of_params name params =
 let golden_files =
   Tutils.Golden.load_dir ~filter:(fun name -> name <> "cola.json") vectors_dir
 
-(* {2 Parity against librosa 0.11 golden vectors} *)
+(* {2 Parity against librosa 1.0 golden vectors} *)
 
 let parity_case dtype ~rtol ~atol (case : Tutils.Golden.case) =
   test case.name (fun () ->
@@ -131,44 +131,30 @@ let edge_lengths () =
   let values window ~periodic n =
     Nx.to_array (Window.make Nx.float64 ~periodic window n)
   in
-  equal ~msg:"periodic hann, n = 1"
-    (array (float 0.))
-    [|1.|]
+  equal ~msg:"periodic hann, n = 1" (array float_exact) [|1.|]
     (values Window.Hann ~periodic:true 1) ;
-  equal ~msg:"symmetric hann, n = 1"
-    (array (float 0.))
-    [|1.|]
+  equal ~msg:"symmetric hann, n = 1" (array float_exact) [|1.|]
     (values Window.Hann ~periodic:false 1) ;
-  equal ~msg:"periodic kaiser, n = 1"
-    (array (float 0.))
-    [|1.|]
+  equal ~msg:"periodic kaiser, n = 1" (array float_exact) [|1.|]
     (values (Window.Kaiser 8.6) ~periodic:true 1) ;
-  equal ~msg:"periodic hann, n = 2"
-    (array (float 0.))
-    [|0.; 1.|]
+  equal ~msg:"periodic hann, n = 2" (array float_exact) [|0.; 1.|]
     (values Window.Hann ~periodic:true 2) ;
-  equal ~msg:"symmetric hann, n = 2"
-    (array (float 0.))
-    [|0.; 0.|]
+  equal ~msg:"symmetric hann, n = 2" (array float_exact) [|0.; 0.|]
     (values Window.Hann ~periodic:false 2) ;
-  equal ~msg:"symmetric hann, n = 3"
-    (array (float 0.))
-    [|0.; 1.; 0.|]
+  equal ~msg:"symmetric hann, n = 3" (array float_exact) [|0.; 1.; 0.|]
     (values Window.Hann ~periodic:false 3) ;
   equal ~msg:"periodic hann, n = 3"
     (array (float 1e-15))
     [|0.; 0.75; 0.75|]
     (values Window.Hann ~periodic:true 3) ;
-  equal ~msg:"rectangular, n = 3"
-    (array (float 0.))
-    [|1.; 1.; 1.|]
+  equal ~msg:"rectangular, n = 3" (array float_exact) [|1.; 1.; 1.|]
     (values Window.Rectangular ~periodic:true 3)
 
 (* {2 Precondition violations} *)
 
 let errors () =
   let check msg message thunk =
-    raises_invalid_arg ~msg message (fun () -> ignore (thunk ()))
+    raises ~msg (Invalid_argument message) (fun () -> ignore (thunk ()))
   in
   check "make, n = 0"
     "make: cannot make a 0-point window (length must be at least 1)" (fun () ->
@@ -232,4 +218,4 @@ let suite =
       ; test "error messages" errors
       ; test "pp and equal" spec_operations ] ]
 
-let () = run "Soundml.Window" suite
+let () = exit (run "Soundml.Window" suite)

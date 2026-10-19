@@ -204,7 +204,7 @@ val of_cqt :
     [n_chroma] does not divide [Cqt.Config.bins_per_octave c], or if [norm] is
     [`P p] with [p] not finite and positive. *)
 
-(** {1:parity Parity with librosa 0.11}
+(** {1:parity Parity with librosa 1.0}
 
     The filterbanks match [librosa.filters.chroma] and
     [librosa.filters.cq_to_chroma] to double-precision rounding, and the

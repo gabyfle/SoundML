@@ -1,7 +1,7 @@
 {
 "schema": 1,
 "suite": "features_energy",
-"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"generator": {"python": "3.15.0", "numpy": "2.5.4", "scipy": "1.18.1", "librosa": "1.0.0"},
 "cases": [
   {"name": "defaults_float64", "params": {"frame_length": 2048, "hop": 512, "length": 3000, "channels": 1, "dtype": "float64"}, "shape": [1, 6], "values": [0.4127942515281044, 0.5021588079640378, 0.5809284734774676, 0.5790589854118605, 0.5661685095976501, 0.48865366768173235]},
   {"name": "defaults_float32", "params": {"frame_length": 2048, "hop": 512, "length": 3000, "channels": 1, "dtype": "float32"}, "shape": [1, 6], "values": [0.41279425156344934, 0.5021588079634727, 0.5809284734667327, 0.5790589853811695, 0.566168509450291, 0.4886536675414366]},

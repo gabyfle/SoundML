@@ -11,7 +11,7 @@
  ; Serialize bench rules across the workspace: concurrent suites contend
  ; for cores and distort measurements.
  (locks %{project_root}/bench)
+ (deps
+  (glob_files *.thumper))
  (action
-  (progn
-   (run %{exe:bench_soundml.exe} --quick)
-   (diff? soundml.thumper soundml.thumper.corrected))))
+  (run %{exe:bench_soundml.exe} --quick)))

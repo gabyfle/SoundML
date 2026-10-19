@@ -27,7 +27,7 @@ let seed = 0xe4e6
 
 let source () = Pipeline.Format.audio Nx.float32 ~sample_rate:1000 ~channels:1
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* {2 Partitionings (the seeded pattern of the pipeline law tests)} *)
 
@@ -105,8 +105,7 @@ let law_case name mk_stage =
               in
               equal
                 ~msg:(Printf.sprintf "%s/%s/n=%d" name pname n)
-                (array (float 0.))
-                expected got )
+                (array float_exact) expected got )
             (partitions rng n) )
         [61; 17; 2; 0] )
 
@@ -144,8 +143,7 @@ let flat_tests =
             (rms_stage ~frame_length:8 ~hop:3 ())
             x
         in
-        equal ~msg:"same carry"
-          (array (float 0.))
+        equal ~msg:"same carry" (array float_exact)
           (Nx.to_array (rms ~frame_length:8 ~hop:3 x))
           (Nx.to_array streamed) )
   ; test "zero_crossing_rate equals its stage on one chunk" (fun () ->
@@ -158,8 +156,7 @@ let flat_tests =
             (zero_crossing_rate_stage ~frame_length:8 ~hop:3 ())
             x
         in
-        equal ~msg:"same carry"
-          (array (float 0.))
+        equal ~msg:"same carry" (array float_exact)
           (Nx.to_array (zero_crossing_rate ~frame_length:8 ~hop:3 x))
           (Nx.to_array streamed) )
   ; test "an all-empty two-channel stream keeps its leading shape" (fun () ->
@@ -245,8 +242,7 @@ let capability_tests =
         (* [@] evaluates its right operand first: sequence push before flush *)
         let pushed = Option.to_list (Pipeline.Stream.push s x) in
         let outs = pushed @ Pipeline.Stream.flush s in
-        equal ~msg:"same value, two modes"
-          (array (float 0.))
+        equal ~msg:"same value, two modes" (array float_exact)
           (Nx.to_array expected)
           (Nx.to_array (concat_or (Nx.zeros Nx.float32 [|1; 0|]) outs)) ;
         ignore shared_offline ) ]

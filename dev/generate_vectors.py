@@ -4,17 +4,19 @@ This file is part of SoundML.
 Copyright (C) 2025 Gabriel Santamaria
 
 This script generates the golden test vectors committed beside each test suite (see SUITE_DIRECTORIES).
-The reference implementation is librosa 0.11 (which delegates window
+The reference implementation is librosa 1.0 (which delegates window
 computation to scipy.signal); every generated file records the exact
 versions it was produced with.
 
 The vectors are committed to the repository: CI never runs this script and
-never needs Python. Rerun it only to regenerate the goldens, from an
-environment with the pinned reference versions:
+never needs Python. Rerun it only to regenerate the goldens, from the
+repository root, in an ephemeral environment with the pinned reference
+versions (CPython 3.15, the newest release every dependency, numba included,
+ships wheels for):
 
-    python3 -m venv .venv
-    .venv/bin/pip install librosa==0.11.0
-    .venv/bin/python generate_vectors.py
+    uv run --python 3.15 --with 'librosa==1.0.0' --with 'numpy==2.5.4' \
+      --with 'scipy==1.18.1' --with 'soundfile==0.14.0' \
+      python dev/generate_vectors.py
 
 Each suite writes small JSON files under the suite's vectors/ directory. A file is
 
@@ -43,6 +45,7 @@ import struct
 import librosa
 import numpy as np
 import scipy
+import scipy.interpolate
 import scipy.signal
 import soundfile
 
@@ -74,8 +77,8 @@ GENERATOR_VERSIONS = {
 }
 
 assert librosa.__version__.startswith(
-    "0.11."
-), f"librosa 0.11 is the pinned reference, found {librosa.__version__}"
+    "1.0."
+), f"librosa 1.0 is the pinned reference, found {librosa.__version__}"
 
 
 def write_suite(suite: str, filename: str, cases: list, versions: dict = None):
@@ -933,10 +936,12 @@ class DbConversionsVectorGenerator:
     power_to_db and amplitude_to_db against librosa, over synthetic seeded
     inputs: fixed references, the amin floor (values below it), top_db
     clamping (including a rank-two input whose threshold is global across
-    rows), negative entries (powers are floored signed, amplitudes are
-    magnitudes), and both element dtypes. Each case stores its input in the
-    params (flattened in C order, exactly representable in the case dtype)
-    and the librosa output in the values.
+    rows, and rank-three inputs whose threshold is per channel: librosa 1.0's
+    multichannel dB reduces over the last two axes, asserted to differ from
+    the whole-tensor clamp), negative entries (powers are floored signed,
+    amplitudes are magnitudes), and both element dtypes. Each case stores its
+    input in the params (flattened in C order, exactly representable in the
+    case dtype) and the librosa output in the values.
     """
 
     SUITE = "db"
@@ -984,6 +989,24 @@ class DbConversionsVectorGenerator:
             ),
             ("amplitude_reference", "amplitude_to_db", 0.5, 2e-5, None, spread(1e-7, 1e2, 64)),
             ("amplitude_top80", "amplitude_to_db", 1.0, 1e-5, 80.0, spread(1e-9, 1e2, 64)),
+            # [channels; bins; frames]: the threshold is per channel, and the
+            # second channel sits 40 dB under the first so the two differ
+            (
+                "power_channels_top20",
+                "power_to_db",
+                1.0,
+                1e-10,
+                20.0,
+                spread(1e-9, 1e3, (2, 2, 16)) * np.array([[[1.0]], [[1e-4]]]),
+            ),
+            (
+                "amplitude_channels_top40",
+                "amplitude_to_db",
+                1.0,
+                1e-5,
+                40.0,
+                spread(1e-7, 1e2, (2, 2, 16)) * np.array([[[1.0]], [[1e-2]]]),
+            ),
         ]
 
     def generate(self):
@@ -998,6 +1021,11 @@ class DbConversionsVectorGenerator:
                 x = np.ascontiguousarray(values, dtype=dtype)
                 y = functions[function](x, ref=reference, amin=amin, top_db=top_db)
                 assert y.dtype == x.dtype, (name, x.dtype, y.dtype)
+                if x.ndim > 2:
+                    whole = functions[function](
+                        x, ref=reference, amin=amin, top_db=top_db, axes=None
+                    )
+                    assert not np.array_equal(y, whole), name
                 suites[function].append(
                     {
                         "name": f"{name}_{np.dtype(dtype).name}",
@@ -1268,7 +1296,7 @@ class EnergyFeaturesVectorGenerator:
     under this suite's seed (reproduced bit-exactly in OCaml):
 
     - rms: librosa.feature.rms over audio, with center and pad_mode passed
-      explicitly at their librosa 0.11 defaults (constant-zero centered
+      explicitly at their librosa 1.0 defaults (constant-zero centered
       padding) and the reference computed in float64 (dtype=np.float64),
       covering the true defaults, small (frame_length, hop) geometries
       including an odd frame length and hop > frame_length, frame_length 1,
@@ -1660,7 +1688,9 @@ class CqtVectorGenerator:
       every octave step and the early decimation — on a harmonic test signal
       with three note onsets, a transient and a noise floor. SoundML decimates
       with its own resampler, so these cases pin the architecture at the
-      tolerance that substitution costs.
+      tolerance that substitution costs. One ladder reaches past librosa 1.0's
+      decimation guard (asserted to bind), which keeps the rate between two
+      octaves whenever the next one would top out above a fifth of it.
     - cqt_support: the frequency ladder (librosa.cqt_frequencies), the
       fractional filter lengths and main-lobe cutoffs
       (librosa.filters.wavelet_lengths) across windows, librosa's own
@@ -1768,9 +1798,37 @@ class CqtVectorGenerator:
          True, ["float64"]),
     ]
 
+    # The decimation guard: from 98 bins up (C1, 12 per octave, 22050 Hz, no
+    # early decimation) the second octave tops out above sr / 5, so librosa
+    # 1.0 analyses it at the full rate instead of halving first.
+    GUARD = [
+        ("w12_cqt100_guard", "harmonic", 8192, SR, 100, 12, C1, 512, 0,
+         True, ["float64"]),
+    ]
+
     @classmethod
     def signal(cls, kind, n, sr):
         return cls.lcg(n) if kind == "lcg" else cls.harmonic(n, sr)
+
+    def assert_guard(self):
+        """Refuse a GUARD row the guard does not bind on: an even hop, no
+        early decimation, and the top bin of the second octave above a fifth
+        of the rate."""
+        count = getattr(librosa.core.constantq, "__early_downsample_count")
+        for (key, _, _, sr, n_bins, bpo, fmin, hop, gamma, _,
+             _) in self.GUARD:
+            freqs = self.ladder(n_bins, bpo, fmin)
+            _, cutoff = librosa.filters.wavelet_lengths(
+                freqs=freqs,
+                sr=sr,
+                window="hann",
+                filter_scale=1,
+                gamma=gamma,
+                alpha=self.alphas(freqs, bpo),
+            )
+            early = count(sr / 2.0, cutoff, hop, int(np.ceil(n_bins / bpo)))
+            assert early == 0 and hop % 2 == 0, key
+            assert freqs[-bpo - 1] > sr / 5.0, key
 
     @classmethod
     def gamma_key(cls, gamma):
@@ -2002,10 +2060,13 @@ class CqtVectorGenerator:
 
     def generate(self):
         write_suite(self.SUITE, "cqt_tight", self.transform_cases(self.TIGHT))
+        self.assert_guard()
         write_suite(
             self.SUITE,
             "cqt_wide",
-            self.transform_cases(self.WIDE) + self.transform_cases(self.SHORT),
+            self.transform_cases(self.WIDE)
+            + self.transform_cases(self.SHORT)
+            + self.transform_cases(self.GUARD),
         )
         write_suite(
             self.SUITE,
@@ -2968,7 +3029,13 @@ class PvocVectorGenerator:
       (compressing, expanding, unity and a non-round rate), two signal
       lengths, both float dtypes, short signals, and one batched pair. The
       analysis is librosa's default zero padding, which is this library's
-      `Constant 0.` rather than its own `Reflect` default.
+      `Constant 0.` rather than its own `Reflect` default. librosa 1.0's
+      vocoder interpolates magnitudes linearly between analysis frames and
+      extrapolates them from the last two past the final one, and its phase
+      accumulates the raw inter-frame difference, which is zero from the
+      final frame on. A single analysis frame leaves that interpolation
+      undefined (librosa returns NaN), so no case analyses fewer than two
+      frames, and every emitted value is asserted finite.
 
     - pitchstretch: the stretch stage of the pitch cases alone, at the exact
       float64 quotient the rational ratio produces, so the composition's rate
@@ -2983,9 +3050,10 @@ class PvocVectorGenerator:
 
     - locked: the identity phase-locked variant, from the replica below --
       this script is the oracle for those cases, and the file records it as
-      such. Peaks are picked on the analysis frame the output frame floors to,
-      regions split halfway between consecutive peaks, and the locked phases
-      are what the next frame accumulates from.
+      such. It is librosa 1.0's vocoder with the phases rewritten: peaks are
+      picked on the analysis frame the output frame floors to, regions split
+      halfway between consecutive peaks, and the locked phases are what the
+      next frame accumulates from.
 
     float32 cases quantize the input to float32 and compute the reference in
     float64, so the vectors isolate input rounding from the accumulator's
@@ -3057,9 +3125,16 @@ class PvocVectorGenerator:
         return ("r" + f"{rate:g}").replace(".", "p")
 
     @staticmethod
+    def frames(n, hop):
+        """The centered analysis frame count of an n-sample signal."""
+        return 1 + n // hop
+
+    @staticmethod
     def stretch(y, fft_size, hop, rate):
-        return librosa.effects.time_stretch(y, rate=rate, n_fft=fft_size,
-                                            hop_length=hop)
+        expected = librosa.effects.time_stretch(y, rate=rate, n_fft=fft_size,
+                                                hop_length=hop)
+        assert np.isfinite(expected).all(), (fft_size, hop, rate, y.shape)
+        return expected
 
     @classmethod
     def case(cls, name, params, expected):
@@ -3067,8 +3142,13 @@ class PvocVectorGenerator:
                 "shape": list(expected.shape), "values": expected.ravel().tolist()}
 
     def stretch_cases(self):
+        """Every cell whose analysis has at least two frames: the 2048-point
+        geometries over the 127- and 128-sample signals analyse one, where
+        librosa's interpolation has nothing to interpolate."""
         cases = []
         for key, fft_size, hop in self.GEOMETRY:
+            if self.frames(self.SHORT, hop) < 2:
+                continue
             y = self.signal(self.SHORT)
             expected = self.stretch(y, fft_size, hop, 1.37)
             cases.append(self.case(
@@ -3079,6 +3159,8 @@ class PvocVectorGenerator:
         for rate in self.RATES:
             for key, fft_size, hop in self.RATE_GEOMETRY:
                 for n in self.LENGTHS:
+                    if self.frames(n, hop) < 2:
+                        continue
                     for dtype in ("float32", "float64"):
                         y = self.quantized(self.signal(n), dtype)
                         expected = self.stretch(y, fft_size, hop, rate)
@@ -3168,33 +3250,40 @@ class PvocVectorGenerator:
         return owner
 
     @classmethod
-    def vocode_locked(cls, spectrum, rate, hop, fft_size):
-        """The identity phase-locked phase vocoder: librosa's recurrence with
-        each frame's phases rewritten, before they are emitted and before the
-        next frame accumulates from them, so that the bins around a spectral
-        peak carry the peak's accumulated phase offset by the phase
-        difference they have in the analysis frame."""
-        steps = np.arange(0, spectrum.shape[-1], rate, dtype=np.float64)
+    def vocode_locked(cls, spectrum, rate):
+        """The identity phase-locked phase vocoder: librosa 1.0's vocoder
+        with each frame's phases rewritten, before they are emitted and
+        before the next frame accumulates from them, so that the bins around
+        a spectral peak carry the peak's accumulated phase offset by the
+        phase difference they have in the analysis frame. The magnitudes are
+        librosa's own interpolation, extrapolating past the final frame, and
+        the phase advances by the raw difference to the next analysis frame,
+        clamped to the final one."""
+        frames = spectrum.shape[-1]
+        assert frames >= 2, frames
+        steps = np.arange(0, frames, rate, dtype=np.float64)
         bins = spectrum.shape[0]
         out = np.zeros((bins, len(steps)), dtype=np.complex128)
-        advance = hop * librosa.fft_frequencies(sr=2 * np.pi, n_fft=fft_size)
-        accumulator = np.angle(spectrum[:, 0]).copy()
-        padded = np.pad(spectrum, [(0, 0), (0, 2)])
+        magnitudes = scipy.interpolate.interp1d(
+            np.arange(frames),
+            np.abs(spectrum),
+            kind="linear",
+            axis=-1,
+            fill_value="extrapolate",
+            assume_sorted=True,
+        )(steps)
+        angles = np.angle(spectrum)
+        accumulator = angles[:, 0].copy()
         for t, step in enumerate(steps):
             i = int(step)
-            first, second = padded[:, i], padded[:, i + 1]
-            alpha = np.mod(step, 1.0)
-            magnitudes = ((1.0 - alpha) * np.abs(first)
-                          + alpha * np.abs(second))
-            owner = cls.owners(cls.peaks_of(np.abs(first)), bins)
+            owner = cls.owners(cls.peaks_of(np.abs(spectrum[:, i])), bins)
             if owner is not None:
-                reference = np.angle(first)
+                reference = angles[:, i]
                 locked = accumulator[owner] + (reference - reference[owner])
                 accumulator = locked
-            out[:, t] = librosa.util.phasor(accumulator, mag=magnitudes)
-            deviation = np.angle(second) - np.angle(first) - advance
-            deviation -= 2.0 * np.pi * np.round(deviation / (2.0 * np.pi))
-            accumulator = accumulator + (advance + deviation)
+            out[:, t] = librosa.util.phasor(accumulator, mag=magnitudes[:, t])
+            following = angles[:, min(i + 1, frames - 1)]
+            accumulator = accumulator + (following - angles[:, i])
         return out
 
     def locked_cases(self):
@@ -3203,10 +3292,11 @@ class PvocVectorGenerator:
             y = self.signal(n)
             spectrum = librosa.stft(y, n_fft=fft_size, hop_length=hop,
                                     dtype=np.complex128)
-            stretched = self.vocode_locked(spectrum, rate, hop, fft_size)
+            stretched = self.vocode_locked(spectrum, rate)
             expected = librosa.istft(stretched, hop_length=hop, n_fft=fft_size,
                                      dtype=np.float64,
                                      length=int(round(n / rate)))
+            assert np.isfinite(expected).all(), key
             cases.append(self.case(
                 f"locked_{key}_n{n}_float64",
                 {"fft_size": fft_size, "hop": hop, "rate": rate, "n": n,

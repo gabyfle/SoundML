@@ -30,7 +30,7 @@
 
 (pin
  (url
-  "git+https://github.com/invariant-hq/thumper.git#0d42dc6964e30525b0595b6d5be04a1eda76c90e")
+  "git+https://github.com/invariant-hq/thumper.git#5410a9c7fad23ae853d71896378aa815fc9a1fc8")
  (package
   (name thumper)))
 
@@ -47,7 +47,10 @@
   (nx
    (= dev))
   (odoc :with-doc)
-  (windtrap :with-test)
+  (windtrap
+   (and
+    :with-test
+    (>= 0.2.0)))
   (thumper :with-test)
   (yojson :with-test))
  (tags
@@ -71,7 +74,10 @@
   (conf-sndfile :build)
   (dune-configurator :build)
   (odoc :with-doc)
-  (windtrap :with-test)
+  (windtrap
+   (and
+    :with-test
+    (>= 0.2.0)))
   (thumper :with-test)
   (yojson :with-test))
  (tags

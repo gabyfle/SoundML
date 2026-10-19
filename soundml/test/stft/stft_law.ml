@@ -21,7 +21,7 @@ let seed = 0x57f7
 
 let source () = Pipeline.Format.audio Nx.float32 ~sample_rate:1000 ~channels:1
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* {2 Partitionings (the seeded pattern of the pipeline law tests)} *)
 
@@ -99,8 +99,7 @@ let float_law_case name mk_stage =
               in
               equal
                 ~msg:(Printf.sprintf "%s/%s/n=%d" name pname n)
-                (array (float 0.))
-                expected got )
+                (array float_exact) expected got )
             (partitions rng n) )
         [61; 17; 2; 0] )
 
@@ -184,9 +183,11 @@ let kernel_tests =
         let drained = Stft.Kernel.flush k in
         is_true ~msg:"step and flush emitted"
           (Option.is_some stepped && Option.is_some drained) ;
-        raises_invalid_arg ~msg:"drained step refuses samples"
-          "step: cannot feed a drained kernel (flush consumed the tail; reset \
-           before reusing)" (fun () -> ignore (Stft.Kernel.step k x) ) ;
+        raises ~msg:"drained step refuses samples"
+          (Invalid_argument
+             "step: cannot feed a drained kernel (flush consumed the tail; \
+              reset before reusing)" ) (fun () ->
+            ignore (Stft.Kernel.step k x) ) ;
         Stft.Kernel.reset k ;
         is_true ~msg:"reset revives the kernel"
           (Option.is_some (Stft.Kernel.step k x)) )
@@ -196,9 +197,10 @@ let kernel_tests =
           Stft.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:1
             ~max_block:32
         in
-        raises_invalid_arg ~msg:"no signals at all"
-          "step: cannot analyse a chunk with a zero-size leading axis \
-           (channels must be at least 1)" (fun () ->
+        raises ~msg:"no signals at all"
+          (Invalid_argument
+             "step: cannot analyse a chunk with a zero-size leading axis \
+              (channels must be at least 1)" ) (fun () ->
             ignore (Stft.Kernel.step k (Nx.zeros Nx.float64 [|0; 20|])) ) ) ]
 
 (* {2 Static queries} *)
@@ -287,8 +289,7 @@ let capability_tests =
         (* [@] evaluates its right operand first: sequence push before flush *)
         let pushed = Option.to_list (Pipeline.Stream.push s x) in
         let outs = pushed @ Pipeline.Stream.flush s in
-        equal ~msg:"same value, two modes"
-          (array (float 0.))
+        equal ~msg:"same value, two modes" (array float_exact)
           (Nx.to_array expected)
           (Nx.to_array (concat_or (Nx.zeros Nx.float32 [|0; 0|]) outs)) ;
         ignore shared_offline )
@@ -304,9 +305,8 @@ let capability_tests =
         let outs = pushed @ Pipeline.Stream.flush s in
         let streamed = concat_or (Nx.zeros Nx.float32 [|0; 0|]) outs in
         let expected = Pipeline.run ~source:(source ()) p x in
-        equal ~msg:"composed law"
-          (array (float 0.))
-          (Nx.to_array expected) (Nx.to_array streamed) ) ]
+        equal ~msg:"composed law" (array float_exact) (Nx.to_array expected)
+          (Nx.to_array streamed) ) ]
 
 let suite =
   [ group "law" law_tests

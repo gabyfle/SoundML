@@ -63,19 +63,20 @@
     Locking is measurably but not uniformly better, which is why it is an
     option and not the default. Over a thirty-cell grid of three signal kinds
     (a swept sine in coloured noise, a vibrato-laden harmonic mixture, a
-    filtered pulse train), five analysis geometries and two rates, the
-    consistency of the produced spectrum —
+    filtered pulse train, 1.5 s each at 22.05 kHz), five analysis geometries
+    (2048/512, 2048/256, 1024/256, 1024/128 and 512/128) and two rates
+    ([0.75] and [1.5]), the consistency of the produced spectrum —
     [20 log10 (‖transform (invert Y) - Y‖ / ‖Y‖)], how nearly the frames are
-    the transform of an actual signal — improves by a median of 8.2 dB and by
-    as much as 20.2 dB, and degrades by at most 4.0 dB on the two cells where
-    it loses; the energy the synthesis retains rises from 0.596 to 0.873 of the
-    input's. On a pure tone both paths hold the frequency to within 0.03 cents
+    the transform of an actual signal — improves by a median of 6.3 dB and by
+    as much as 17.6 dB, and degrades by at most 3.5 dB on the three cells
+    where it loses; the energy the synthesis retains rises from 0.583 to 0.862
+    of the input's on average. On a pure tone both paths hold the frequency to within 0.03 cents
     of the original at every rate, and the energy locking keeps out of the main
     lobe never rises and falls by up to 24 dB.
 
     {2 Parity}
 
-    Numerical parity with librosa 0.11 ([librosa.phase_vocoder],
+    Numerical parity with librosa 1.0 ([librosa.phase_vocoder],
     [librosa.effects.time_stretch] and [librosa.effects.pitch_shift]) is
     enforced against committed golden vectors, and is pinned at matching
     explicit settings: [`Independent], [~pad:(`Constant 0.)] (its default
@@ -84,20 +85,28 @@
     these, and each is a contract rather than an accident.
 
     - The interior is float64 at both dtypes, including the phase accumulator,
-      where the reference propagates float32 phases for float32 audio. That
-      accumulator is a recurrence, so the difference is not a rounding but a
-      divergence: the reference's own float32-against-float64 spread is
-      [1.0e-3] to [9.4e-2] of peak on two seconds of music, four to six orders
-      above what separates this implementation from its float64 path. The
-      deviation is on the accurate side, and the float32 golden vectors
-      therefore quantize the input to float32 and compute the reference in
-      float64, as every suite in this library does.
+      where the reference accumulates float32 phases for float32 audio. Its
+      phases are a running sum of raw inter-frame differences, which telescopes
+      rather than drifts, so its own float32-against-float64 spread stays at
+      [7.0e-7] to [1.2e-6] of peak on two seconds of the harmonic mixture
+      above at rates from [0.5] to [2] — fourteen to thirty times what
+      separates this implementation from its float64 path at the same rates
+      ([3.4e-8] to [5.3e-8]). The deviation is on the accurate side, and the
+      float32 golden vectors therefore quantize the input to float32 and
+      compute the reference in float64, as every suite in this library does.
+    - The accumulator adds each bin's expected advance and the principal value
+      of the measured deviation from it, where the reference sums the raw
+      phase differences. The two are the same phase modulo [2 pi] and differ
+      by rounding alone: at most [4.5e-13] of peak over the golden vectors.
     - The principal-value reduction rounds ties to even, matching the
       reference's rounding rather than the round-half-away-from-zero of
       {!Float.round}. Ties are unreachable in practice; the rule is fixed so
       that they are not a source of drift.
     - {!phase_vocoder} of a spectrum with no frames is a spectrum with no
       frames; the reference raises there.
+    - {!phase_vocoder} of a spectrum with a single frame holds that frame, its
+      magnitudes and its phases, over every output frame — the zero-slope
+      limit of the extrapolation below; the reference returns NaN there.
     - {!pitch_shift} resamples through this library's {!Resample} rather than
       through the reference's soxr binding, at the exact rational ratio
       {!semitones} names — where the reference converts between a float rate
@@ -109,12 +118,12 @@
       three parts. On two seconds of swept sine in noise, over the tested
       ratios, substituting one for the other moves the shifted signal by at
       most [8.1e-4] of peak between the ends of the signal, by [4.2e-3] over
-      the first five output samples, and by [5.1e-2] in the final one —
+      the first five output samples, and by [5.0e-2] in the final one —
       against the [3.3e-4] to [6.3e-4] the reference moves itself by switching
       its own soxr from its default HQ tier to VHQ. On the full-band noise of
       the golden vectors, which puts a fifth of its energy in the transition
       band, the same three figures are [6.8e-3], [2.6e-2] and [7.7e-3],
-      against a tier switch of [6.5e-3] to [9.0e-3]. Between the ends the
+      against a tier switch of [6.7e-3] to [8.5e-3]. Between the ends the
       substitution is of the order of the reference's own choice of tier — two
       and a half times it at worst — which is the sense in which the pitch
       vectors pin parity, and the stretch stage of those same cells is pinned
@@ -152,8 +161,11 @@ val phase_vocoder :
     linearly interpolated, and a phase accumulator advanced once per output
     frame by the expected advance of the bin centre plus the principal value of
     the measured deviation from it. The accumulator starts at the phases of
-    analysis frame [0] verbatim and is never reduced modulo [2 pi]. Positions
-    past the last analysis frame read silence.
+    analysis frame [0] verbatim and is never reduced modulo [2 pi]. Over the
+    final interval, from the last analysis frame on, the magnitudes extend the
+    line through the last two frames — unclamped, so one that crosses zero
+    flips its phasor — and the accumulator holds, as the reference does; a
+    spectrum with a single frame is held as it is.
 
     Only the transform size and the hop of [c] are read: the vocoder maps
     frames to frames, and the window, alignment and padding of [c] are the

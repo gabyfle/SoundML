@@ -175,7 +175,13 @@ let grid =
   ; Case
       ( "single-octave-12-12-f32"
       , Cqt.Config.create ~n_bins:12 ~sample_rate:22050 ()
-      , Nx.float32 ) ]
+      , Nx.float32 )
+  ; (* the top octaves' successors reach past a fifth of the rate, so the plan
+       keeps an even hop undecimated before it starts halving *)
+    Case
+      ( "guard-100-12-f64"
+      , Cqt.Config.create ~n_bins:100 ~sample_rate:22050 ()
+      , Nx.float64 ) ]
 
 (* {2 The law} *)
 
@@ -312,7 +318,11 @@ let latency_tests =
           ; Case
               ( "early5"
               , Cqt.Config.create ~n_bins:36 ~hop:2048 ~sample_rate:44100 ()
-              , Nx.float32 ) ] ) ]
+              , Nx.float32 )
+          ; Case
+              ( "guard"
+              , Cqt.Config.create ~n_bins:100 ~sample_rate:22050 ()
+              , Nx.float64 ) ] ) ]
 
 (* {2 The frame grid} *)
 
@@ -362,9 +372,10 @@ let drain_tests =
             ~max_block:64
         in
         ignore (Cqt.Kernel.flush k) ;
-        raises_invalid_arg ~msg:"step after flush"
-          "step: cannot feed a drained kernel (flush consumed the tail; reset \
-           before reusing)" (fun () ->
+        raises ~msg:"step after flush"
+          (Invalid_argument
+             "step: cannot feed a drained kernel (flush consumed the tail; \
+              reset before reusing)" ) (fun () ->
             ignore (Cqt.Kernel.step k (signal Nx.float64 0x11 8)) ) )
   ; test "reset restores the freshly prepared state" (fun () ->
         let c = default_config in
@@ -384,21 +395,24 @@ let drain_tests =
         check_bits ~msg:"against a fresh kernel" first (whole c Nx.float64 x) )
   ; test "preparation and feeding validate their arguments" (fun () ->
         let c = default_config in
-        raises_invalid_arg ~msg:"channels"
-          "prepare: cannot analyse 0 channels (channels must be at least 1)"
-          (fun () ->
+        raises ~msg:"channels"
+          (Invalid_argument
+             "prepare: cannot analyse 0 channels (channels must be at least 1)"
+          ) (fun () ->
             ignore
               (Cqt.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:0
                  ~max_block:64 ) ) ;
-        raises_invalid_arg ~msg:"max_block"
-          "prepare: cannot accept blocks of 0 samples (max_block must be at \
-           least 1)" (fun () ->
+        raises ~msg:"max_block"
+          (Invalid_argument
+             "prepare: cannot accept blocks of 0 samples (max_block must be at \
+              least 1)" ) (fun () ->
             ignore
               (Cqt.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:1
                  ~max_block:0 ) ) ;
-        raises_invalid_arg ~msg:"dtype"
-          "prepare: cannot decimate a float16 signal (the octave recursion \
-           resamples, which needs float32 or float64 audio)" (fun () ->
+        raises ~msg:"dtype"
+          (Invalid_argument
+             "prepare: cannot decimate a float16 signal (the octave recursion \
+              resamples, which needs float32 or float64 audio)" ) (fun () ->
             ignore
               (Cqt.Kernel.prepare Nx.complex128 c Nx.float16 ~channels:1
                  ~max_block:64 ) ) ;
@@ -406,12 +420,15 @@ let drain_tests =
           Cqt.Kernel.prepare Nx.complex128 c Nx.float64 ~channels:1
             ~max_block:16
         in
-        raises_invalid_arg ~msg:"oversize chunk"
-          "step: cannot feed a 17-sample chunk (max_block is 16)" (fun () ->
-            ignore (Cqt.Kernel.step k (signal Nx.float64 0x11 17)) ) ;
-        raises_invalid_arg ~msg:"rank zero"
-          "step: cannot analyse a rank-zero tensor (the time axis must exist)"
-          (fun () -> ignore (Cqt.Kernel.step k (Nx.scalar Nx.float64 1.)) ) )
+        raises ~msg:"oversize chunk"
+          (Invalid_argument
+             "step: cannot feed a 17-sample chunk (max_block is 16)" )
+          (fun () -> ignore (Cqt.Kernel.step k (signal Nx.float64 0x11 17)) ) ;
+        raises ~msg:"rank zero"
+          (Invalid_argument
+             "step: cannot analyse a rank-zero tensor (the time axis must \
+              exist)" ) (fun () ->
+            ignore (Cqt.Kernel.step k (Nx.scalar Nx.float64 1.)) ) )
   ; test "a resampler-free plan streams any float dtype" (fun () ->
         (* an odd hop halves nowhere, so no stage constrains the sample type *)
         let c = Cqt.Config.create ~n_bins:12 ~hop:513 ~sample_rate:22050 () in

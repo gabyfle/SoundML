@@ -1827,12 +1827,12 @@ module Kernel = struct
           let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
           if n1 > 0 then drain k s1 ~n_out:n1 ~y_off:0 ~y_stride:n1 k.mid ;
           let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
-          if n2a = 0 then begin
-            if n1 > 0 then
+          if n2a = 0 then
+            begin if n1 > 0 then
               (* thread the tail into stage-2 state: the stage-2 drain below
                  still reads it *)
               feed0 k s2 ~n:n1 k.mid
-          end
+            end
           else feed k s2 ~n:n1 ~n_out:n2a ~y_off ~y_stride k.mid y ;
           s2.fed <- s2.fed + n1 ;
           let n2b = keep - n2a in

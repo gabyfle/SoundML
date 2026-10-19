@@ -9,7 +9,7 @@
 open Windtrap
 open Soundml
 
-let farray = array (float 0.)
+let farray = array float_exact
 
 (* A positive [bins; frames] test spectrogram; [sample_rate 1024] with five bins
    implies an eight-point FFT whose grid arithmetic is exact: bin [k] sits at [k
@@ -31,33 +31,38 @@ let peak ~bin ~frames =
 
 let precondition_tests =
   [ test "rank must be at least two" (fun () ->
-        raises_invalid_arg ~msg:"rank one"
-          "spectral_centroid: cannot analyse a rank-1 tensor (a spectrogram is \
-           [...; bins; frames])" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "spectral_centroid: cannot analyse a rank-1 tensor (a spectrogram \
+              is [...; bins; frames])" ) (fun () ->
             ignore
               (spectral_centroid ~sample_rate:sr (Nx.zeros Nx.float64 [|8|])) ) )
   ; test "sample_rate must be at least 1" (fun () ->
-        raises_invalid_arg ~msg:"zero rate"
-          "spectral_rolloff: cannot use a sample rate of 0 Hz (sample_rate \
-           must be at least 1)" (fun () ->
+        raises ~msg:"zero rate"
+          (Invalid_argument
+             "spectral_rolloff: cannot use a sample rate of 0 Hz (sample_rate \
+              must be at least 1)" ) (fun () ->
             ignore (spectral_rolloff ~sample_rate:0 (spectrum 3)) ) )
   ; test "magnitudes must be non-negative" (fun () ->
         let negative = Nx.create Nx.float64 [|2; 2|] [|1.; 2.; -3.; 4.|] in
-        raises_invalid_arg ~msg:"negative entry"
-          "spectral_bandwidth: cannot analyse a spectrogram with negative or \
-           NaN values (a magnitude spectrogram is non-negative)" (fun () ->
-            ignore (spectral_bandwidth ~sample_rate:sr negative) ) ;
+        raises ~msg:"negative entry"
+          (Invalid_argument
+             "spectral_bandwidth: cannot analyse a spectrogram with negative \
+              or NaN values (a magnitude spectrogram is non-negative)" )
+          (fun () -> ignore (spectral_bandwidth ~sample_rate:sr negative) ) ;
         let poisoned =
           Nx.create Nx.float64 [|2; 2|] [|1.; Float.nan; 3.; 4.|]
         in
-        raises_invalid_arg ~msg:"NaN entry"
-          "spectral_flatness: cannot analyse a spectrogram with negative or \
-           NaN values (a magnitude spectrogram is non-negative)" (fun () ->
+        raises ~msg:"NaN entry"
+          (Invalid_argument
+             "spectral_flatness: cannot analyse a spectrogram with negative or \
+              NaN values (a magnitude spectrogram is non-negative)" ) (fun () ->
             ignore (spectral_flatness poisoned) ) )
   ; test "one bin implies no FFT grid" (fun () ->
-        raises_invalid_arg ~msg:"single bin"
-          "spectral_centroid: cannot derive bin frequencies for a 1-bin \
-           spectrogram (the implied FFT size is 0; pass freqs explicitly)"
+        raises ~msg:"single bin"
+          (Invalid_argument
+             "spectral_centroid: cannot derive bin frequencies for a 1-bin \
+              spectrogram (the implied FFT size is 0; pass freqs explicitly)" )
           (fun () ->
             ignore
               (spectral_centroid ~sample_rate:sr (Nx.zeros Nx.float64 [|1; 4|])) ) ;
@@ -69,74 +74,85 @@ let precondition_tests =
                 ~sample_rate:sr
                 (Nx.zeros Nx.float64 [|1; 4|]) ) ) )
   ; test "freqs must be rank-one with one frequency per bin" (fun () ->
-        raises_invalid_arg ~msg:"rank-two freqs"
-          "spectral_centroid: cannot use a rank-2 freqs tensor (freqs is \
-           rank-one, one frequency per bin)" (fun () ->
+        raises ~msg:"rank-two freqs"
+          (Invalid_argument
+             "spectral_centroid: cannot use a rank-2 freqs tensor (freqs is \
+              rank-one, one frequency per bin)" ) (fun () ->
             ignore
               (spectral_centroid
                  ~freqs:(Nx.zeros Nx.float64 [|bins; 1|])
                  ~sample_rate:sr (spectrum 3) ) ) ;
-        raises_invalid_arg ~msg:"short freqs"
-          "spectral_centroid: cannot pair 4 bin frequencies with 5 bins (freqs \
-           holds one frequency per bin)" (fun () ->
+        raises ~msg:"short freqs"
+          (Invalid_argument
+             "spectral_centroid: cannot pair 4 bin frequencies with 5 bins \
+              (freqs holds one frequency per bin)" ) (fun () ->
             ignore
               (spectral_centroid
                  ~freqs:(Nx.zeros Nx.float64 [|4|])
                  ~sample_rate:sr (spectrum 3) ) ) )
   ; test "bandwidth validates the deviation power" (fun () ->
-        raises_invalid_arg ~msg:"zero p"
-          "spectral_bandwidth: cannot raise deviations to the power 0 (p must \
-           be finite and positive)" (fun () ->
+        raises ~msg:"zero p"
+          (Invalid_argument
+             "spectral_bandwidth: cannot raise deviations to the power 0 (p \
+              must be finite and positive)" ) (fun () ->
             ignore (spectral_bandwidth ~p:0. ~sample_rate:sr (spectrum 3)) ) )
   ; test "bandwidth validates a reused centroid" (fun () ->
-        raises_invalid_arg ~msg:"rank-one centroid"
-          "spectral_bandwidth: cannot reuse a rank-1 centroid (centroid must \
-           be [...; 1; frames])" (fun () ->
+        raises ~msg:"rank-one centroid"
+          (Invalid_argument
+             "spectral_bandwidth: cannot reuse a rank-1 centroid (centroid \
+              must be [...; 1; frames])" ) (fun () ->
             ignore
               (spectral_bandwidth
                  ~centroid:(Nx.zeros Nx.float64 [|3|])
                  ~sample_rate:sr (spectrum 3) ) ) ;
-        raises_invalid_arg ~msg:"misshapen centroid"
-          "spectral_bandwidth: cannot reuse a centroid with 2 rows over 7 \
-           frames for a 3-frame spectrogram (centroid must be [...; 1; \
-           frames], one frequency per frame)" (fun () ->
+        raises ~msg:"misshapen centroid"
+          (Invalid_argument
+             "spectral_bandwidth: cannot reuse a centroid with 2 rows over 7 \
+              frames for a 3-frame spectrogram (centroid must be [...; 1; \
+              frames], one frequency per frame)" ) (fun () ->
             ignore
               (spectral_bandwidth
                  ~centroid:(Nx.zeros Nx.float64 [|2; 7|])
                  ~sample_rate:sr (spectrum 3) ) ) )
   ; test "rolloff validates roll_percent" (fun () ->
-        raises_invalid_arg ~msg:"one keeps everything"
-          "spectral_rolloff: cannot keep 1 of the spectral energy \
-           (roll_percent must lie strictly between 0 and 1)" (fun () ->
+        raises ~msg:"one keeps everything"
+          (Invalid_argument
+             "spectral_rolloff: cannot keep 1 of the spectral energy \
+              (roll_percent must lie strictly between 0 and 1)" ) (fun () ->
             ignore
               (spectral_rolloff ~roll_percent:1. ~sample_rate:sr (spectrum 3)) ) ;
-        raises_invalid_arg ~msg:"zero keeps nothing"
-          "spectral_rolloff: cannot keep 0 of the spectral energy \
-           (roll_percent must lie strictly between 0 and 1)" (fun () ->
+        raises ~msg:"zero keeps nothing"
+          (Invalid_argument
+             "spectral_rolloff: cannot keep 0 of the spectral energy \
+              (roll_percent must lie strictly between 0 and 1)" ) (fun () ->
             ignore
               (spectral_rolloff ~roll_percent:0. ~sample_rate:sr (spectrum 3)) ) )
   ; test "flatness validates amin and power" (fun () ->
-        raises_invalid_arg ~msg:"zero amin"
-          "spectral_flatness: cannot floor the spectrum at 0 (amin must be \
-           finite and positive)" (fun () ->
+        raises ~msg:"zero amin"
+          (Invalid_argument
+             "spectral_flatness: cannot floor the spectrum at 0 (amin must be \
+              finite and positive)" ) (fun () ->
             ignore (spectral_flatness ~amin:0. (spectrum 3)) ) ;
-        raises_invalid_arg ~msg:"infinite power"
-          "spectral_flatness: cannot raise magnitudes to the power inf (power \
-           must be finite and positive)" (fun () ->
+        raises ~msg:"infinite power"
+          (Invalid_argument
+             "spectral_flatness: cannot raise magnitudes to the power inf \
+              (power must be finite and positive)" ) (fun () ->
             ignore (spectral_flatness ~power:Float.infinity (spectrum 3)) ) )
   ; test "stage construction validates chunk-independent parameters" (fun () ->
-        raises_invalid_arg ~msg:"zero rate at build time"
-          "spectral_centroid_stage: cannot use a sample rate of 0 Hz \
-           (sample_rate must be at least 1)" (fun () ->
+        raises ~msg:"zero rate at build time"
+          (Invalid_argument
+             "spectral_centroid_stage: cannot use a sample rate of 0 Hz \
+              (sample_rate must be at least 1)" ) (fun () ->
             ignore
               ( spectral_centroid_stage ~sample_rate:0 ()
                 : ( (float, Nx.float64_elt) Nx.t
                   , (float, Nx.float64_elt) Nx.t
                   , Pipeline.offline )
                   Pipeline.t ) ) ;
-        raises_invalid_arg ~msg:"rank-two freqs at build time"
-          "spectral_centroid_stage: cannot use a rank-2 freqs tensor (freqs is \
-           rank-one, one frequency per bin)" (fun () ->
+        raises ~msg:"rank-two freqs at build time"
+          (Invalid_argument
+             "spectral_centroid_stage: cannot use a rank-2 freqs tensor (freqs \
+              is rank-one, one frequency per bin)" ) (fun () ->
             ignore
               ( spectral_centroid_stage
                   ~freqs:(Nx.zeros Nx.float64 [|bins; 1|])
@@ -145,27 +161,30 @@ let precondition_tests =
                   , (float, Nx.float64_elt) Nx.t
                   , Pipeline.offline )
                   Pipeline.t ) ) ;
-        raises_invalid_arg ~msg:"nan p at build time"
-          "spectral_bandwidth_stage: cannot raise deviations to the power nan \
-           (p must be finite and positive)" (fun () ->
+        raises ~msg:"nan p at build time"
+          (Invalid_argument
+             "spectral_bandwidth_stage: cannot raise deviations to the power \
+              nan (p must be finite and positive)" ) (fun () ->
             ignore
               ( spectral_bandwidth_stage ~p:Float.nan ~sample_rate:sr ()
                 : ( (float, Nx.float64_elt) Nx.t
                   , (float, Nx.float64_elt) Nx.t
                   , Pipeline.offline )
                   Pipeline.t ) ) ;
-        raises_invalid_arg ~msg:"roll_percent at build time"
-          "spectral_rolloff_stage: cannot keep 2 of the spectral energy \
-           (roll_percent must lie strictly between 0 and 1)" (fun () ->
+        raises ~msg:"roll_percent at build time"
+          (Invalid_argument
+             "spectral_rolloff_stage: cannot keep 2 of the spectral energy \
+              (roll_percent must lie strictly between 0 and 1)" ) (fun () ->
             ignore
               ( spectral_rolloff_stage ~roll_percent:2. ~sample_rate:sr ()
                 : ( (float, Nx.float64_elt) Nx.t
                   , (float, Nx.float64_elt) Nx.t
                   , Pipeline.offline )
                   Pipeline.t ) ) ;
-        raises_invalid_arg ~msg:"zero amin at build time"
-          "spectral_flatness_stage: cannot floor the spectrum at 0 (amin must \
-           be finite and positive)" (fun () ->
+        raises ~msg:"zero amin at build time"
+          (Invalid_argument
+             "spectral_flatness_stage: cannot floor the spectrum at 0 (amin \
+              must be finite and positive)" ) (fun () ->
             ignore
               ( spectral_flatness_stage ~amin:0. ()
                 : ( (float, Nx.float64_elt) Nx.t

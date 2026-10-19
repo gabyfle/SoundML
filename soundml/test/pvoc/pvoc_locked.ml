@@ -27,9 +27,10 @@ open Soundml
 let vectors_dir = "vectors"
 
 (* The golden tolerance of the parity suite, for the same reason: these cells
-   differ from their oracle only by the FFT implementation beneath, amplified
-   through the recurrence. They clear it by two orders — the worst observed is
-   below 1e-13 — and the shared number keeps the two files' pins comparable. *)
+   differ from their oracle by the FFT implementation beneath and by the
+   rounding of the reference's raw-difference accumulator, both amplified
+   through the recurrence. They clear it by twenty times — the worst observed is
+   4.5e-13 — and the shared number keeps the two files' pins comparable. *)
 let float64_atol = 1e-11
 
 let lcg_stream seed n =
@@ -114,7 +115,7 @@ let duration = 3 * Pvoc_signals.sample_rate / 2
 
 (* Six cells of the grid the module's documentation summarises, one per signal
    kind at two geometries each, chosen where locking wins. The margin asked for
-   is 2 dB; the smallest of the six measures 6.4 dB. *)
+   is 2 dB; the smallest of the six measures 6.3 dB. *)
 let consistency_cells =
   [ ("sweep 1024/256 r0.75", Pvoc_signals.sweep, 1024, 256, 0.75)
   ; ("sweep 1024/128 r1.5", Pvoc_signals.sweep, 1024, 128, 1.5)

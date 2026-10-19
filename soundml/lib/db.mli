@@ -37,7 +37,8 @@ val stage :
     referenced to [amin].
 
     [top_db] clamping is deliberately absent here. The clamp threshold sits
-    [top_db] below the maximum of the {e whole} converted signal — an
+    [top_db] below the maximum of the {e whole} converted signal (of each
+    channel's, from rank three on) — an
     unbounded-lookahead reduction even when the reference is a fixed
     [Value]. A causal stage could only clamp against each chunk's own
     maximum, and the {!Pipeline} law (run equals stream over every
@@ -54,7 +55,8 @@ val clamped_stage :
   -> Pipeline.offline reference
   -> ((float, 'a) Nx.t, (float, 'a) Nx.t, Pipeline.offline) Pipeline.t
 (** [clamped_stage ~top_db r] is {!stage} with the result clamped below to
-    [top_db] under its whole-signal maximum, exactly as
+    [top_db] under its whole-signal maximum (each channel's, from rank three
+    on), exactly as
     {!Convert.power_to_db} clamps. Any reference fits — including [Value] —
     but the stage is offline regardless, because the threshold reads the
     whole signal.

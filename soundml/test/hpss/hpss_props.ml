@@ -58,53 +58,62 @@ let validation_tests =
         List.iter
           (fun (name, kernel_size) ->
             let k_h, k_p = kernel_size in
-            raises_invalid_arg ~msg:name
-              (Printf.sprintf
-                 "hpss_of_spectrogram: cannot median-filter with a kernel of \
-                  (%d, %d) (both kernel sizes must be at least 1)"
-                 k_h k_p ) (fun () ->
-                ignore (hpss_of_spectrogram ~kernel_size (square ())) ) )
+            raises ~msg:name
+              (Invalid_argument
+                 (Printf.sprintf
+                    "hpss_of_spectrogram: cannot median-filter with a kernel \
+                     of (%d, %d) (both kernel sizes must be at least 1)"
+                    k_h k_p ) )
+              (fun () -> ignore (hpss_of_spectrogram ~kernel_size (square ()))) )
           [("zero time", (0, 3)); ("negative frequency", (3, -1))] )
   ; test "power must be strictly positive or infinite" (fun () ->
         List.iter
           (fun (name, power) ->
-            raises_invalid_arg ~msg:name
-              (Printf.sprintf
-                 "hpss_masks: cannot raise the mask to the power %g (power \
-                  must be strictly positive, or infinite for a hard mask)"
-                 power ) (fun () -> ignore (hpss_masks ~power (square ())) ) )
+            raises ~msg:name
+              (Invalid_argument
+                 (Printf.sprintf
+                    "hpss_masks: cannot raise the mask to the power %g (power \
+                     must be strictly positive, or infinite for a hard mask)"
+                    power ) )
+              (fun () -> ignore (hpss_masks ~power (square ()))) )
           [("zero", 0.); ("negative", -1.); ("nan", Float.nan)] ;
-        no_raise ~msg:"infinite" (fun () ->
-            hpss_masks ~power:Float.infinity (square ()) ) )
+        (* an infinite power, the hard mask, is accepted *)
+        ignore (hpss_masks ~power:Float.infinity (square ())) )
   ; test "margins must be finite and at least 1" (fun () ->
         List.iter
           (fun (name, margin) ->
             let m_h, m_p = margin in
-            raises_invalid_arg ~msg:name
-              (Printf.sprintf
-                 "hpss_of_spectrogram: cannot bias the decision by a margin of \
-                  (%g, %g) (both margins must be finite and at least 1)"
-                 m_h m_p ) (fun () ->
-                ignore (hpss_of_spectrogram ~margin (square ())) ) )
+            raises ~msg:name
+              (Invalid_argument
+                 (Printf.sprintf
+                    "hpss_of_spectrogram: cannot bias the decision by a margin \
+                     of (%g, %g) (both margins must be finite and at least 1)"
+                    m_h m_p ) )
+              (fun () -> ignore (hpss_of_spectrogram ~margin (square ()))) )
           [ ("below one", (0.5, 1.))
           ; ("nan", (1., Float.nan))
           ; ("infinite", (Float.infinity, 1.)) ] )
   ; test "a spectrogram carries two axes" (fun () ->
-        raises_invalid_arg ~msg:"rank one"
-          "hpss_of_spectrogram: cannot separate a rank-1 tensor (a spectrogram \
-           carries a bin axis and a frame axis)" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "hpss_of_spectrogram: cannot separate a rank-1 tensor (a \
+              spectrogram carries a bin axis and a frame axis)" ) (fun () ->
             ignore (hpss_of_spectrogram (Nx.zeros Nx.float64 [|8|])) ) ;
-        raises_invalid_arg ~msg:"rank zero audio"
-          "hpss: cannot separate a rank-zero tensor (the time axis must exist)"
-          (fun () -> ignore (hpss (stft8 ()) (Nx.zeros Nx.float64 [||])) ) )
+        raises ~msg:"rank zero audio"
+          (Invalid_argument
+             "hpss: cannot separate a rank-zero tensor (the time axis must \
+              exist)" ) (fun () ->
+            ignore (hpss (stft8 ()) (Nx.zeros Nx.float64 [||])) ) )
   ; test "the median kernel carries float32 and float64" (fun () ->
-        raises_invalid_arg ~msg:"float16"
-          "hpss_of_spectrogram: cannot separate float16 spectra (the median \
-           kernel carries float32 and float64)" (fun () ->
+        raises ~msg:"float16"
+          (Invalid_argument
+             "hpss_of_spectrogram: cannot separate float16 spectra (the median \
+              kernel carries float32 and float64)" ) (fun () ->
             ignore (hpss_of_spectrogram (Nx.zeros Nx.float16 [|4; 4|])) ) ;
-        raises_invalid_arg ~msg:"float16 audio"
-          "hpss: cannot separate float16 spectra (the median kernel carries \
-           float32 and float64)" (fun () ->
+        raises ~msg:"float16 audio"
+          (Invalid_argument
+             "hpss: cannot separate float16 spectra (the median kernel carries \
+              float32 and float64)" ) (fun () ->
             ignore (hpss (stft8 ()) (Nx.zeros Nx.float16 [|32|])) ) )
   ; test "an empty axis maps to an empty result" (fun () ->
         List.iter
@@ -126,9 +135,8 @@ let validation_tests =
         in
         let hb, _ = hpss_of_spectrogram batched in
         equal (array int) ~msg:"batched shape" [|2; 12; 9|] (Nx.shape hb) ;
-        equal
-          (array (float 0.))
-          ~msg:"leading axes map independently" (to_array h)
+        equal (array float_exact) ~msg:"leading axes map independently"
+          (to_array h)
           (to_array
              (Nx.reshape [|12; 9|] (Nx.shrink [|(0, 1); (0, 12); (0, 9)|] hb)) ) )
   ]
@@ -196,8 +204,8 @@ let mask_tests =
         let s = mixture ~bins:12 ~frames:11 in
         let h, p = hpss_of_spectrogram ~kernel_size:(1, 1) ~power:1.5 s in
         let half = Array.map (fun v -> v /. 2.) (to_array s) in
-        equal (array (float 0.)) ~msg:"harmonic is half" half (to_array h) ;
-        equal (array (float 0.)) ~msg:"percussive is half" half (to_array p) )
+        equal (array float_exact) ~msg:"harmonic is half" half (to_array h) ;
+        equal (array float_exact) ~msg:"percussive is half" half (to_array p) )
   ; test "a horizontal ridge is harmonic and a vertical one percussive"
       (fun () ->
         let bins = 24 and frames = 24 in
@@ -277,18 +285,15 @@ let kernel_tests =
               let mask_h, _ =
                 hpss_masks ~kernel_size:(k, 1) ~power:Float.infinity s
               in
-              equal
-                (array (float 0.))
-                ~msg:"time median" (decide time_ref values) (to_array mask_h) )
+              equal (array float_exact) ~msg:"time median"
+                (decide time_ref values) (to_array mask_h) )
         ; test (Printf.sprintf "frequency median %dx%d k=%d" bins frames k)
             (fun () ->
               let _, mask_p =
                 hpss_masks ~kernel_size:(1, k) ~power:Float.infinity s
               in
-              equal
-                (array (float 0.))
-                ~msg:"frequency median" (decide freq_ref values)
-                (to_array mask_p) ) ] )
+              equal (array float_exact) ~msg:"frequency median"
+                (decide freq_ref values) (to_array mask_p) ) ] )
       [1; 2; 3; 4; 7; 8; 15; 16; 31; 32; 33; 64; 129]
   in
   List.concat_map one_shape [(1, 1); (2, 3); (5, 4); (9, 17); (17, 9); (40, 33)]
@@ -312,14 +317,10 @@ let complex_tests =
                 (Stft.transform Nx.complex128 config x)
             in
             let h, p = hpss config ~kernel_size ~power ~margin x in
-            equal
-              (array (float 0.))
-              ~msg:"harmonic"
+            equal (array float_exact) ~msg:"harmonic"
               (to_array (Stft.invert Nx.float64 config ~length z_h))
               (to_array h) ;
-            equal
-              (array (float 0.))
-              ~msg:"percussive"
+            equal (array float_exact) ~msg:"percussive"
               (to_array (Stft.invert Nx.float64 config ~length z_p))
               (to_array p) )
           [ ((31, 31), 2., (1., 1.))
@@ -349,13 +350,9 @@ let complex_tests =
         in
         let config = Stft.Config.create ~fft_size:256 ~hop:64 () in
         let h, p = hpss config ~kernel_size:(9, 11) x in
-        equal
-          (array (float 0.))
-          ~msg:"harmonic" (to_array h)
+        equal (array float_exact) ~msg:"harmonic" (to_array h)
           (to_array (harmonic config ~kernel_size:(9, 11) x)) ;
-        equal
-          (array (float 0.))
-          ~msg:"percussive" (to_array p)
+        equal (array float_exact) ~msg:"percussive" (to_array p)
           (to_array (percussive config ~kernel_size:(9, 11) x)) ;
         equal (array int) ~msg:"the length of the input" [|1500|] (Nx.shape h) )
   ]

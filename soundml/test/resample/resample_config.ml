@@ -9,7 +9,7 @@
 open Windtrap
 open Soundml
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 let r num den = {Pipeline.Rate.num; den}
 
@@ -205,12 +205,14 @@ let accessor_tests =
 
 let error_tests =
   [ test "rates must be positive" (fun () ->
-        raises_invalid_arg ~msg:"sample_rate"
-          "create: cannot resample from 0 Hz (sample_rate must be at least 1)"
-          (fun () ->
+        raises ~msg:"sample_rate"
+          (Invalid_argument
+             "create: cannot resample from 0 Hz (sample_rate must be at least \
+              1)" ) (fun () ->
             ignore (Resample.Config.create ~sample_rate:0 ~target:48000 ()) ) ;
-        raises_invalid_arg ~msg:"target"
-          "create: cannot resample to -1 Hz (target must be at least 1)"
+        raises ~msg:"target"
+          (Invalid_argument
+             "create: cannot resample to -1 Hz (target must be at least 1)" )
           (fun () ->
             ignore (Resample.Config.create ~sample_rate:44100 ~target:(-1) ()) ) )
   ; test "custom specs are validated" (fun () ->
@@ -220,29 +222,35 @@ let error_tests =
                ~quality:(`Custom {Resample.attenuation; passband})
                ~sample_rate:44100 ~target:48000 () )
         in
-        raises_invalid_arg ~msg:"attenuation low"
-          "create: cannot design a filter with 39.5 dB of stop-band rejection \
-           (attenuation must be finite, in [40, 200])"
+        raises ~msg:"attenuation low"
+          (Invalid_argument
+             "create: cannot design a filter with 39.5 dB of stop-band \
+              rejection (attenuation must be finite, in [40, 200])" )
           (mk 39.5 0.9) ;
-        raises_invalid_arg ~msg:"attenuation high"
-          "create: cannot design a filter with 220 dB of stop-band rejection \
-           (attenuation must be finite, in [40, 200])"
+        raises ~msg:"attenuation high"
+          (Invalid_argument
+             "create: cannot design a filter with 220 dB of stop-band \
+              rejection (attenuation must be finite, in [40, 200])" )
           (mk 220. 0.9) ;
-        raises_invalid_arg ~msg:"attenuation nan"
-          "create: cannot design a filter with nan dB of stop-band rejection \
-           (attenuation must be finite, in [40, 200])"
+        raises ~msg:"attenuation nan"
+          (Invalid_argument
+             "create: cannot design a filter with nan dB of stop-band \
+              rejection (attenuation must be finite, in [40, 200])" )
           (mk Float.nan 0.9) ;
-        raises_invalid_arg ~msg:"passband low"
-          "create: cannot preserve 0.4 of the band (passband must be finite, \
-           in [0.5, 0.99])"
+        raises ~msg:"passband low"
+          (Invalid_argument
+             "create: cannot preserve 0.4 of the band (passband must be \
+              finite, in [0.5, 0.99])" )
           (mk 100. 0.4) ;
-        raises_invalid_arg ~msg:"passband high"
-          "create: cannot preserve 0.995 of the band (passband must be finite, \
-           in [0.5, 0.99])"
+        raises ~msg:"passband high"
+          (Invalid_argument
+             "create: cannot preserve 0.995 of the band (passband must be \
+              finite, in [0.5, 0.99])" )
           (mk 100. 0.995) ;
-        raises_invalid_arg ~msg:"passband inf"
-          "create: cannot preserve inf of the band (passband must be finite, \
-           in [0.5, 0.99])"
+        raises ~msg:"passband inf"
+          (Invalid_argument
+             "create: cannot preserve inf of the band (passband must be \
+              finite, in [0.5, 0.99])" )
           (mk 100. Float.infinity) )
   ; test "near-unity ratios are rejected with the drift hint" (fun () ->
         match Resample.Config.create ~sample_rate:44100 ~target:44099 () with

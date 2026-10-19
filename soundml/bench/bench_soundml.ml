@@ -184,6 +184,7 @@ let hpss_benchmarks () =
         Soundml.hpss_of_spectrogram ~power:Float.infinity s32 )
   ; Thumper.bench "hpss signal 30s f32 fft2048 hop512" (fun () ->
         Soundml.hpss stft_config x32 ) ]
+
 (* The phase-vocoder group: time stretching in both directions and a four
    semitone pitch shift, over the same 30 s of mono audio and the same analysis
    geometry, one row per dtype, mirroring the librosa rows of [bench_soundml.py]
@@ -239,19 +240,19 @@ let chroma_cqt_config =
 let cqt_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
   let x64 = Nx.rand Nx.float64 [|n_audio|] in
-  [ Thumper.bench "cqt 30s f32 84/12 hop512" (fun () ->
+  [ Thumper.bench "cqt 30s f32 84-12 hop512" (fun () ->
         Soundml.Cqt.power_spectrum cqt_config x32 )
-  ; Thumper.bench "cqt 30s f64 84/12 hop512" (fun () ->
+  ; Thumper.bench "cqt 30s f64 84-12 hop512" (fun () ->
         Soundml.Cqt.power_spectrum cqt_config x64 )
-  ; Thumper.bench "vqt 30s f32 84/12 gamma-erb hop512" (fun () ->
+  ; Thumper.bench "vqt 30s f32 84-12 gamma-erb hop512" (fun () ->
         Soundml.Cqt.power_spectrum vqt_config x32 )
-  ; Thumper.bench "vqt 30s f64 84/12 gamma-erb hop512" (fun () ->
+  ; Thumper.bench "vqt 30s f64 84-12 gamma-erb hop512" (fun () ->
         Soundml.Cqt.power_spectrum vqt_config x64 )
   ; Thumper.bench "chroma_cqt 30s f32 n252 bpo36 hop512" (fun () ->
         Soundml.chroma_cqt chroma_cqt_config x32 )
   ; Thumper.bench "chroma_cqt 30s f64 n252 bpo36 hop512" (fun () ->
         Soundml.chroma_cqt chroma_cqt_config x64 )
-  ; Thumper.bench "cqt config 84/12" (fun () ->
+  ; Thumper.bench "cqt config 84-12" (fun () ->
         Soundml.Cqt.Config.create ~n_bins:84 ~sample_rate () ) ]
 
 (* The streaming face of the same ladder: the incremental kernel fed the same 30
@@ -276,7 +277,7 @@ let cqt_stream_benchmarks () =
       cut 0
     in
     Thumper.bench
-      (Printf.sprintf "stream 30s f32 84/12 hop512 chunk %d" max_chunk)
+      (Printf.sprintf "stream 30s f32 84-12 hop512 chunk %d" max_chunk)
       (fun () ->
         Soundml.Cqt.Kernel.reset kernel ;
         List.iter (fun c -> ignore (Soundml.Cqt.Kernel.step kernel c)) chunks ;
@@ -287,7 +288,7 @@ let cqt_stream_benchmarks () =
       Soundml.Cqt.Kernel.prepare Nx.complex64 cqt_config Nx.float32 ~channels:1
         ~max_block:n_audio
     in
-    Thumper.bench "stream 30s f32 84/12 hop512 whole" (fun () ->
+    Thumper.bench "stream 30s f32 84-12 hop512 whole" (fun () ->
         Soundml.Cqt.Kernel.reset kernel ;
         ignore (Soundml.Cqt.Kernel.step kernel clip) ;
         ignore (Soundml.Cqt.Kernel.flush kernel) )
@@ -427,7 +428,8 @@ let resample_stage_benchmarks () =
         Soundml.Resample.apply identity clip_id ) ]
 
 let () =
-  Nx.Rng.with_key (Nx.Rng.key 42)
+  exit
+  @@ Nx.Rng.with_key (Nx.Rng.key 42)
   @@ fun () ->
   Thumper.run
     "soundml"
@@ -436,7 +438,7 @@ let () =
        ten-second per-case cap *)
     ~config:Thumper.Config.(default |> deadline 60.)
     ~budgets:
-      [ Thumper.Budget.no_slower_than ~metric:Thumper.Metric.wall_time 0.05
+      [ Thumper.Budget.no_slower_than 0.05
       ; Thumper.Budget.no_more_alloc_than 0.01 ]
     [ Thumper.group "window" (window_benchmarks ())
     ; Thumper.group "pipeline" (pipeline_benchmarks ())

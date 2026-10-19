@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: magnitude and power spectra, frame times
+(* Golden parity against librosa 1.0: magnitude and power spectra, frame times
    and bin frequencies, replayed from the committed vectors under the suite's
    vectors/ directory. The test signal is a 31-bit LCG reproduced here with the
    same integer arithmetic as the generator, so the float64 inputs are

@@ -123,10 +123,13 @@ module Config : sig
 
       [hop] is the frame advance in samples at [sample_rate] and defaults to
       [512]. It also drives the octave recursion: the transform halves the
-      signal rate between octaves only while the hop stays even, so an odd hop
-      analyses every octave at [sample_rate] and a hop divisible by a high
-      power of two additionally licenses an early decimation before the first
-      octave. [pad] is the boundary extension of the per-octave analysis and
+      signal rate between octaves only where the hop is even and the next
+      octave's highest centre frequency sits at most a fifth of the current
+      rate, below the decimator's rolloff (librosa 1.0's guard: ladders that
+      reach high above the base rate keep their top octaves undecimated). An
+      odd hop therefore analyses every octave at [sample_rate], and a hop
+      divisible by a high power of two additionally licenses an early
+      decimation before the first octave. [pad] is the boundary extension of the per-octave analysis and
       defaults to [`Constant 0.] — zero padding, the boundary convention of
       the reference constant-Q transform (unlike its STFT).
 
@@ -412,7 +415,7 @@ module Kernel : sig
   (** [reset k] restores [k] to its freshly prepared state. *)
 end
 
-(** {1:parity Parity with librosa 0.11}
+(** {1:parity Parity with librosa 1.0}
 
     Magnitudes match [librosa.cqt] and [librosa.vqt] at matching explicit
     settings, enforced against committed golden vectors in the test suite. The

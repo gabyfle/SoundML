@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11: constant-Q and variable-Q magnitudes
+(* Golden parity against librosa 1.0: constant-Q and variable-Q magnitudes
    (librosa.vqt, of which librosa.cqt is the gamma = 0 instance), the frequency
    ladder (librosa.cqt_frequencies), the fractional filter lengths and main-lobe
    cutoffs (librosa.filters.wavelet_lengths), librosa's own early-downsampling
@@ -233,7 +233,7 @@ let early_of config =
 
 let early_case (case : Tutils.Golden.case) =
   test case.name (fun () ->
-      equal ~msg:case.name (float 0.) case.values.(0)
+      equal ~msg:case.name float_exact case.values.(0)
         (early_of (config_of_params case)) )
 
 let nyquist_case (case : Tutils.Golden.case) =
@@ -245,7 +245,7 @@ let nyquist_case (case : Tutils.Golden.case) =
         | exception Invalid_argument _ ->
             false
       in
-      equal ~msg:case.name (float 0.) case.values.(0)
+      equal ~msg:case.name float_exact case.values.(0)
         (if accepted then 1. else 0.) )
 
 let support_case (case : Tutils.Golden.case) =

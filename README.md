@@ -59,7 +59,7 @@ $ dune build
 $ dune runtest
 ```
 
-`dune pkg lock` selects OCaml 5.5.0 and dune builds that compiler itself. The first
+`dune pkg lock` selects OCaml 5.5.1 and dune builds that compiler itself. The first
 build therefore takes a while; later ones are served from `~/.cache/dune`. The lock
 directory is not committed, so `dune pkg lock` has to be run once after cloning and
 again whenever `dune-project` changes.
@@ -86,7 +86,7 @@ FFT and framing work SoundML relies on ahead of upstream review. The revision is
 recorded in `dune-project`:
 
 ```
-git+https://github.com/gabyfle/raven.git#69aa608f93ae6583a4d9f8d69c233c9f66bc0920
+git+https://github.com/gabyfle/raven.git#cec410b0bbde98fe94c0b1ac3717211659d00910
 ```
 
 Raven is pre-release and its tensor API still moves between revisions, so moving the

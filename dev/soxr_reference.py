@@ -22,10 +22,11 @@ The measurements:
   numbers from the acceptance table, and a threshold soxr HQ itself failed
   would be mis-calibrated.
 
-Regenerate (the venv pin — python-soxr bundles libsoxr):
+Regenerate from the repository root (the venv pin — python-soxr bundles
+libsoxr):
 
-    uv run --python 3.13 --with 'soxr==1.1.0' --with 'numpy==2.4.6' \
-      --with 'scipy==1.18.0' python bench/soxr_reference.py
+    uv run --python 3.15 --with 'soxr==1.1.0' --with 'numpy==2.5.4' \
+      --with 'scipy==1.18.1' python dev/soxr_reference.py
 """
 
 from __future__ import annotations

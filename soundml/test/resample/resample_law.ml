@@ -202,7 +202,7 @@ let identity_tests =
         let cfg = Resample.Config.create ~sample_rate:8000 ~target:8000 () in
         let p = Resample.stage cfg in
         let rate_t =
-          testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+          Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
         in
         equal ~msg:"latency" rate_t
           {Pipeline.Rate.num= 0; den= 1}

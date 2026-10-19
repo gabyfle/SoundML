@@ -217,13 +217,15 @@ let empty_case () =
 let error_case () =
   test "rank-zero and non-executor dtypes are refused" (fun () ->
       let cfg = Resample.Config.create ~sample_rate:44100 ~target:48000 () in
-      raises_invalid_arg ~msg:"rank zero"
-        "apply_gemm: cannot resample a rank-zero tensor (the time axis must \
-         exist)" (fun () ->
+      raises ~msg:"rank zero"
+        (Invalid_argument
+           "apply_gemm: cannot resample a rank-zero tensor (the time axis must \
+            exist)" ) (fun () ->
           ignore (Resample.apply_gemm cfg (Nx.scalar Nx.float64 1.)) ) ;
-      raises_invalid_arg ~msg:"float16"
-        "apply_gemm: cannot resample float16 audio (the executor carries \
-         float32 and float64)" (fun () ->
+      raises ~msg:"float16"
+        (Invalid_argument
+           "apply_gemm: cannot resample float16 audio (the executor carries \
+            float32 and float64)" ) (fun () ->
           ignore (Resample.apply_gemm cfg (Nx.zeros Nx.float16 [|8|])) ) )
 
 (* {2 An impulse probe: the two surfaces place energy identically} *)

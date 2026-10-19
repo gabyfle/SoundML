@@ -40,10 +40,10 @@
     never expose a complex dtype.
 
     Defaults are the Hann window, [hop = fft_size / 4] and centered frames
-    over reflect padding; numerical parity with librosa 0.11 — including the
+    over reflect padding; numerical parity with librosa 1.0 — including the
     double interior above — is enforced against committed golden vectors in
     the test suite. [`Centered] and [`Left] alignment correspond to its
-    [center=True] and [center=False]; librosa 0.11 itself
+    [center=True] and [center=False]; librosa 1.0 itself
     pads with zeros by default — pass [~pad:(`Constant 0.)] to reproduce its
     defaults exactly. *)
 

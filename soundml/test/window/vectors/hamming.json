@@ -1,7 +1,7 @@
 {
 "schema": 1,
 "suite": "windows",
-"generator": {"python": "3.13.7", "numpy": "2.4.6", "scipy": "1.18.0", "librosa": "0.11.0"},
+"generator": {"python": "3.15.0", "numpy": "2.5.4", "scipy": "1.18.1", "librosa": "1.0.0"},
 "cases": [
   {"name": "hamming_periodic_1", "params": {"window": "hamming", "periodic": true, "n": 1}, "shape": [1], "values": [1.0]},
   {"name": "hamming_periodic_2", "params": {"window": "hamming", "periodic": true, "n": 2}, "shape": [2], "values": [0.08000000000000007, 1.0]},

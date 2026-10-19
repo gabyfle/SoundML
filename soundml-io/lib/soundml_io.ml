@@ -898,8 +898,8 @@ let read_chunk_resampled (type a) (st : a state) rs ~frames out :
         st.finished <- true ;
         Ok None
       end
-      else begin
-        match out with
+      else
+        begin match out with
         | Some o ->
             serve_from_carry st ~dst_ba:(planar_array1 o) ~dst_total:frames
               ~dst_off:0 ~n ;
@@ -910,7 +910,7 @@ let read_chunk_resampled (type a) (st : a state) rs ~frames out :
               ~dst_ba:(Nx_buffer.to_bigarray1 buf)
               ~dst_total:n ~dst_off:0 ~n ;
             Ok (Some (Nx.of_buffer buf ~shape:[|st.channels_out; n|]))
-      end
+        end
 
 let read_chunk st ?out ~frames () =
   ensure_open st "Soundml_io.Reader.read" ;

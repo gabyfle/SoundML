@@ -580,10 +580,12 @@ let error_tests =
            its whole length reaches that position with exactly one tap, and that
            tap is the zero the window opens on *)
         let c = Stft.Config.create ~fft_size:2048 ~hop:2048 () in
-        raises_invalid_arg ~msg:"hop equal to the frame"
-          "invert: cannot invert a 2048-point window advanced by 2048 samples \
-           inside a 2048-point frame (the overlap-added squared window must \
-           stay above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"hop equal to the frame"
+          (Invalid_argument
+             "invert: cannot invert a 2048-point window advanced by 2048 \
+              samples inside a 2048-point frame (the overlap-added squared \
+              window must stay above 1e-10 of its largest value at every \
+              position)" ) (fun () ->
             ignore
               (Stft.invert Nx.float64 c (Nx.zeros Nx.complex128 [|1025; 3|])) ) ;
         (* a gap between the window supports: the taper is shorter than the
@@ -591,18 +593,21 @@ let error_tests =
         let gapped =
           Stft.Config.create ~fft_size:2048 ~win_length:1200 ~hop:1500 ()
         in
-        raises_invalid_arg ~msg:"window shorter than the hop"
-          "invert: cannot invert a 1200-point window advanced by 1500 samples \
-           inside a 2048-point frame (the overlap-added squared window must \
-           stay above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"window shorter than the hop"
+          (Invalid_argument
+             "invert: cannot invert a 1200-point window advanced by 1500 \
+              samples inside a 2048-point frame (the overlap-added squared \
+              window must stay above 1e-10 of its largest value at every \
+              position)" ) (fun () ->
             ignore
               (Stft.invert Nx.float64 gapped
                  (Nx.zeros Nx.complex128 [|1025; 3|]) ) ) ;
-        raises_invalid_arg ~msg:"griffin_lim checks the same criterion"
-          "griffin_lim: cannot invert a 2048-point window advanced by 2048 \
-           samples inside a 2048-point frame (the overlap-added squared window \
-           must stay above 1e-10 of its largest value at every position)"
-          (fun () ->
+        raises ~msg:"griffin_lim checks the same criterion"
+          (Invalid_argument
+             "griffin_lim: cannot invert a 2048-point window advanced by 2048 \
+              samples inside a 2048-point frame (the overlap-added squared \
+              window must stay above 1e-10 of its largest value at every \
+              position)" ) (fun () ->
             ignore (Stft.griffin_lim c (Nx.zeros Nx.float64 [|1025; 3|])) ) )
   ; test "a hop as wide as the frame is accepted when the fold clears"
       (fun () ->
@@ -657,10 +662,12 @@ let error_tests =
               ~msg:(Printf.sprintf "%s: the fold ratio is %.4g" name (lo /. hi))
               (lo /. hi > 1e-10 = (hop = 56)) )
           [63; 56] ;
-        raises_invalid_arg ~msg:"below the floor"
-          "invert: cannot invert a 64-point window advanced by 63 samples \
-           inside a 64-point frame (the overlap-added squared window must stay \
-           above 1e-10 of its largest value at every position)" (fun () ->
+        raises ~msg:"below the floor"
+          (Invalid_argument
+             "invert: cannot invert a 64-point window advanced by 63 samples \
+              inside a 64-point frame (the overlap-added squared window must \
+              stay above 1e-10 of its largest value at every position)" )
+          (fun () ->
             ignore
               (Stft.invert Nx.float64 (cell 63)
                  (Nx.zeros Nx.complex128 [|33; 3|]) ) ) ;
@@ -672,17 +679,21 @@ let error_tests =
         equal ~msg:"above the floor" int 3 (Stft.frames accepted ~n:out) )
   ; test "the spectral shape is checked before any transform" (fun () ->
         let c = config (32, 8, 20) `Centered `Reflect in
-        raises_invalid_arg ~msg:"rank one"
-          "invert: cannot invert a rank-1 tensor (the bin and frame axes must \
-           exist)" (fun () ->
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "invert: cannot invert a rank-1 tensor (the bin and frame axes \
+              must exist)" ) (fun () ->
             ignore (Stft.invert Nx.float64 c (Nx.zeros Nx.complex128 [|17|])) ) ;
-        raises_invalid_arg ~msg:"wrong bin count"
-          "invert: cannot invert 16 frequency bins of a 32-point transform \
-           (the bin axis must hold fft_size / 2 + 1 = 17 values)" (fun () ->
+        raises ~msg:"wrong bin count"
+          (Invalid_argument
+             "invert: cannot invert 16 frequency bins of a 32-point transform \
+              (the bin axis must hold fft_size / 2 + 1 = 17 values)" )
+          (fun () ->
             ignore (Stft.invert Nx.float64 c (Nx.zeros Nx.complex128 [|16; 4|])) ) ;
-        raises_invalid_arg ~msg:"negative length"
-          "invert: cannot synthesise a signal of length -1 (length must be \
-           non-negative)" (fun () ->
+        raises ~msg:"negative length"
+          (Invalid_argument
+             "invert: cannot synthesise a signal of length -1 (length must be \
+              non-negative)" ) (fun () ->
             ignore
               (Stft.invert Nx.float64 c ~length:(-1)
                  (Nx.zeros Nx.complex128 [|17; 4|]) ) ) ) ]

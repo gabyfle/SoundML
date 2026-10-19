@@ -51,7 +51,7 @@ let bits t = Array.map Int64.bits_of_float (Nx.to_array t)
 
 let bit_array = array int64
 
-let rate_t = testable ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal ()
+let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 let r num den = {Pipeline.Rate.num; den}
 
@@ -380,10 +380,11 @@ let threading_tests =
           (bits (offline c))
           (bits (concat_last (List.rev !outs))) )
   ; test "an uninvertible geometry is rejected at the stage" (fun () ->
-        raises_invalid_arg ~msg:"a periodic Hann advanced by its own length"
-          "synthesis_stage: cannot invert a 8-point window advanced by 8 \
-           samples inside a 8-point frame (the overlap-added squared window \
-           must stay above 1e-10 of its largest value at every position)"
+        raises ~msg:"a periodic Hann advanced by its own length"
+          (Invalid_argument
+             "synthesis_stage: cannot invert a 8-point window advanced by 8 \
+              samples inside a 8-point frame (the overlap-added squared window \
+              must stay above 1e-10 of its largest value at every position)" )
           (fun () ->
             ignore
               (Stft.synthesis_stage Nx.float64

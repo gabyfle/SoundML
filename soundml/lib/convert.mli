@@ -3,7 +3,7 @@
     Decibel rescaling of power and amplitude spectra, the mel and MIDI
     frequency scales, and the frame grid. Every function takes its tensor
     last, preserves the element dtype, and returns a fresh tensor. Numerical
-    semantics follow librosa 0.11; every deviation is documented on the
+    semantics follow librosa 1.0; every deviation is documented on the
     function.
 
     The decibel conversions are the flat, whole-tensor face of the {!Db}
@@ -25,10 +25,12 @@ val power_to_db :
     the input values and the reference before the logarithms, so the result
     is always finite; a power that is not positive — which a power spectrum
     does not contain — sits at the floor. When [top_db] is given, the result is clamped below to
-    [m - top_db], where [m] is the maximum decibel value over the {e whole}
-    tensor — a whole-tensor reduction, not an elementwise operation: over a
-    spectrogram the threshold is global across channels, bins and frames
-    alike. Nothing is clamped by default — a deviation from the reference
+    [m - top_db], where [m] is the maximum decibel value over the last two
+    axes — a reduction, not an elementwise operation. Up to rank two that is
+    the {e whole} tensor, so over a single spectrogram the threshold is global
+    across bins and frames alike; from rank three on, each channel (each
+    index of the leading axes) gets its own threshold, as librosa 1.0's
+    multichannel decibels do. Nothing is clamped by default — a deviation from the reference
     implementation, which clamps at [top_db = 80.] unless told otherwise;
     this function applies exactly what
     the caller asks for. For the streaming consequences of that reduction,

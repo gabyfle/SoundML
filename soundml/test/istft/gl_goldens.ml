@@ -1,4 +1,4 @@
-(* Golden parity against librosa 0.11 for Griffin-Lim phase reconstruction, at
+(* Golden parity against librosa 1.0 for Griffin-Lim phase reconstruction, at
    the settings where the reference is deterministic: the all-ones initial
    phase, which is our [`Zero_phase], and zero padding, which is what the
    reference pads with. The padding mode is geometry here rather than a free
