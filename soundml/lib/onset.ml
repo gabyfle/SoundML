@@ -39,9 +39,8 @@ let last_dim t = Nx.dim (Nx.ndim t - 1) t
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
@@ -68,12 +67,14 @@ let state_create lag = {lag; carry= None}
 
 let state_reset s = s.carry <- None
 
-(* [flux dtype cur prev] is the mean over bins of [relu (cur - prev)], in
+(* [flux dtype cur prev] is the mean over bins of [max 0 (cur - prev)], in
    double, rounded to [dtype] once at the boundary. *)
 let flux dtype cur prev =
   Nx.cast dtype
     (Nx.mean ~axes:[-2]
-       (Nx.relu (Nx.sub (Nx.cast Nx.float64 cur) (Nx.cast Nx.float64 prev))) )
+       (Nx.maximum_s
+          (Nx.sub (Nx.cast Nx.float64 cur) (Nx.cast Nx.float64 prev))
+          0. ) )
 
 (* [state_step fn s chunk] feeds [chunk] ([[...; bins; frames]], borrowed) and
    is the envelope of exactly its frames. The differences run batched over the

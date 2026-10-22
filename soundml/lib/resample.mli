@@ -283,11 +283,10 @@ module Kernel : sig
       for cascade plans, the fixed stage-1 → stage-2 hand-off buffer — a
       direct {!step} allocates exactly the output tensor. An FFT-executed
       stage keeps a per-channel block carry ([N] samples) here instead of the
-      history, a GEMM-executed stage a per-channel window carry and the one
-      gather its calls reuse, and their {!step} additionally allocates bounded
-      per-block transform or per-call product transients on top of the output —
-      gated by the allocation tests, and collapsing back to output-only when
-      the tensor library grows destination passing.
+      history, a GEMM-executed stage a per-channel window carry, and their
+      {!step} additionally allocates bounded per-block transform or per-call
+      gather and product transients on top of the output — gated by the
+      allocation tests.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
       [dtype] is neither float32 nor float64 — the two sample types the

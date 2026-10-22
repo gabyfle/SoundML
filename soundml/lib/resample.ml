@@ -89,9 +89,40 @@ let ceil_pos a b = if a <= 0 then 0 else ((a - 1) / b) + 1
 
 let rec gcd a b = if b = 0 then a else gcd b (a mod b)
 
-(* The flat storage of a contiguous tensor, shared (not copied): the seam
-   between config-owned filter tensors and the C executor's arrays. *)
-let array1_of t = Nx_buffer.to_bigarray1 (Nx.to_buffer t)
+(* The seam between tensors and the C executor's arrays. Kernel state lives in
+   Bigarrays the kernel owns; a tensor — a config-owned filter, a chunk, a
+   transform result — is read in place through [reading], and a result is filled
+   into a fresh array that the returned tensor then takes over ([tensor_of]), so
+   the seam copies no sample of a contiguous tensor on either side. *)
+
+(* [kind dtype] is the Bigarray kind of the two dtypes the executor carries;
+   [check_dtype] admits no other. *)
+let kind : type a. (float, a) Nx.dtype -> (float, a) Bigarray.kind = function
+  | Nx.Float32 ->
+      Bigarray.float32
+  | Nx.Float64 ->
+      Bigarray.float64
+  | _ ->
+      assert false
+
+(* [reading t k f] is [f] applied to the elements of [t] in C order as an array
+   of kind [k]: [t]'s own storage when it holds them as one run, a contiguous
+   copy otherwise. The array is valid only during the call and is never
+   written. *)
+let reading t k f = Rig.Buffer.read (Nx.to_buffer t) k f
+
+(* [array1 k n] is a fresh, uninitialised array of [n] elements of kind [k];
+   [zeroed k n] is the same array zero-filled. *)
+let array1 k n = Bigarray.Array1.create k Bigarray.c_layout n
+
+let zeroed k n =
+  let a = array1 k n in
+  Bigarray.Array1.fill a 0. ; a
+
+(* [tensor_of a shape] is the tensor of [shape] over the elements of [a],
+   without a copy. The tensor owns [a] from then on: nothing writes it again. *)
+let tensor_of a shape =
+  Nx.of_bigarray (Bigarray.reshape (Bigarray.genarray_of_array1 a) shape)
 
 (* {1 Filter design}
 
@@ -190,19 +221,19 @@ let bank_of_prototype ~l ~k h =
    layout only when the dtype-instantiated bank passes the L1 edge: below it
    both layouts are resident, the walk order is free, and the executor's
    phase-major loop carries no row counter — measured 6% on the short-dot wide
-   stages of the 8 -> 48 kHz cascade. Built by blitting rows between the two
-   tensors' storage: element-wise construction (an [Nx.create] from a staging
-   array, or generic bigarray access) boxes per element — a measured +15% on
-   [Config.create]. *)
+   stages of the 8 -> 48 kHz cascade. Built by blitting rows out of the bank's
+   storage into the array the new tensor takes over: element-wise construction
+   (an [Nx.create] from a staging array, or generic bigarray access) boxes per
+   element — a measured +15% on [Config.create]. *)
 let visit_bank ~l ~m ~taps bank =
-  let v = Nx.zeros Nx.float64 [|l; taps|] in
-  let src = array1_of bank and dst = array1_of v in
-  for j = 0 to l - 1 do
-    Bigarray.Array1.blit
-      (Bigarray.Array1.sub src (j * m mod l * taps) taps)
-      (Bigarray.Array1.sub dst (j * taps) taps)
-  done ;
-  v
+  let dst = array1 Bigarray.float64 (l * taps) in
+  reading bank Bigarray.float64 (fun src ->
+      for j = 0 to l - 1 do
+        Bigarray.Array1.blit
+          (Bigarray.Array1.sub src (j * m mod l * taps) taps)
+          (Bigarray.Array1.sub dst (j * taps) taps)
+      done ) ;
+  tensor_of dst [|l; taps|]
 
 (* [gemm_bank ~l ~m ~k ~blocks bank] is the [P; blocks*L] matrix [G] of the
    tensor formulation ([apply_gemm]): column [r] (an output within a
@@ -1221,7 +1252,9 @@ let stage_out_bound sp ~n =
 
 module Kernel = struct
   type 'a direct_state =
-    { bank: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+    { bank: (float, 'a) Nx.t
+          (* the config's bank at the kernel dtype, cast once per kernel and
+             read in place by every call *)
     ; visit: bool
           (* [bank]'s layout: [svisit] when the instantiated bank passes the L1
              edge (the walk then streams it forward), [sbank] under it (the
@@ -1236,11 +1269,10 @@ module Kernel = struct
     { op: ols_plan
     ; ohs: Nx.complex128_t
           (* the config's spectrum, forced once per kernel family *)
-    ; carry_t: (float, 'a) Nx.t (* [channels; N] — keeps [carry] alive *)
     ; carry: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-          (* the grid tail: stage-input samples [next block window start ..
-             fed), planar per channel; starts as the [2K + delta] virtual zeros
-             before the stream *)
+          (* [channels; N], the grid tail: stage-input samples [next block
+             window start .. fed), planar per channel; starts as the [2K +
+             delta] virtual zeros before the stream *)
     ; mutable oblocks: int (* blocks executed so far *) }
 
   type 'a gemm_state =
@@ -1251,15 +1283,10 @@ module Kernel = struct
     ; gp: int (* P: the stage inputs one block-row reads *)
     ; gb: int (* B = gr * M: the stage inputs one call advances *)
     ; gspan: int (* B + 2K: the stage inputs one call reads *)
-    ; ga: (float, 'a) Nx.t
-          (* the [gr; P] gather, the product's left operand; one call's worth,
-             reused by every call *)
-    ; gaa: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-    ; gcarry_t: (float, 'a) Nx.t (* [channels; B + 2K] — keeps [gcarry] alive *)
     ; gcarry: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-          (* the window tail: stage inputs [next call window start .. fed),
-             planar per channel; starts as the [K] virtual zeros before the
-             stream *)
+          (* [channels; B + 2K], the window tail: stage inputs [next call window
+             start .. fed), planar per channel; starts as the [K] virtual zeros
+             before the stream *)
     ; mutable gcalls: int (* calls executed so far *) }
 
   type 'a exec_state =
@@ -1283,8 +1310,9 @@ module Kernel = struct
           (* the stage-1 -> stage-2 hand-off, planar [channels; mid_cap]; empty
              for single-stage plans. Allocated here, once: a direct [step]
              allocates exactly the output tensor (an OLS step additionally
-             allocates its transform transients — the documented deviation until
-             nx grows destination-passing) *)
+             allocates its transform transients and a GEMM step its per-call
+             gathers and products — tensors are values, so every operation's
+             result is fresh) *)
     ; mutable drained: bool
     ; mutable leading: int array (* leading shape of the last chunk *) }
 
@@ -1360,40 +1388,28 @@ module Kernel = struct
             let p_len = (2 * sp.sk) + 1 + ((sp.sl - 1) * sp.sm / sp.sl) in
             let rows = gemm_rows_of ~m:sp.sm in
             let span = (rows * sp.sm) + (2 * sp.sk) in
-            let ga = Nx.empty dtype [|rows; p_len|] in
-            let gcarry_t = Nx.zeros dtype [|channels; span|] in
             Gx
               { gg= Nx.cast dtype (Lazy.force bank)
               ; gr= rows
               ; gp= p_len
               ; gb= rows * sp.sm
               ; gspan= span
-              ; ga
-              ; gaa= array1_of ga
-              ; gcarry_t
-              ; gcarry= array1_of gcarry_t
+              ; gcarry= zeroed (kind dtype) (channels * span)
               ; gcalls= 0 }
         | Sdirect ->
-            let hist = array1_of (Nx.zeros dtype [|channels * 2 * sp.sk|]) in
-            let elt = Bigarray.kind_size_in_bytes (Bigarray.Array1.kind hist) in
+            let elt = Bigarray.kind_size_in_bytes (kind dtype) in
             let visit = sp.sl * ((2 * sp.sk) + 1) * elt > l1_edge_bytes in
             Dx
-              { bank=
-                  array1_of
-                    (Nx.cast dtype (if visit then sp.svisit else sp.sbank))
+              { bank= Nx.cast dtype (if visit then sp.svisit else sp.sbank)
               ; visit
-              ; hist
+              ; hist= zeroed (kind dtype) (channels * 2 * sp.sk)
               ; scratch=
-                  array1_of
-                    (Nx.empty dtype [|(2 * sp.sk) + Stdlib.max max_in sp.sk|])
-              }
+                  array1 (kind dtype) ((2 * sp.sk) + Stdlib.max max_in sp.sk) }
         | Sols o ->
-            let carry_t = Nx.zeros dtype [|channels; o.on|] in
             Ox
               { op= o
               ; ohs= Lazy.force o.oh
-              ; carry_t
-              ; carry= array1_of carry_t
+              ; carry= zeroed (kind dtype) (channels * o.on)
               ; oblocks= 0 }
       in
       {sp; ex; fed= 0; emitted= 0}
@@ -1405,7 +1421,7 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s|]
-        ; mid= array1_of (Nx.empty dtype [|0|])
+        ; mid= array1 (kind dtype) 0
         ; drained= false
         ; leading= [|channels|] }
     | [s1; s2] ->
@@ -1417,7 +1433,7 @@ module Kernel = struct
         ; channels
         ; max_block
         ; st= [|mk max_block s1; mk cap s2|]
-        ; mid= array1_of (Nx.empty dtype [|channels * cap|])
+        ; mid= array1 (kind dtype) (channels * cap)
         ; drained= false
         ; leading= [|channels|] }
     | _ ->
@@ -1436,8 +1452,9 @@ module Kernel = struct
     let t = st.emitted * st.sp.sm in
     let row0 = st.emitted mod st.sp.sl in
     let s0 = (t / st.sp.sl) + st.sp.sk - st.fed in
-    resample_step_c dx.bank dx.hist dx.scratch x y n n_out k.channels st.sp.sk
-      st.sp.sl st.sp.sm row0 s0 y_off y_stride dx.visit is_flush ;
+    reading dx.bank (kind k.dtype) (fun bank ->
+        resample_step_c bank dx.hist dx.scratch x y n n_out k.channels st.sp.sk
+          st.sp.sl st.sp.sm row0 s0 y_off y_stride dx.visit is_flush ) ;
     st.emitted <- st.emitted + n_out
 
   type 'a feed_src =
@@ -1480,9 +1497,8 @@ module Kernel = struct
     else begin
       let t = ((alen - o.on) / o.ob) + 1 in
       (* assemble the grid span [window of block oblocks .. fed + n) as one
-         fresh planar tensor: carry, then this call's samples *)
-      let av_t = Nx.empty k.dtype [|ch; alen|] in
-      let av = array1_of av_t in
+         fresh planar [ch; alen] array: carry, then this call's samples *)
+      let av = array1 (kind k.dtype) (ch * alen) in
       for c = 0 to ch - 1 do
         Bigarray.Array1.blit
           (Bigarray.Array1.sub os.carry (c * o.on) pend)
@@ -1508,14 +1524,13 @@ module Kernel = struct
       let transform_spec x =
         let lead_shape = Array.sub (Nx.shape x) 0 (Nx.ndim x - 1) in
         let lines = Array.fold_left ( * ) 1 lead_shape in
-        let shaped =
-          Nx.empty Nx.complex128 (Array.append lead_shape [|(w / 2) + 1|])
-        in
-        resample_shape_c (array1_of x) (array1_of os.ohs) (array1_of shaped)
-          lines o.on sp.sl sp.sm ;
+        let shaped = array1 Bigarray.complex64 (lines * ((w / 2) + 1)) in
+        reading x Bigarray.complex64 (fun xa ->
+            reading os.ohs Bigarray.complex64 (fun ha ->
+                resample_shape_c xa ha shaped lines o.on sp.sl sp.sm ) ) ;
         Nx.irfft k.dtype ~n:w
           ~norm:(if ols_folds_inverse w then `Forward else `Backward)
-          shaped
+          (tensor_of shaped (Array.append lead_shape [|(w / 2) + 1|]))
       in
       let transform v = transform_spec (Nx.rfft Nx.complex128 v) in
       (* [framed_spec ~j0 t0] is the half spectrum of the [t0] overlap-save
@@ -1525,8 +1540,7 @@ module Kernel = struct
          the batch is bit-identical to the per-block loop under the standing
          probe. *)
       let framed_spec ~j0 t0 =
-        let f = Nx.empty k.dtype [|ch; t0; o.on|] in
-        let fa = array1_of f in
+        let fa = array1 (kind k.dtype) (ch * t0 * o.on) in
         for c = 0 to ch - 1 do
           for j = 0 to t0 - 1 do
             Bigarray.Array1.blit
@@ -1534,31 +1548,36 @@ module Kernel = struct
               (Bigarray.Array1.sub fa (((c * t0) + j) * o.on) o.on)
           done
         done ;
-        Nx.rfft Nx.complex128 f
+        Nx.rfft Nx.complex128 (tensor_of fa [|ch; t0; o.on|])
       in
       (* emit: block [b]'s run extends the output to [ols_hi b]; copy each
          block's contiguous kept span to its place in [y] *)
       let out_pos = ref 0 in
-      let emit r_arr ~stack ~j0 =
-        for j = 0 to stack - 1 do
-          let b = os.oblocks + j0 + j in
-          let i0 = st.emitted + !out_pos in
-          let cnt = Stdlib.min (ols_hi sp o b + 1 - i0) (n_out - !out_pos) in
-          if cnt > 0 then begin
-            let pos =
-              if sp.sl > 1 then i0 + (sp.sl * ((3 * kk) - (b * o.ob)))
-              else ((i0 * sp.sm) + (3 * kk) + o.odelta - (b * o.ob)) / sp.sm
-            in
-            for c = 0 to ch - 1 do
-              Bigarray.Array1.blit
-                (Bigarray.Array1.sub r_arr ((((c * stack) + j) * w) + pos) cnt)
-                (Bigarray.Array1.sub y
-                   (y_off + (c * y_stride) + (i0 - st.emitted))
-                   cnt )
-            done ;
-            out_pos := !out_pos + cnt
-          end
-        done
+      let emit r ~stack ~j0 =
+        reading r (kind k.dtype) (fun r_arr ->
+            for j = 0 to stack - 1 do
+              let b = os.oblocks + j0 + j in
+              let i0 = st.emitted + !out_pos in
+              let cnt =
+                Stdlib.min (ols_hi sp o b + 1 - i0) (n_out - !out_pos)
+              in
+              if cnt > 0 then begin
+                let pos =
+                  if sp.sl > 1 then i0 + (sp.sl * ((3 * kk) - (b * o.ob)))
+                  else ((i0 * sp.sm) + (3 * kk) + o.odelta - (b * o.ob)) / sp.sm
+                in
+                for c = 0 to ch - 1 do
+                  Bigarray.Array1.blit
+                    (Bigarray.Array1.sub r_arr
+                       ((((c * stack) + j) * w) + pos)
+                       cnt )
+                    (Bigarray.Array1.sub y
+                       (y_off + (c * y_stride) + (i0 - st.emitted))
+                       cnt )
+                done ;
+                out_pos := !out_pos + cnt
+              end
+            done )
       in
       if ols_batch then begin
         (* stacked transforms over this call's blocks, in tiles of at most
@@ -1569,23 +1588,24 @@ module Kernel = struct
         if t <= tile then
           (* the common shape — every step and every clip under ~15 s mono: one
              stack, no tiling views, exactly the pre-tiling call *)
-          emit (array1_of (transform_spec (framed_spec ~j0:0 t))) ~stack:t ~j0:0
+          emit (transform_spec (framed_spec ~j0:0 t)) ~stack:t ~j0:0
         else begin
           let j0 = ref 0 in
           while !j0 < t do
             let tsz = Stdlib.min tile (t - !j0) in
-            emit
-              (array1_of (transform_spec (framed_spec ~j0:!j0 tsz)))
-              ~stack:tsz ~j0:!j0 ;
+            emit (transform_spec (framed_spec ~j0:!j0 tsz)) ~stack:tsz ~j0:!j0 ;
             j0 := !j0 + tsz
           done
         end
       end
-      else
+      else begin
+        (* the span is complete: from here on it is only read *)
+        let av_t = tensor_of av [|ch; alen|] in
         for j = 0 to t - 1 do
-          let v = Nx.shrink [|(0, ch); (j * o.ob, (j * o.ob) + o.on)|] av_t in
-          emit (array1_of (transform v)) ~stack:1 ~j0:j
-        done ;
+          let v = Nx.slice [Nx.A; Nx.R (j * o.ob, (j * o.ob) + o.on)] av_t in
+          emit (transform v) ~stack:1 ~j0:j
+        done
+      end ;
       assert (!out_pos = n_out) ;
       (* the grid tail becomes the next carry *)
       let pend' = alen - (t * o.ob) in
@@ -1614,12 +1634,14 @@ module Kernel = struct
        start, then everything fed past the current call's window start *)
     let pend = st.fed + kk - (gs.gcalls * gs.gb) in
     let alen = pend + n in
-    (* [gather c j] lays call [j]'s block-rows into the product's left operand:
-       channel [c]'s stage inputs [j*B, j*B + B + 2K), cut into the [R] windows
-       of [P] samples advancing [M] that the rows read. Window offsets below
-       [held] are still in the carry, the rest are in this call's input, so a
-       row crossing that point is two runs and every other row is one. *)
+    (* [gather c j] is the product's left operand for call [j], the [R; P]
+       block-rows laid into a fresh array that the operand takes over: channel
+       [c]'s stage inputs [j*B, j*B + B + 2K), cut into the [R] windows of [P]
+       samples advancing [M] that the rows read. Window offsets below [held] are
+       still in the carry, the rest are in this call's input, so a row crossing
+       that point is two runs and every other row is one. *)
     let gather c j =
+      let ga = array1 (kind k.dtype) (gs.gr * gs.gp) in
       let off = j * gs.gb in
       let held = Stdlib.min span (Stdlib.max 0 (pend - off)) in
       for r = 0 to gs.gr - 1 do
@@ -1628,10 +1650,10 @@ module Kernel = struct
         if kept > 0 then
           Bigarray.Array1.blit
             (Bigarray.Array1.sub gs.gcarry ((c * span) + off + w) kept)
-            (Bigarray.Array1.sub gs.gaa dst kept) ;
+            (Bigarray.Array1.sub ga dst kept) ;
         let rest = gs.gp - kept in
         if rest > 0 then
-          let into = Bigarray.Array1.sub gs.gaa (dst + kept) rest in
+          let into = Bigarray.Array1.sub ga (dst + kept) rest in
           match src with
           | From (s, stride) ->
               Bigarray.Array1.blit
@@ -1641,7 +1663,8 @@ module Kernel = struct
                 into
           | Silence ->
               Bigarray.Array1.fill into 0.
-      done
+      done ;
+      tensor_of ga [|gs.gr; gs.gp|]
     in
     let t = if alen < span then 0 else ((alen - span) / gs.gb) + 1 in
     if t > 0 then begin
@@ -1654,13 +1677,15 @@ module Kernel = struct
         if cnt > 0 then begin
           let pos = i0 - (b * per_call) in
           for c = 0 to ch - 1 do
-            gather c j ;
-            let res = array1_of (Nx.matmul gs.ga gs.gg) in
-            Bigarray.Array1.blit
-              (Bigarray.Array1.sub res pos cnt)
-              (Bigarray.Array1.sub y
-                 (y_off + (c * y_stride) + (i0 - st.emitted))
-                 cnt )
+            reading
+              (Nx.matmul (gather c j) gs.gg)
+              (kind k.dtype)
+              (fun res ->
+                Bigarray.Array1.blit
+                  (Bigarray.Array1.sub res pos cnt)
+                  (Bigarray.Array1.sub y
+                     (y_off + (c * y_stride) + (i0 - st.emitted))
+                     cnt ) )
           done ;
           out_pos := !out_pos + cnt
         end
@@ -1784,26 +1809,26 @@ module Kernel = struct
      stage 2 is invariant to how that sequence reaches it — the composite keeps
      the law by composition, not by re-proof. *)
   let run k chunk ~n ~y_off ~y_stride y =
-    let x = array1_of chunk in
-    match k.st with
-    | [|s|] ->
-        let n_out = avail s (s.fed + n) - s.emitted in
-        if n_out = 0 then feed0 k s ~n x
-        else feed k s ~n ~n_out ~y_off ~y_stride x y ;
-        s.fed <- s.fed + n
-    | [|s1; s2|] ->
-        let n1 = avail s1 (s1.fed + n) - s1.emitted in
-        if n1 = 0 then feed0 k s1 ~n x
-        else feed k s1 ~n ~n_out:n1 ~y_off:0 ~y_stride:n1 x k.mid ;
-        s1.fed <- s1.fed + n ;
-        if n1 > 0 then begin
-          let n2 = avail s2 (s2.fed + n1) - s2.emitted in
-          if n2 = 0 then feed0 k s2 ~n:n1 k.mid
-          else feed k s2 ~n:n1 ~n_out:n2 ~y_off ~y_stride k.mid y ;
-          s2.fed <- s2.fed + n1
-        end
-    | _ ->
-        assert false
+    reading chunk (kind k.dtype) (fun x ->
+        match k.st with
+        | [|s|] ->
+            let n_out = avail s (s.fed + n) - s.emitted in
+            if n_out = 0 then feed0 k s ~n x
+            else feed k s ~n ~n_out ~y_off ~y_stride x y ;
+            s.fed <- s.fed + n
+        | [|s1; s2|] ->
+            let n1 = avail s1 (s1.fed + n) - s1.emitted in
+            if n1 = 0 then feed0 k s1 ~n x
+            else feed k s1 ~n ~n_out:n1 ~y_off:0 ~y_stride:n1 x k.mid ;
+            s1.fed <- s1.fed + n ;
+            if n1 > 0 then begin
+              let n2 = avail s2 (s2.fed + n1) - s2.emitted in
+              if n2 = 0 then feed0 k s2 ~n:n1 k.mid
+              else feed k s2 ~n:n1 ~n_out:n2 ~y_off ~y_stride k.mid y ;
+              s2.fed <- s2.fed + n1
+            end
+        | _ ->
+            assert false )
 
   (* [drain_run k ~y_off ~y_stride y] writes the [drain_outputs k] tail. A
      cascade drains in stage order and truncates: stage 1 flushes its exact ceil
@@ -1871,9 +1896,9 @@ module Kernel = struct
         None
       end
       else begin
-        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-        run k chunk ~n ~y_off:0 ~y_stride:n_out (array1_of out) ;
-        Some out
+        let y = array1 (kind k.dtype) (k.channels * n_out) in
+        run k chunk ~n ~y_off:0 ~y_stride:n_out y ;
+        Some (tensor_of y (Array.append k.leading [|n_out|]))
       end
 
   let flush k =
@@ -1883,9 +1908,9 @@ module Kernel = struct
       let n_out = drain_outputs k in
       if n_out = 0 then None
       else begin
-        let out = Nx.empty k.dtype (Array.append k.leading [|n_out|]) in
-        drain_run k ~y_off:0 ~y_stride:n_out (array1_of out) ;
-        Some out
+        let y = array1 (kind k.dtype) (k.channels * n_out) in
+        drain_run k ~y_off:0 ~y_stride:n_out y ;
+        Some (tensor_of y (Array.append k.leading [|n_out|]))
       end
     end
 
@@ -1926,13 +1951,12 @@ let apply c x =
       (* the whole conversion is one step and its drain, both writing their own
          run of the result: the offline call owns the destination, so the two
          land in place instead of being joined afterwards *)
-      let out = Nx.empty (Nx.dtype x) (Array.append lead [|total|]) in
-      let y = array1_of out in
+      let y = array1 (kind (Nx.dtype x)) (channels * total) in
       let stepped = Kernel.outputs k n in
       Kernel.run k x ~n ~y_off:0 ~y_stride:total y ;
       assert (Kernel.drain_outputs k = total - stepped) ;
       Kernel.drain_run k ~y_off:stepped ~y_stride:total y ;
-      out
+      tensor_of y (Array.append lead [|total|])
     end
 
 (* {1 Offline, tensor formulation}
@@ -1980,9 +2004,9 @@ let gemm_stage ~sl ~sm ~sk sgemm ~total dtype lead x =
   (* [lead ++ [P; frames']] with [frames' >= frames]; keep [frames] *)
   let rank = Nx.ndim patches in
   let patches =
-    Nx.shrink
-      (Array.init rank (fun i ->
-           if i = rank - 1 then (0, frames) else (0, Nx.dim i patches) ) )
+    Nx.slice
+      (List.init rank (fun i ->
+           if i = rank - 1 then Nx.R (0, frames) else Nx.A ) )
       patches
   in
   let axes =
@@ -1993,9 +2017,9 @@ let gemm_stage ~sl ~sm ~sk sgemm ~total dtype lead x =
     Nx.matmul (Nx.transpose ~axes patches) (Nx.cast dtype (Lazy.force sgemm))
   in
   let y = Nx.reshape (Array.append lead [|frames * sl|]) y in
-  Nx.shrink
-    (Array.init (Nx.ndim y) (fun i ->
-         if i = Nx.ndim y - 1 then (0, total) else (0, Nx.dim i y) ) )
+  Nx.slice
+    (List.init (Nx.ndim y) (fun i ->
+         if i = Nx.ndim y - 1 then Nx.R (0, total) else Nx.A ) )
     y
 
 let apply_gemm c x =

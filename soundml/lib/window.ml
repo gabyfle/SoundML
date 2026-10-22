@@ -365,11 +365,9 @@ let fill_window buf w ~periodic n =
 
 (* {1 Instantiation}
 
-   Float64 windows are generated straight into the storage of the tensor being
-   returned. The narrower float dtypes are generated in float64 and rounded once
-   on their way out, so every dtype carries the same values under a single
-   rounding. Only the Bigarray-backed kinds can be reached as a flat array; the
-   extended float kinds go through the buffer setter element by element. *)
+   Windows are generated in float64, into a buffer the float64 tensor then takes
+   over without a copy, and cast once on their way out — the identity at float64
+   — so every dtype carries the same values under a single rounding. *)
 
 let make : type b.
     (float, b) Nx.dtype -> ?periodic:bool -> t -> int -> (float, b) Nx.t =
@@ -379,30 +377,9 @@ let make : type b.
       (Printf.sprintf
          "make: cannot make a %d-point window (length must be at least 1)" n ) ;
   validate "make" w ;
-  match dtype with
-  | Nx.Float64 ->
-      let tensor = Nx.empty Nx.Float64 [|n|] in
-      fill_window (Nx_buffer.to_bigarray1 (Nx.to_buffer tensor)) w ~periodic n ;
-      tensor
-  | Nx.Float32 ->
-      let source = buffer n in
-      fill_window source w ~periodic n ;
-      let tensor = Nx.empty Nx.Float32 [|n|] in
-      let destination = Nx_buffer.to_bigarray1 (Nx.to_buffer tensor) in
-      for i = 0 to n - 1 do
-        Bigarray.Array1.unsafe_set destination i
-          (Bigarray.Array1.unsafe_get source i)
-      done ;
-      tensor
-  | dtype ->
-      let source = buffer n in
-      fill_window source w ~periodic n ;
-      let tensor = Nx.empty dtype [|n|] in
-      let destination = Nx.to_buffer tensor in
-      for i = 0 to n - 1 do
-        Nx_buffer.unsafe_set destination i (Bigarray.Array1.unsafe_get source i)
-      done ;
-      tensor
+  let source = buffer n in
+  fill_window source w ~periodic n ;
+  Nx.cast dtype (Nx.of_bigarray (Bigarray.genarray_of_array1 source))
 
 (* Relative tolerance of the numerical constant-overlap-add check. *)
 let cola_tolerance = 1e-10

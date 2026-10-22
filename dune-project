@@ -61,6 +61,8 @@
   dune
   (nx
    (= dev))
+  (rig
+   (= dev))
   (odoc :with-doc)
   (windtrap
    (and
@@ -84,6 +86,8 @@
   (soundml
    (= :version))
   (nx
+   (= dev))
+  (rig
    (= dev))
   (conf-pkg-config :build)
   (conf-sndfile :build)

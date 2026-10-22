@@ -115,10 +115,10 @@ val filterbank : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
     FFT bins.
 
     The matrix is precomputed once, in double precision, inside
-    {!Config.create}; every call returns a {e fresh} tensor cast from the
-    config-owned matrix, so mutating the result never affects [c] or any
-    other caller. Kernels use the config-owned matrix internally without
-    copying. *)
+    {!Config.create}; every call returns the config-owned matrix cast to
+    [dtype] (the matrix itself at float64). Tensors are immutable, so no
+    caller can affect [c] or any other caller through the result. Kernels use
+    the config-owned matrix internally without copying. *)
 
 val apply : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [apply c s] is the power spectrum [s] projected onto the mel bands of

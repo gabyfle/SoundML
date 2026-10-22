@@ -223,10 +223,9 @@ let rolloff ?(roll_percent = 0.85) ?freqs ~sample_rate s =
     let cumulative = Nx.cumsum ~axis:(nd - 2) s64 in
     let bins = bins_of s in
     let total =
-      Nx.shrink
-        (Array.init nd (fun i ->
-             if i = nd - 2 then (bins - 1, bins) else (0, Nx.dim i cumulative) )
-        )
+      Nx.slice
+        (List.init nd (fun i ->
+             if i = nd - 2 then Nx.R (bins - 1, bins) else Nx.A ) )
         cumulative
     in
     let reached = Nx.greater_equal cumulative (Nx.mul_s total roll_percent) in

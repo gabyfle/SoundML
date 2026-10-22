@@ -139,15 +139,22 @@ let check_rank op t =
    whole matrix at once. The traversal is frame-major — the frame axis is
    outermost — so every row it reads and writes is contiguous. *)
 
-(* The flat float64 storage of a tensor, with the index its first element sits
-   at. The kind is named rather than inferred: a polymorphic Bigarray element
-   type turns every access in the traversal below into a dispatch. *)
+(* Flat float64 storage. The kind is named rather than inferred: a polymorphic
+   Bigarray element type turns every access in the traversal below into a
+   dispatch. *)
 type doubles =
   (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-let flat (t : (float, Nx.float64_elt) Nx.t) : doubles * int =
-  let t = Nx.contiguous t in
-  (Nx_buffer.to_bigarray1 (Nx.to_buffer t), Nx.offset t)
+(* [reading t f] is [f] applied to the elements of [t] in C order, read in
+   place: valid only during the call, and never written. *)
+let reading (t : (float, Nx.float64_elt) Nx.t) (f : doubles -> 'a) : 'a =
+  Rig.Buffer.read (Nx.to_buffer t) Bigarray.float64 f
+
+(* [doubles n] is a fresh zeroed array of [n] elements, written by the traversal
+   and then handed over to the tensor it becomes. *)
+let doubles n : doubles =
+  let a = Bigarray.Array1.create Bigarray.float64 Bigarray.c_layout n in
+  Bigarray.Array1.fill a 0. ; a
 
 (* [peaks_of m base bins into] fills [into] with the bins whose magnitude
    strictly exceeds every one of the four neighbours it has, and is their
@@ -278,27 +285,23 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
     let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
     let magnitudes = Nx.magnitude Nx.float64 framed in
     let arguments = Nx.angle Nx.float64 framed in
-    let amplitudes = Nx.zeros Nx.float64 [|signals; count; bins|] in
-    let phases = Nx.zeros Nx.float64 [|signals; count; bins|] in
-    let mag, mb = flat magnitudes in
-    let ang, ab = flat arguments in
-    let amp, ampb = flat amplitudes in
-    let phi, phib = flat phases in
-    let omega = advance c in
     let span = frames * bins in
     let stride = count * bins in
-    for s = 0 to signals - 1 do
-      propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
-        ~mb:(mb + (s * span))
-        ~ang
-        ~ab:(ab + (s * span))
-        ~amp
-        ~qb:(ampb + (s * stride))
-        ~phi
-        ~pb:(phib + (s * stride))
-    done ;
-    let amplitudes = Nx.reshape out amplitudes in
-    let phases = Nx.reshape out phases in
+    let amp = doubles (signals * stride) in
+    let phi = doubles (signals * stride) in
+    let omega = advance c in
+    reading magnitudes (fun mag ->
+        reading arguments (fun ang ->
+            for s = 0 to signals - 1 do
+              propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
+                ~mb:(s * span) ~ang ~ab:(s * span) ~amp ~qb:(s * stride) ~phi
+                ~pb:(s * stride)
+            done ) ) ;
+    let tensor a =
+      Nx.of_bigarray (Bigarray.reshape (Bigarray.genarray_of_array1 a) out)
+    in
+    let amplitudes = tensor amp in
+    let phases = tensor phi in
     Nx.swapaxes (-1) (-2)
       (Nx.complex Nx.complex128
          ~re:(Nx.mul amplitudes (Nx.cos phases))
@@ -336,9 +339,8 @@ let fix_length n y =
   let have = Nx.dim (rank - 1) y in
   if have = n then y
   else if have > n then
-    Nx.shrink
-      (Array.init rank (fun i ->
-           if i = rank - 1 then (0, n) else (0, Nx.dim i y) ) )
+    Nx.slice
+      (List.init rank (fun i -> if i = rank - 1 then Nx.R (0, n) else Nx.A))
       y
   else
     let widths = Array.make rank (0, 0) in

@@ -277,8 +277,8 @@ module Config = struct
     && a.fft_size = b.fft_size
 end
 
-(* [Nx.cast] copies even onto the same dtype, so the config-owned matrix never
-   escapes: mutating a returned filterbank cannot corrupt the config. *)
+(* Tensors are immutable, so handing out the config-owned matrix — [Nx.cast]
+   returns it itself at float64 — cannot let a caller corrupt the config. *)
 let filterbank dtype (c : Config.t) = Nx.cast dtype c.Config.weights
 
 (* [project op ~mismatch weights bands s] is the batched product of a [[bands;
