@@ -36,9 +36,8 @@ let last_dim t = Nx.dim (Nx.ndim t - 1) t
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last = function
@@ -411,7 +410,7 @@ let interior_tests =
             if hi > lo then
               Tutils.check_close ~rtol:0. ~atol:1e-12 ~msg:name
                 ~expected:(Array.sub (Nx.to_array signal) lo (hi - lo))
-                (Nx.shrink [|(lo, hi)|] got) )
+                (Nx.slice [Nx.R (lo, hi)] got) )
           grid ) ]
 
 let suite =

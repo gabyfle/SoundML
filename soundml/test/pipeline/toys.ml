@@ -142,8 +142,8 @@ let nx_lookahead d =
         st := Nx.copy data ;
         None )
       else begin
-        st := Nx.copy (Nx.shrink [|(n - d, n)|] data) ;
-        let head = Nx.shrink [|(0, n - d)|] data in
+        st := Nx.copy (Nx.slice [Nx.R (n - d, n)] data) ;
+        let head = Nx.slice [Nx.R (0, n - d)] data in
         Some (if data == chunk then Nx.copy head else head)
       end )
     ()

@@ -158,9 +158,7 @@ let fanout_tests =
 
 let nx_of_array a = Nx.create Nx.float32 [|Array.length a|] a
 
-(* [Nx.shrink] rejects zero-width slices; empty chunks are fresh tensors *)
-let nx_slice t off s =
-  if s = 0 then Nx.zeros Nx.float32 [|0|] else Nx.shrink [|(off, off + s)|] t
+let nx_slice t off s = Nx.slice [Nx.R (off, off + s)] t
 
 let check_nx_law ~name p x =
   let rng = Random.State.make [|seed + 2|] in
@@ -195,8 +193,9 @@ let nx_tests =
               x )
           inputs )
   ; test "push borrows: no aliasing of the caller's buffer" (fun () ->
-        (* the caller reuses one block buffer across pushes — the audio callback
-           pattern; previously returned chunks must not change *)
+        (* the caller pushes one block after another — the audio callback
+           pattern; tensors are immutable, so the next block is a fresh tensor,
+           and previously returned chunks must not change *)
         let s =
           Pipeline.Stream.prepare (Toys.nx_lookahead 4) ~source:(source ())
             ~max_chunk:6
@@ -210,10 +209,10 @@ let nx_tests =
               fail "first push must emit"
         in
         let snap = Nx.to_array out1 in
-        Nx.blit (Nx.create Nx.float32 [|6|] [|7.; 8.; 9.; 10.; 11.; 12.|]) buf ;
-        let rest = Option.to_list (Pipeline.Stream.push s buf) in
+        let next = Nx.create Nx.float32 [|6|] [|7.; 8.; 9.; 10.; 11.; 12.|] in
+        let rest = Option.to_list (Pipeline.Stream.push s next) in
         let tail = Pipeline.Stream.flush s in
-        equal ~msg:"returned chunk survives buffer reuse" farray snap
+        equal ~msg:"returned chunk survives the next push" farray snap
           (Nx.to_array out1) ;
         equal ~msg:"stream equals the logical signal" farray
           (Array.init 12 (fun i -> float_of_int (i + 1)))

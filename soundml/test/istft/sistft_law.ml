@@ -48,9 +48,8 @@ let last_dim t = Nx.dim (Nx.ndim t - 1) t
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
@@ -417,21 +416,21 @@ let contract_tests =
               (channels must be at least 1)" ) (fun () ->
             Stft.Synthesis.step k (Nx.zeros Nx.complex128 [|0; 5; 3|]) ) )
   ; test "the emitted chunks own their samples" (fun () ->
-        (* [step] borrows its frames: overwriting the caller's buffer after the
-           call must not move a sample that has already been emitted *)
+        (* [step] borrows its frames: tensors are immutable, so the caller hands
+           over its next frames as a fresh tensor, and stepping on them must not
+           move a sample that has already been emitted *)
         let k = prepare8 () in
         let z = frames8 6 in
-        let buffer = Nx.copy z in
         let out =
-          match Stft.Synthesis.step k buffer with
+          match Stft.Synthesis.step k z with
           | Some out ->
               out
           | None ->
               fail "step must emit"
         in
         let snapshot = bits out in
-        Nx.blit (Nx.mul_s z Complex.{re= -3.; im= 0.}) buffer ;
-        equal ~msg:"the emitted chunk survives buffer reuse" bit_array snapshot
+        ignore (Stft.Synthesis.step k (Nx.mul_s z Complex.{re= -3.; im= 0.})) ;
+        equal ~msg:"the emitted chunk survives the next step" bit_array snapshot
           (bits out) ) ]
 
 let suite =

@@ -42,7 +42,7 @@ let clips_globally_across_channels () =
     (Convert.power_to_db ~top_db:20. power)
 
 let preserves_empty_tensors () =
-  let empty = Nx.empty Nx.float32 [|2; 0|] in
+  let empty = Nx.zeros Nx.float32 [|2; 0|] in
   close32 ~msg:"empty" ~shape:[|2; 0|] ~expected:[||]
     (Convert.power_to_db empty)
 

@@ -110,7 +110,7 @@ let round_trip_case (fft, hop, wl) (aname, alignment) (pname, pad) =
             Tutils.check_close ~rtol:0. ~atol:float64_atol
               ~msg:(Printf.sprintf "float64/n=%d" n)
               ~expected:(sub_array signal lo hi)
-              (Nx.shrink [|(lo, hi)|] y64) ;
+              (Nx.slice [Nx.R (lo, hi)] y64) ;
             let x32 = Nx.create Nx.float32 [|n|] signal in
             let y32 =
               Stft.invert Nx.float32 c ~length:n
@@ -120,7 +120,7 @@ let round_trip_case (fft, hop, wl) (aname, alignment) (pname, pad) =
               ~atol:Tutils.float32_atol
               ~msg:(Printf.sprintf "float32/n=%d" n)
               ~expected:(sub_array (Nx.to_array x32) lo hi)
-              (Nx.shrink [|(lo, hi)|] y32)
+              (Nx.slice [Nx.R (lo, hi)] y32)
           end )
         lengths )
 
@@ -152,7 +152,7 @@ let big_round_trip_tests =
           in
           Tutils.check_close ~rtol:0. ~atol:float64_atol ~msg:"float64"
             ~expected:(sub_array signal lo hi)
-            (Nx.shrink [|(lo, hi)|] y) ) )
+            (Nx.slice [Nx.R (lo, hi)] y) ) )
     [ ((2048, 512, 2048), ("centered", `Centered))
     ; ((2048, 512, 2048), ("left", `Left))
     ; ((2048, 500, 1200), ("centered", `Centered))
@@ -557,7 +557,7 @@ let shape_tests =
             Tutils.check_close ~rtol:0. ~atol:0.
               ~msg:(Printf.sprintf "row %d" i)
               ~expected:(Nx.to_array single)
-              (Nx.shrink [|(i, i + 1); (0, n)|] batched) )
+              (Nx.slice [Nx.R (i, i + 1); Nx.R (0, n)] batched) )
           [a; b] )
   ; test "an empty request synthesises nothing" (fun () ->
         let c = config (32, 8, 20) `Centered `Reflect in

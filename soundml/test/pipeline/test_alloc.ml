@@ -88,8 +88,8 @@ let sum_array = Array.fold_left ( +. ) 0.
    leftovers. - lookahead>>block_sum (measured 1944): lookahead appends
    buffer+chunk (~262 words) and takes two subs; block_sum appends its leftover,
    takes one 4-float sub per window (64 x ~7 words) and allocates the 64-float
-   output. - nx gain>>lookahead (measured 1821): three Nx ops per push (mul_s,
-   concatenate, two shrink views), each allocating tensor records, shape
+   output. - nx gain>>lookahead (measured 509): three Nx ops per push (mul_s,
+   concatenate, two slice views), each allocating tensor records, shape
    metadata and a custom block on the OCaml heap — the bigarray payloads are
    malloc'd outside the heap. *)
 
