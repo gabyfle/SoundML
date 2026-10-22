@@ -100,6 +100,9 @@ module Config = struct
     ; n_octaves: int
     ; early: int  (** number of 2:1 decimations applied before octave zero *)
     ; half: Resample.Config.t  (** the one exact 1/2 conversion plan *)
+    ; offline_half: Resample.Config.t
+          (** the same conversion planned at an audio rate, where its one
+              stage runs by overlap-save: the offline decimator *)
     ; octaves: octave array  (** highest octave first *)
     ; freqs: float array
     ; alphas: float array
@@ -426,6 +429,9 @@ module Config = struct
     ; n_octaves
     ; early
     ; half= Resample.Config.create ~quality:`High ~sample_rate:2 ~target:1 ()
+    ; offline_half=
+        Resample.Config.create ~quality:`High ~sample_rate:44100 ~target:22050
+          ()
     ; octaves
     ; freqs
     ; alphas
@@ -593,12 +599,14 @@ let check_resampling_dtype : type a. string -> (float, a) Nx.dtype -> unit =
             which needs float32 or float64 audio)"
            op Nx.pp_dtype dtype )
 
-(* [decimate c y] is [y] at half its rate: the exact 1/2 conversion, run through
-   the resampler's dense offline form. That form carries no partitioning law,
-   which costs this module nothing — the transform is offline and evaluates the
-   whole signal at once — and it is the same filter, the same compensated group
-   delay and the same output length as the streaming executor. *)
-let decimate (c : Config.t) y = Resample.apply_gemm c.Config.half y
+(* [decimate c y] is [y] at half its rate: the exact 1/2 conversion, planned at
+   an audio rate so that its one stage runs by overlap-save. A plan's rate only
+   decides which executor its stage may take — the streaming kernel's [half],
+   planned at 2 Hz, keeps the dot products and their emission granularity — so
+   this is the same filter, the same compensated group delay and the same output
+   length as the streaming executor, computed by transforms: the transform is
+   offline and evaluates the whole signal at once. *)
+let decimate (c : Config.t) y = Resample.apply c.Config.offline_half y
 
 (* [halve c y] is [decimate] with the energy convention of the octave recursion:
    rescaled so that a band common to both rates keeps its magnitude. *)
