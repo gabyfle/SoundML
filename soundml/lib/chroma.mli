@@ -172,6 +172,24 @@ val apply : ?norm:norm -> Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     second-to-last axis does not hold [Config.bins c] bins, or if [norm] is
     [`P p] with [p] not finite and positive. *)
 
+val stage :
+  ?norm:norm -> Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [stage c] is {!apply} as a pipeline stage: memoryless, rate 1:1 in frames,
+    latency zero and format-preserving — channels, items per second and the
+    per-chunk bound all pass through unchanged, since each spectral frame maps
+    to its pitch classes without touching the frame axis. It consumes
+    {!Stft.power_stage} output ([[...; bins; frames]] chunks) and is
+    polymorphic in its capability, so one value drives both {!Pipeline.run}
+    and {!Pipeline.Stream}; [Stft.power_stage ~power s >> stage c] is the
+    streaming form of [Soundml.chroma_stft]. Because {!apply} adds its terms
+    in a fixed order, every partitioning of a spectrogram yields {!apply}'s
+    bits. An empty chunk maps to an empty chunk, [[...; n_chroma; 0]].
+    [norm] defaults to [`Inf].
+
+    Raises [Invalid_argument] if [norm] is [`P p] with [p] not finite and
+    positive. The stream {!Pipeline.Format} does not carry a bin count, so a
+    bins mismatch is reported at the first chunk, as {!apply} reports it. *)
+
 (** {1 From a constant-Q spectrum} *)
 
 val cqt_projection :
@@ -208,6 +226,23 @@ val of_cqt :
     second-to-last axis does not hold [Cqt.Config.n_bins c] bins, if
     [n_chroma] does not divide [Cqt.Config.bins_per_octave c], or if [norm] is
     [`P p] with [p] not finite and positive. *)
+
+val of_cqt_stage :
+     ?n_chroma:int
+  -> ?norm:norm
+  -> Cqt.Config.t
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [of_cqt_stage c] is {!of_cqt} as a pipeline stage: memoryless, rate 1:1 in
+    frames, latency zero and format-preserving, consuming magnitude
+    constant-Q chunks ([[...; n_bins; frames]]) — such as the magnitudes of
+    {!Cqt.Kernel}'s columns — and mapping them to [[...; n_chroma; frames]].
+    The assignment matrix is built once, when the stage is. Every
+    partitioning yields {!of_cqt}'s bits, and an empty chunk maps to an empty
+    chunk. [n_chroma] defaults to [12] and [norm] to [`Inf].
+
+    Raises [Invalid_argument] if [n_chroma] does not divide
+    [Cqt.Config.bins_per_octave c] or if [norm] is [`P p] with [p] not finite
+    and positive; a bins mismatch is reported at the first chunk. *)
 
 (** {1:parity Parity with librosa 1.0}
 

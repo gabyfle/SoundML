@@ -332,6 +332,12 @@ let apply ?(norm = `Inf) (c : Config.t) s =
   | Product raw ->
       Nx.cast dtype (normalise ~norm ~tiny:(smallest_normal dtype) raw)
 
+(* The projection is memoryless and adds its terms in a fixed order, so the
+   stage is [apply] on each chunk and every chunking yields [apply]'s bits. *)
+let stage ?(norm = `Inf) c =
+  check_norm "stage" norm ;
+  Pipeline.stateless (fun s -> apply ~norm c s)
+
 (* {1 Constant-Q projection}
 
    Folding a constant-Q ladder onto pitch classes is a 0/1 assignment: every bin
@@ -379,18 +385,28 @@ let cq_matrix op ?(n_chroma = 12) (c : Cqt.Config.t) =
 let cqt_projection dtype ?n_chroma c =
   Nx.cast dtype (cq_matrix "cqt_projection" ?n_chroma c)
 
-let of_cqt ?(n_chroma = 12) ?(norm = `Inf) c s =
-  check_norm "of_cqt" norm ;
+(* [fold op ~norm weights s] folds the magnitude constant-Q spectrum [s] through
+   the prepared 0/1 matrix [weights] and normalises each frame. *)
+let fold op ~norm weights s =
   let dtype = Nx.dtype s in
-  let weights = Ordered.matrix (cq_matrix "of_cqt" ~n_chroma c) in
   let mismatch got bins =
     Printf.sprintf
-      "of_cqt: cannot project %d constant-Q bins through a configuration of %d \
-       bins"
-      got bins
+      "%s: cannot project %d constant-Q bins through a configuration of %d bins"
+      op got bins
   in
-  match project "of_cqt" ~mismatch weights s with
+  match project op ~mismatch weights s with
   | Empty shape ->
       Nx.zeros dtype shape
   | Product raw ->
       Nx.cast dtype (normalise ~norm ~tiny:(smallest_normal dtype) raw)
+
+let of_cqt ?(n_chroma = 12) ?(norm = `Inf) c s =
+  check_norm "of_cqt" norm ;
+  fold "of_cqt" ~norm (Ordered.matrix (cq_matrix "of_cqt" ~n_chroma c)) s
+
+(* The matrix is prepared once, when the stage is built, rather than per
+   chunk. *)
+let of_cqt_stage ?(n_chroma = 12) ?(norm = `Inf) c =
+  check_norm "of_cqt_stage" norm ;
+  let weights = Ordered.matrix (cq_matrix "of_cqt_stage" ~n_chroma c) in
+  Pipeline.stateless (fold "of_cqt_stage" ~norm weights)

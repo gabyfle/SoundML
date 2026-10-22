@@ -8,8 +8,11 @@
    spectral chunks partitioned along the frame axis — and the composed chain
    [Stft.power_stage >> Mel.stage] exercises it behind a stateful, rate-changing
    upstream, where a stage that secretly buffered or misread chunk boundaries
-   would break the equality. Also here: the static latency/rate queries — the
-   projection adds no latency and keeps the frame rate. *)
+   would break the equality. The same holds for [mfcc_stage], alone over mel
+   chunks and at the end of [Stft.power_stage >> Mel.stage], and its chain
+   agrees bit for bit with the flat [mfcc] wherever the 80 dB clamp, which the
+   stage omits, does not bind. Also here: the static latency/rate queries — the
+   projection and the cepstrum add no latency and keep the frame rate. *)
 
 open Windtrap
 open Soundml
@@ -106,17 +109,15 @@ let check_law ~name ~seed p x lengths_last =
 
 (* {2 The memoryless stage alone, over spectral chunks} *)
 
+let spectrum rows frames =
+  Nx.init Nx.float32 [|rows; frames|] (fun i ->
+      Float.exp (Float.sin (0.7 *. Float.of_int ((i.(0) * frames) + i.(1)))) )
+
 let stage_alone_case name mk_mel =
   test name (fun () ->
       let p = Mel.stage (mk_mel ()) in
       List.iter
-        (fun frames ->
-          let s =
-            Nx.init Nx.float32 [|5; frames|] (fun i ->
-                Float.exp
-                  (Float.sin (0.7 *. Float.of_int ((i.(0) * frames) + i.(1)))) )
-          in
-          check_law ~name ~seed p s frames )
+        (fun frames -> check_law ~name ~seed p (spectrum 5 frames) frames)
         [37; 5; 1; 0] )
 
 (* {2 The composed chain behind a stateful, rate-changing upstream} *)
@@ -137,6 +138,43 @@ let chain_case name mk_stft mk_mel =
           check_law ~name ~seed:(seed + 1) p x n )
         [61; 17; 2; 0] )
 
+(* {2 The cepstral stage, alone and at the end of the chain} *)
+
+(* [wide rows frames] spans 120 dB, with a maximum that moves from frame to
+   frame: a stage that clamped each chunk under its own maximum would round the
+   quiet bins differently for every partitioning. *)
+let wide rows frames =
+  Nx.init Nx.float32 [|rows; frames|] (fun i ->
+      10. ** -.Float.of_int (((3 * i.(1)) + i.(0)) mod 13) )
+
+let mfcc_alone_case name ?lifter n_mfcc =
+  test name (fun () ->
+      let p = mfcc_stage (mel_config ()) ~n_mfcc ?lifter () in
+      List.iter
+        (fun frames ->
+          check_law ~name ~seed:(seed + 2) p (spectrum 3 frames) frames ;
+          check_law ~name:(name ^ "/wide") ~seed:(seed + 2) p (wide 3 frames)
+            frames )
+        [37; 5; 1; 0] )
+
+let mfcc_chain_case name mk_stft =
+  test name (fun () ->
+      List.iter
+        (fun n ->
+          let x =
+            Nx.create Nx.float32 [|n|]
+              (Array.init n (fun i -> Float.sin (0.7 *. Float.of_int i)))
+          in
+          let p =
+            Pipeline.( >> )
+              (Pipeline.( >> )
+                 (Stft.power_stage (mk_stft ()))
+                 (Mel.stage (mel_config ())) )
+              (mfcc_stage (mel_config ()) ~n_mfcc:3 ())
+          in
+          check_law ~name ~seed:(seed + 3) p x n )
+        [61; 17; 2; 0] )
+
 let law_tests =
   [ stage_alone_case "mel stage alone" mel_config
   ; stage_alone_case "mel stage alone, unnormalised" (fun () ->
@@ -149,7 +187,65 @@ let law_tests =
       mel_config
   ; chain_case "power_stage >> mel right reflect (border lookahead)"
       (fun () -> stft_config ~alignment:`Right ~hop:3 ())
-      mel_config ]
+      mel_config
+  ; mfcc_alone_case "mfcc stage alone" 3
+  ; mfcc_alone_case "mfcc stage alone, two liftered coefficients" ~lifter:22. 2
+  ; mfcc_chain_case "power_stage >> mel >> mfcc centered" (fun () ->
+        stft_config () )
+  ; mfcc_chain_case "power_stage >> mel >> mfcc right, non-divisor hop"
+      (fun () -> stft_config ~alignment:`Right ~hop:3 () ) ]
+
+(* {2 The cepstral chain against the flat [mfcc]}
+
+   The stage omits [mfcc]'s 80 dB clamp, so the two agree only where it does not
+   bind: each case first checks that the signal's log-mel spans less than 80 dB,
+   then demands the same bits. *)
+
+let noise dtype ~seed n =
+  let rng = Random.State.make [|seed|] in
+  Nx.cast dtype
+    (Nx.create Nx.float64 [|n|]
+       (Array.init n (fun _ -> Random.State.float rng 2. -. 1.)) )
+
+let mfcc_agreement_case name ?lifter ~n_mfcc ~sample_rate mk_stft mk_mel dtype =
+  test name (fun () ->
+      let stft = mk_stft () and mel = mk_mel () in
+      let x = noise dtype ~seed:(seed + 4) (2 * sample_rate) in
+      let db =
+        Convert.power_to_db (Nx.cast Nx.float64 (mel_spectrogram stft mel x))
+      in
+      let span = Nx.item [] (Nx.max db) -. Nx.item [] (Nx.min db) in
+      is_true
+        ~msg:(Printf.sprintf "the clamp does not bind (%g dB)" span)
+        (span < 80.) ;
+      let p =
+        Pipeline.( >> )
+          (Pipeline.( >> ) (Stft.power_stage stft) (Mel.stage mel))
+          (mfcc_stage mel ~n_mfcc ?lifter ())
+      in
+      let source = Pipeline.Format.audio dtype ~sample_rate ~channels:1 in
+      let bits t = Array.map Int64.bits_of_float (Nx.to_array t) in
+      equal ~msg:"same bits" (array int64)
+        (bits (mfcc stft mel ~n_mfcc ?lifter x))
+        (bits (Pipeline.run ~source p x)) )
+
+let production_geometry () = Stft.Config.create ~hop:512 ~fft_size:2048 ()
+
+let production_bands () =
+  Mel.Config.create ~n_mels:128 ~sample_rate:22050 ~fft_size:2048 ()
+
+let agreement_tests =
+  [ mfcc_agreement_case "toy geometry, float32" ~n_mfcc:3 ~sample_rate:1000
+      (fun () -> stft_config ())
+      mel_config Nx.float32
+  ; mfcc_agreement_case "toy geometry, float64, liftered" ~lifter:22. ~n_mfcc:2
+      ~sample_rate:1000
+      (fun () -> stft_config ())
+      mel_config Nx.float64
+  ; mfcc_agreement_case "production geometry, float32" ~n_mfcc:20
+      ~sample_rate:22050 production_geometry production_bands Nx.float32
+  ; mfcc_agreement_case "production geometry, float64" ~n_mfcc:20
+      ~sample_rate:22050 production_geometry production_bands Nx.float64 ]
 
 (* {2 Static queries} *)
 
@@ -176,6 +272,27 @@ let static_tests =
           Pipeline.( >> )
             (Stft.power_stage (stft_config ()))
             (Mel.stage (mel_config ()))
+        in
+        equal ~msg:"chain latency is the stft's" rate_t (r 4 1)
+          (Pipeline.latency chain) ;
+        equal ~msg:"chain rate is the stft's" rate_t (r 1 2)
+          (Pipeline.rate chain) )
+  ; test "the cepstrum adds no latency and keeps the frame rate" (fun () ->
+        let alone () :
+            ( (float, Nx.float32_elt) Nx.t
+            , (float, Nx.float32_elt) Nx.t
+            , Pipeline.offline )
+            Pipeline.t =
+          mfcc_stage (mel_config ()) ~n_mfcc:3 ()
+        in
+        equal ~msg:"stage latency" rate_t (r 0 1) (Pipeline.latency (alone ())) ;
+        equal ~msg:"stage rate" rate_t (r 1 1) (Pipeline.rate (alone ())) ;
+        let chain =
+          Pipeline.( >> )
+            (Pipeline.( >> )
+               (Stft.power_stage (stft_config ()))
+               (Mel.stage (mel_config ())) )
+            (mfcc_stage (mel_config ()) ~n_mfcc:3 ())
         in
         equal ~msg:"chain latency is the stft's" rate_t (r 4 1)
           (Pipeline.latency chain) ;
@@ -269,9 +386,16 @@ let production_tests =
           (Pipeline.( >> )
              (Stft.power_stage (production_stft ()))
              (Mel.stage (production_mel ())) )
-          (Db.stage (Db.Value 1.)) ) ]
+          (Db.stage (Db.Value 1.)) )
+  ; production_case "power >> mel >> mfcc" (fun () ->
+        Pipeline.( >> )
+          (Pipeline.( >> )
+             (Stft.power_stage (production_stft ()))
+             (Mel.stage (production_mel ())) )
+          (mfcc_stage (production_mel ()) ~lifter:22. ()) ) ]
 
 let suite =
   [ group "law" law_tests
+  ; group "mfcc agreement" agreement_tests
   ; group "production" production_tests
   ; group "static" static_tests ]
