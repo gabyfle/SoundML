@@ -180,6 +180,95 @@ let bessel_i0 x =
   done ;
   !sum
 
+(* [bessel_i0_4 a] replaces the four arguments in [a] by their [bessel_i0]: four
+   series run side by side, each with exactly [bessel_i0]'s terms, sums and
+   stopping rule, a lane falling silent once its own series has converged. One
+   series is a chain of dependent multiplies; four interleaved keep the
+   floating-point units busy, about three times the throughput of one. *)
+let bessel_i0_4 (a : Float.Array.t) =
+  let x0 = Float.Array.unsafe_get a 0
+  and x1 = Float.Array.unsafe_get a 1
+  and x2 = Float.Array.unsafe_get a 2
+  and x3 = Float.Array.unsafe_get a 3 in
+  let h0 = 0.25 *. x0 *. x0
+  and h1 = 0.25 *. x1 *. x1
+  and h2 = 0.25 *. x2 *. x2
+  and h3 = 0.25 *. x3 *. x3 in
+  let t0 = ref 1. and t1 = ref 1. and t2 = ref 1. and t3 = ref 1. in
+  let s0 = ref 1. and s1 = ref 1. and s2 = ref 1. and s3 = ref 1. in
+  let on0 = ref true and on1 = ref true and on2 = ref true and on3 = ref true in
+  let k = ref 1 in
+  while !on0 || !on1 || !on2 || !on3 do
+    let kk = !k in
+    if kk < 129 then begin
+      let inv = Array.unsafe_get i0_inv_sq kk in
+      if !on0 then begin
+        let t = !t0 *. h0 *. inv in
+        let s = !s0 +. t in
+        t0 := t ;
+        s0 := s ;
+        if t <= Float.epsilon *. s then on0 := false
+      end ;
+      if !on1 then begin
+        let t = !t1 *. h1 *. inv in
+        let s = !s1 +. t in
+        t1 := t ;
+        s1 := s ;
+        if t <= Float.epsilon *. s then on1 := false
+      end ;
+      if !on2 then begin
+        let t = !t2 *. h2 *. inv in
+        let s = !s2 +. t in
+        t2 := t ;
+        s2 := s ;
+        if t <= Float.epsilon *. s then on2 := false
+      end ;
+      if !on3 then begin
+        let t = !t3 *. h3 *. inv in
+        let s = !s3 +. t in
+        t3 := t ;
+        s3 := s ;
+        if t <= Float.epsilon *. s then on3 := false
+      end
+    end
+    else begin
+      let d = Float.of_int (kk * kk) in
+      if !on0 then begin
+        let t = !t0 *. h0 /. d in
+        let s = !s0 +. t in
+        t0 := t ;
+        s0 := s ;
+        if t <= Float.epsilon *. s || kk > 1000 then on0 := false
+      end ;
+      if !on1 then begin
+        let t = !t1 *. h1 /. d in
+        let s = !s1 +. t in
+        t1 := t ;
+        s1 := s ;
+        if t <= Float.epsilon *. s || kk > 1000 then on1 := false
+      end ;
+      if !on2 then begin
+        let t = !t2 *. h2 /. d in
+        let s = !s2 +. t in
+        t2 := t ;
+        s2 := s ;
+        if t <= Float.epsilon *. s || kk > 1000 then on2 := false
+      end ;
+      if !on3 then begin
+        let t = !t3 *. h3 /. d in
+        let s = !s3 +. t in
+        t3 := t ;
+        s3 := s ;
+        if t <= Float.epsilon *. s || kk > 1000 then on3 := false
+      end
+    end ;
+    incr k
+  done ;
+  Float.Array.unsafe_set a 0 !s0 ;
+  Float.Array.unsafe_set a 1 !s1 ;
+  Float.Array.unsafe_set a 2 !s2 ;
+  Float.Array.unsafe_set a 3 !s3
+
 (* [design_prototype ~l ~k ~fc ~beta] is the [2*K*L + 1]-tap prototype: a
    windowed sinc with cutoff [fc] (Nyquist units of the interpolated rate),
    normalised so the full filter sums to [L] — unit passband gain after the
@@ -191,21 +280,38 @@ let design_prototype ~l ~k ~fc ~beta =
   let n = (2 * mid) + 1 in
   let i0_beta = bessel_i0 beta in
   let h = Array.make n 0. in
-  (* Taps are independent, so they are evaluated across domains ({!Par}); the
-     normalising sum then runs on one domain, in index order. *)
-  Par.ranges ~n:(n - mid) ~grain:512 (fun lo hi ->
-      for i = mid + lo to mid + hi - 1 do
-        let z = Float.of_int (i - mid) in
-        let s =
-          if i = mid then fc
-          else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
-        in
-        let r = z /. Float.of_int mid in
-        let v =
-          s *. (bessel_i0 (beta *. Float.sqrt (1. -. (r *. r))) /. i0_beta)
-        in
-        Array.unsafe_set h i v ;
-        Array.unsafe_set h (n - 1 - i) v
+  (* Taps are independent, so they are evaluated across domains ({!Par}), four
+     window values at a time ([bessel_i0_4]; a short last group pads with zero
+     arguments, whose series stops at once); the normalising sum then runs on
+     one domain, in index order. *)
+  Par.ranges ~n:(n - mid) ~grain:2048 (fun lo hi ->
+      let a = Float.Array.create 4 in
+      let i = ref (mid + lo) in
+      while !i < mid + hi do
+        let count = Stdlib.min 4 (mid + hi - !i) in
+        for q = 0 to 3 do
+          let x =
+            if q < count then begin
+              let r = Float.of_int (!i + q - mid) /. Float.of_int mid in
+              beta *. Float.sqrt (1. -. (r *. r))
+            end
+            else 0.
+          in
+          Float.Array.unsafe_set a q x
+        done ;
+        bessel_i0_4 a ;
+        for q = 0 to count - 1 do
+          let j = !i + q in
+          let z = Float.of_int (j - mid) in
+          let s =
+            if j = mid then fc
+            else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
+          in
+          let v = s *. (Float.Array.unsafe_get a q /. i0_beta) in
+          Array.unsafe_set h j v ;
+          Array.unsafe_set h (n - 1 - j) v
+        done ;
+        i := !i + count
       done ) ;
   let sum = ref 0. in
   for i = 0 to n - 1 do
@@ -224,14 +330,15 @@ let design_prototype ~l ~k ~fc ~beta =
 let bank_of_prototype ~l ~k h =
   let taps = (2 * k) + 1 in
   let n = Array.length h in
-  let b = Array.make (l * taps) 0. in
-  for p = 0 to l - 1 do
-    for s = 0 to taps - 1 do
-      let idx = p + ((taps - 1 - s) * l) in
-      if idx < n then b.((p * taps) + s) <- h.(idx)
-    done
-  done ;
-  b
+  Store.make64 [|l; taps|] (fun b ->
+      for p = 0 to l - 1 do
+        for s = 0 to taps - 1 do
+          let idx = p + ((taps - 1 - s) * l) in
+          Bigarray.Array1.unsafe_set b
+            ((p * taps) + s)
+            (if idx < n then Array.unsafe_get h idx else 0.)
+        done
+      done )
 
 (* [visit_bank ~l ~m ~taps bank] re-lays the phase-major bank tensor in the
    executor's visit order: consecutive outputs walk phases [(i * M) mod L], so
@@ -245,19 +352,20 @@ let bank_of_prototype ~l ~k h =
    layout only when the dtype-instantiated bank passes the L1 edge: below it
    both layouts are resident, the walk order is free, and the executor's
    phase-major loop carries no row counter — measured 6% on the short-dot wide
-   stages of the 8 -> 48 kHz cascade. Built by blitting rows out of the bank's
-   storage into the array the new tensor takes over: element-wise construction
-   (an [Nx.create] from a staging array, or generic bigarray access) boxes per
-   element — a measured +15% on [Config.create]. *)
+   stages of the 8 -> 48 kHz cascade. Copied element by element through
+   monomorphic accesses, which stay unboxed: an [Nx.create] from a staging array
+   boxes per element, and a blit per row takes and releases the runtime lock per
+   row. *)
 let visit_bank ~l ~m ~taps bank =
-  let dst = array1 Bigarray.float64 (l * taps) in
-  reading bank Bigarray.float64 (fun src ->
-      for j = 0 to l - 1 do
-        Bigarray.Array1.blit
-          (Bigarray.Array1.sub src (j * m mod l * taps) taps)
-          (Bigarray.Array1.sub dst (j * taps) taps)
-      done ) ;
-  tensor_of dst [|l; taps|]
+  Store.make64 [|l; taps|] (fun dst ->
+      Store.read64 bank (fun src ->
+          for j = 0 to l - 1 do
+            let from = j * m mod l * taps and into = j * taps in
+            for s = 0 to taps - 1 do
+              Bigarray.Array1.unsafe_set dst (into + s)
+                (Bigarray.Array1.unsafe_get src (from + s))
+            done
+          done ) )
 
 (* [gemm_bank ~l ~m ~k ~blocks bank] is the [P; blocks*L] matrix [G] of the
    tensor formulation ([apply_gemm]): column [r] (an output within a
@@ -266,19 +374,39 @@ let visit_bank ~l ~m ~taps bank =
    within the group, and [P = 2K + 1 + floor((blocks*L - 1)*M/L)]. With [blocks
    = 1] this is the natural one-cycle arrangement; larger [blocks] express the
    same stage as the unreduced [blocks*L / blocks*M] resampler (see [gemm_block]
-   above). [bank] is the phase-major array of [bank_of_prototype]. *)
+   above). [bank] is the phase-major tensor of [bank_of_prototype]. *)
 let gemm_bank ~l ~m ~k ~blocks bank =
   let taps = (2 * k) + 1 in
   let lp = blocks * l in
   let p_len = taps + ((lp - 1) * m / l) in
-  let g = Array.make (p_len * lp) 0. in
-  for r = 0 to lp - 1 do
-    let d = r * m / l and ph = r * m mod l in
-    for s = 0 to taps - 1 do
-      g.(((d + s) * lp) + r) <- bank.((ph * taps) + s)
-    done
-  done ;
-  of_floats g [|p_len; lp|]
+  Store.make64 [|p_len; lp|] (fun g ->
+      Bigarray.Array1.fill g 0. ;
+      Store.read64 bank (fun b ->
+          for r = 0 to lp - 1 do
+            let d = r * m / l and ph = r * m mod l in
+            for s = 0 to taps - 1 do
+              Bigarray.Array1.unsafe_set g
+                (((d + s) * lp) + r)
+                (Bigarray.Array1.unsafe_get b ((ph * taps) + s))
+            done
+          done ) )
+
+(* [gemm_bank32] is [gemm_bank] rounded to float32, written directly. *)
+let gemm_bank32 ~l ~m ~k ~blocks bank =
+  let taps = (2 * k) + 1 in
+  let lp = blocks * l in
+  let p_len = taps + ((lp - 1) * m / l) in
+  Store.make32 [|p_len; lp|] (fun g ->
+      Bigarray.Array1.fill g 0. ;
+      Store.read64 bank (fun b ->
+          for r = 0 to lp - 1 do
+            let d = r * m / l and ph = r * m mod l in
+            for s = 0 to taps - 1 do
+              Bigarray.Array1.unsafe_set g
+                (((d + s) * lp) + r)
+                (Bigarray.Array1.unsafe_get b ((ph * taps) + s))
+            done
+          done ) )
 
 (* {1 Configuration} *)
 
@@ -554,10 +682,17 @@ type stage_plan =
 and stage_exec =
   | Sdirect  (** the C dot-product kernel *)
   | Sols of ols_plan  (** overlap-save on the block grid of [ols_geom] *)
-  | Sgemm of (float, Nx.float64_elt) Nx.t Lazy.t
+  | Sgemm of gemm_banks
       (** the banded matrix product, over the [P; L] arrangement of the bank
-          ([gemm_bank] with [blocks = 1]); forced on the first prepared kernel,
-          and not domain-safe, like [sgemm] *)
+          ([gemm_bank] with [blocks = 1]) *)
+
+(* The [P; L] arrangement at each kernel dtype, the float32 one rounded from the
+   float64 values; each is built on the first kernel prepared at its dtype, so a
+   float32 kernel neither builds the float64 matrix nor casts it, and forcing is
+   not domain-safe, like [sgemm]. *)
+and gemm_banks =
+  { g64: (float, Nx.float64_elt) Nx.t Lazy.t
+  ; g32: (float, Nx.float32_elt) Nx.t Lazy.t }
 
 type config =
   { sample_rate: int
@@ -569,6 +704,17 @@ type config =
         (* composite group delay in input samples: [K] for one stage, [K1 +
            K2*M1/L1] — integral by construction — for two *)
   ; stages: stage_plan list (* one or two, input to output order *) }
+
+(* [gemm_of dtype g] is the arrangement [g] at the kernel dtype [dtype]. *)
+let gemm_of : type a. (float, a) Nx.dtype -> gemm_banks -> (float, a) Nx.t =
+ fun dtype g ->
+  match dtype with
+  | Nx.Float32 ->
+      Lazy.force g.g32
+  | Nx.Float64 ->
+      Lazy.force g.g64
+  | _ ->
+      assert false
 
 let is_identity c = c.l = 1 && c.m = 1 && c.latency = 0
 
@@ -887,8 +1033,7 @@ type exec_spec = Xdirect | Xols of (int * int * int) | Xgemm
 let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
   let h = design_prototype ~l ~k ~fc ~beta in
   let taps = (2 * k) + 1 in
-  let b = bank_of_prototype ~l ~k h in
-  let bank = of_floats b [|l; taps|] in
+  let bank = bank_of_prototype ~l ~k h in
   let proto = of_floats h [|Array.length h|] in
   { sl= l
   ; sm= m
@@ -896,13 +1041,15 @@ let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
   ; sproto= proto
   ; sbank= bank
   ; svisit= visit_bank ~l ~m ~taps bank
-  ; sgemm= lazy (gemm_bank ~l ~m ~k ~blocks:(gemm_blocks l) (Nx.to_array bank))
+  ; sgemm= lazy (gemm_bank ~l ~m ~k ~blocks:(gemm_blocks l) bank)
   ; sexec=
       ( match exec with
       | Xdirect ->
           Sdirect
       | Xgemm ->
-          Sgemm (lazy (gemm_bank ~l ~m ~k ~blocks:1 (Nx.to_array bank)))
+          Sgemm
+            { g64= lazy (gemm_bank ~l ~m ~k ~blocks:1 bank)
+            ; g32= lazy (gemm_bank32 ~l ~m ~k ~blocks:1 bank) }
       | Xols (n, b, delta) ->
           Sols
             { on= n
@@ -1422,7 +1569,7 @@ module Kernel = struct
             let span = (rows * sp.sm) + (2 * sp.sk) in
             let gaa = array1 (kind dtype) (rows * p_len) in
             Gx
-              { gg= Nx.cast dtype (Lazy.force bank)
+              { gg= gemm_of dtype bank
               ; gr= rows
               ; gp= p_len
               ; gb= rows * sp.sm
