@@ -195,12 +195,11 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
   suite generates with soundml-io's own writer (`soundml-io/bench/io_corpus.ml`; the C
   ceiling harness and the Python cross-reference read the identical bytes).
   Rows: whole-file `read` per format family at 1 s mono, 30 s stereo and
-  30 s mono; the `Reader.read ?out` form (open, one full-file chunk into a
-  lent destination, close — the C ceiling's own shape); `info`; the
-  many-small-files ingest loop in both the allocating form (librosa's shape)
-  and the reused-destination form (the C ceiling's shape); chunked writes;
-  and the fused `read ~sample_rate` next to its offline decomposition
-  (native read plus `Resample.apply`, config built per call on both sides).
+  30 s mono; `info`; the many-small-files ingest loop (librosa's shape:
+  every file decodes into a fresh tensor, as soundml-io's immutable results
+  require); chunked writes; and the fused `read ~sample_rate` next to its
+  offline decomposition (native read plus `Resample.apply`, config built
+  per call on both sides).
 
   The measured position (all min-of-N, warm cache, reference host — Apple
   M4 Pro, libsndfile 1.2.2, soundfile 0.14.0, librosa 0.11.0 — over the
@@ -222,8 +221,6 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
     (float32). FLAC (1.01–1.02x) and Ogg (1.01x) stay at the ceiling: the
     split admits only formats whose seek is exact and whose abandoned
     attempt can be replayed from frame zero, so they decode sequentially.
-    Into a lent destination the stereo float32 cell (`reader_out`) runs
-    0.64–0.77x the ceiling's own shape and the mono cell 1.02x.
 
     The stereo WAV cells still pay the planar-materialization pass —
     `data` is C-contiguous `[channels; frames]` by contract, and splitting
@@ -241,31 +238,33 @@ build on a confirmed regression (wall time beyond 5%, allocations beyond 1%).
     `librosa_contig` rows of the Python twin) costs 1.16–1.17 ms on the
     same files.
 
-    The wav-float32 30 s mono cell is the one bulk cell where the
-    allocating form does not reach python-soundfile: 1.02–1.09x its
-    same-session minimum across four sessions, and 1.26–1.28x its
-    allocating C ceiling, while the same decode into a lent destination
-    (`reader_out`) is 1.02x. The difference is the result tensor's first
-    touch: a fresh 5.3 MB bigarray is a fresh mapping and the kernel
-    zero-fills its pages under the decoder's `read(2)` (~0.025 ms), where
-    a C or CPython caller gets the previous buffer's warm pages back from
-    the allocator. It is visible only here — every other 30 s cell decodes
-    slowly enough to absorb it — and the cell is also the one the work
+    The wav-float32 30 s mono cell is the one bulk cell where `read` does
+    not reach python-soundfile: 1.02–1.09x its same-session minimum across
+    four sessions, and 1.26–1.28x its allocating C ceiling. The distance is
+    the result tensor's first touch (the same decode into a reused
+    destination, a form soundml-io dropped when nx tensors became
+    immutable, measured 1.02x): a fresh 5.3 MB bigarray is a fresh mapping
+    and the kernel zero-fills its pages under the decoder's `read(2)`
+    (~0.025 ms), where a C or CPython caller gets the previous buffer's
+    warm pages back from the allocator. It is visible only here — every
+    other 30 s cell decodes slowly enough to absorb it — and the cell is
+    also the one the work
     model splits narrowest: a 30 s mono float32 payload prices out at two
     extents where the stereo payload takes four, so the split has the
     least to set against it.
-  - **Many small files (1000 x 1 s, total wall)**: the reused-destination
-    loop runs 1.00–1.06x the C many-files ceiling (budget 1.15x, both
-    sessions); the allocating loop runs 1.07–1.28x (OCaml GC churn on
-    88 KB tensors). Its librosa multiple is librosa-side session-sensitive:
-    the recording session measured 2.06x (wav-pcm16), 1.37x (wav-float32),
+  - **Many small files (1000 x 1 s, total wall)**: the ingest loop runs
+    1.07–1.28x the C many-files ceiling (OCaml GC churn on 88 KB tensors).
+    The ceiling decodes every file into one reused buffer; the
+    reused-destination loop that matched it (1.00–1.06x, budget 1.15x)
+    went with `Reader.read ?out` when nx tensors became immutable, so no
+    row of the ceiling's shape is left to hold that budget. The loop's
+    librosa multiple is librosa-side session-sensitive: the recording
+    session measured 2.06x (wav-pcm16), 1.37x (wav-float32),
     1.35x (FLAC); an independent verification session on the same host
     (fresh corpus, adjacent min-of-12 runs) measured 1.85x / 1.30x / 1.33x
     — librosa's loop itself moved 70.2–76.7 ms between sessions, so the
     wav-pcm16 cell dips below its 1.9x floor when librosa runs fast
-    (f32/FLAC hold their 1.3x / 1.1x floors in both). The form the C gate
-    attaches to — the reused-destination loop — passes its budget in every
-    session.
+    (f32/FLAC hold their 1.3x / 1.1x floors in both).
   - **Header probes**: `info` at 1.00–1.14x the C open ceiling (budget
     1.2x) on every family, both sessions.
   - **Writes**: FLAC 0.95–1.07x and Ogg 0.99–1.00x the C chunked-write
