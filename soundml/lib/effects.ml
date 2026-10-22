@@ -133,11 +133,13 @@ let check_rank op t =
 
 (* {1 The core recurrence}
 
-   Both paths share one traversal of the output frames: the magnitudes are
-   interpolated, the accumulator is advanced, and the phases are materialised
-   into a dense matrix so the phasor that closes the computation runs over the
-   whole matrix at once. The traversal is frame-major — the frame axis is
-   outermost — so every row it reads and writes is contiguous. *)
+   With phase locking, one traversal of the output frames per signal
+   interpolates the magnitudes, advances the accumulator and locks it, and the
+   phases are materialised into a dense matrix so the phasor that closes the
+   computation runs over the whole matrix at once; without, the fused traversal
+   further below computes the same values band by band. The traversal is
+   frame-major — the frame axis is outermost — so every row it reads and writes
+   is contiguous. *)
 
 (* Flat float64 storage. The kind is named rather than inferred: a polymorphic
    Bigarray element type turns every access in the traversal below into a
@@ -269,6 +271,126 @@ let propagate ~locked ~bins ~frames ~rate ~count ~omega ~(mag : doubles) ~mb
     end
   done
 
+(* {1 The independent traversal, fused}
+
+   Without phase locking every bin evolves alone, so the traversal splits into
+   bands of [band] bins, each carried through every output frame by one parallel
+   unit ({!Par}) that computes everything on the way: the magnitudes and
+   arguments of the analysis frames it reaches (each once, into two slots
+   indexed by the frame's parity, which keep the two frames an interval reads
+   apart), the interpolated magnitude, the phasor, written straight into the
+   complex result, and the accumulator. The values are those of {!propagate} and
+   the whole-matrix phasor, operation for operation: [hypot] and [atan2] as
+   [Nx.magnitude] and [Nx.angle] take them, each product bound to a name before
+   it is added so no platform contracts the pair, and the principal value with
+   [round_half_even] written out. *)
+
+let band = 32
+
+let vocode_band ~bins ~frames ~rate ~count ~omega (src : doubles)
+    (dst : doubles) s b0 b1 mags angs amps phis loaded =
+  let w = b1 - b0 in
+  let last = frames - 1 in
+  let sbase = s * frames * bins and dbase = s * count * bins in
+  Array.unsafe_set loaded 0 (-1) ;
+  Array.unsafe_set loaded 1 (-1) ;
+  let load f =
+    let slot = f land 1 in
+    if Array.unsafe_get loaded slot <> f then begin
+      Array.unsafe_set loaded slot f ;
+      let row = 2 * (sbase + (f * bins) + b0) and o = slot * w in
+      for k = 0 to w - 1 do
+        let re = Bigarray.Array1.unsafe_get src (row + (2 * k))
+        and im = Bigarray.Array1.unsafe_get src (row + (2 * k) + 1) in
+        Float.Array.unsafe_set mags (o + k) (Float.hypot re im) ;
+        Float.Array.unsafe_set angs (o + k) (Float.atan2 im re)
+      done
+    end
+  in
+  load 0 ;
+  for k = 0 to w - 1 do
+    Float.Array.unsafe_set phis k (Float.Array.unsafe_get angs k)
+  done ;
+  for i = 0 to count - 1 do
+    let position = Float.of_int i *. rate in
+    let i0 = Int.min (Float.to_int position) last in
+    let alpha = position -. Float.of_int i0 in
+    load i0 ;
+    let o0 = i0 land 1 * w and o1 = (1 - (i0 land 1)) * w in
+    let out = 2 * (dbase + (i * bins) + b0) in
+    (* the interpolated magnitudes go to [amps], then become phasors *)
+    if i0 < last then begin
+      load (i0 + 1) ;
+      for k = 0 to w - 1 do
+        let p0 = (1. -. alpha) *. Float.Array.unsafe_get mags (o0 + k) in
+        let p1 = alpha *. Float.Array.unsafe_get mags (o1 + k) in
+        Float.Array.unsafe_set amps k (p0 +. p1)
+      done
+    end
+    else if last > 0 then begin
+      load (i0 - 1) ;
+      for k = 0 to w - 1 do
+        let p0 = (1. +. alpha) *. Float.Array.unsafe_get mags (o0 + k) in
+        let p1 = alpha *. Float.Array.unsafe_get mags (o1 + k) in
+        Float.Array.unsafe_set amps k (p0 -. p1)
+      done
+    end
+    else
+      for k = 0 to w - 1 do
+        Float.Array.unsafe_set amps k (Float.Array.unsafe_get mags (o0 + k))
+      done ;
+    for k = 0 to w - 1 do
+      let amp = Float.Array.unsafe_get amps k
+      and ph = Float.Array.unsafe_get phis k in
+      Bigarray.Array1.unsafe_set dst (out + (2 * k)) (amp *. Float.cos ph) ;
+      Bigarray.Array1.unsafe_set dst (out + (2 * k) + 1) (amp *. Float.sin ph)
+    done ;
+    if i + 1 < count && i0 < last then
+      for k = 0 to w - 1 do
+        let om = Array.unsafe_get omega (b0 + k) in
+        let x =
+          Float.Array.unsafe_get angs (o1 + k)
+          -. Float.Array.unsafe_get angs (o0 + k)
+          -. om
+        in
+        let q = x /. two_pi in
+        let r =
+          if Float.abs q >= 0x1p52 then q
+          else if q >= 0. then q +. 0x1p52 -. 0x1p52
+          else q -. 0x1p52 +. 0x1p52
+        in
+        let t = two_pi *. r in
+        let deviation = x -. t in
+        Float.Array.unsafe_set phis k
+          (Float.Array.unsafe_get phis k +. (om +. deviation))
+      done
+  done
+
+(* [vocode_independent c ~rate z] is [vocode c ~locked:false ~rate z], over
+   [signals] signals of [frames] frames, [count] output frames. *)
+let vocode_independent (c : Stft.Config.t) ~rate ~signals ~frames ~count ~out z
+    =
+  let bins = Stft.Config.bins c in
+  let omega = advance c in
+  let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
+  let bands = (bins + band - 1) / band in
+  Nx.swapaxes (-1) (-2)
+    (Store.make_c128 out (fun dst ->
+         Store.read_parts64 framed (fun src ->
+             Par.ranges ~n:(signals * bands) ~grain:1 (fun lo hi ->
+                 let mags = Float.Array.make (2 * band) 0.
+                 and angs = Float.Array.make (2 * band) 0.
+                 and amps = Float.Array.make band 0.
+                 and phis = Float.Array.make band 0.
+                 and loaded = Array.make 2 (-1) in
+                 for u = lo to hi - 1 do
+                   let s = u / bands and b = u mod bands in
+                   vocode_band ~bins ~frames ~rate ~count ~omega src dst s
+                     (b * band)
+                     (Int.min bins ((b + 1) * band))
+                     mags angs amps phis loaded
+                 done ) ) ) )
+
 (* [vocode c ~locked ~rate z] is the stretched spectrum of the complex128
    spectrum [z], in float64 arithmetic and shaped [[...; bins; count]]. *)
 let vocode (c : Stft.Config.t) ~locked ~rate z =
@@ -281,6 +403,8 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
   let out = Array.append batch [|count; bins|] in
   if signals = 0 || count = 0 then
     Nx.swapaxes (-1) (-2) (Nx.zeros Nx.complex128 out)
+  else if not locked then
+    vocode_independent c ~rate ~signals ~frames ~count ~out z
   else begin
     let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
     let magnitudes = Nx.magnitude Nx.float64 framed in
