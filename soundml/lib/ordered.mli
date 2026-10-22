@@ -91,3 +91,29 @@ val project_cast : matrix -> (float, 'a) Nx.t -> (float, 'a) Nx.t
     intermediate when [x] is float32 or float64.
 
     Raises [Invalid_argument] as {!project} does. *)
+
+(** {1 Projections of a spectrum's power} *)
+
+val project_power :
+     matrix
+  -> (float, 'a) Nx.dtype
+  -> (Complex.t, 'c) Nx.t
+  -> (float, Nx.float64_elt) Nx.t option
+(** [project_power w dtype z] is [project w p] for [p] the power spectrum of
+    the frames-major complex spectrum [z] ([[...; n; k]]) in [dtype],
+    [[...; k; n]], each power [re *. re +. im *. im] computed in double
+    precision and rounded once into [dtype] exactly as
+    {!Stft.power_spectrum} computes it — without materializing [p]: [Some]
+    when [dtype] is float32 and [z] complex64, or [dtype] float64 and [z]
+    complex128, [None] otherwise.
+
+    Raises [Invalid_argument] if [z] has rank below [2] or its last axis is
+    not [k] long. *)
+
+val project_power_cast :
+     matrix
+  -> (float, 'a) Nx.dtype
+  -> (Complex.t, 'c) Nx.t
+  -> (float, 'a) Nx.t option
+(** [project_power_cast w dtype z] is {!project_power} rounded once into
+    [dtype], as {!project_cast} rounds {!project}. *)

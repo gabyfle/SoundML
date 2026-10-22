@@ -151,3 +151,11 @@ val stage : Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
     The stream {!Pipeline.Format} does not carry a bin count, so a bins
     mismatch is reported by {!apply}'s [Invalid_argument] at the first
     chunk, not at prepare time. *)
+
+(**/**)
+
+val power_spectrogram :
+  Stft.Config.t -> Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t option
+(* Library-internal: [apply c (Stft.power_spectrum stft x)] at float32 and
+   float64, bit for bit, without materializing the power spectrum; [None]
+   otherwise. *)

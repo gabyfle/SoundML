@@ -108,7 +108,7 @@ let state_step fn s chunk =
       match s.carry with None -> chunk | Some t -> concat_last [t; chunk]
     in
     let l = last_dim ext in
-    let count = Stdlib.min m (Stdlib.max 0 (l - s.lag)) in
+    let count = Int.min m (Int.max 0 (l - s.lag)) in
     let out =
       if count = 0 then Nx.zeros dtype (collapsed_shape chunk m)
       else
@@ -126,7 +126,7 @@ let state_step fn s chunk =
           concat_last
             [Nx.zeros dtype (collapsed_shape chunk (m - count)); values]
     in
-    let keep = Stdlib.min s.lag l in
+    let keep = Int.min s.lag l in
     s.carry <- Some (Nx.copy (shrink_last ext (l - keep) l)) ;
     out
   end
@@ -174,7 +174,13 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
   if Nx.ndim x < 1 then
     invalid_arg
       (fn ^ ": cannot analyse a rank-zero tensor (the time axis must exist)") ;
-  let mel = Mel.apply mel_config (Stft.power_spectrum stft_config x) in
+  let mel =
+    match Mel.power_spectrogram stft_config mel_config x with
+    | Some mel ->
+        mel
+    | None ->
+        Mel.apply mel_config (Stft.power_spectrum stft_config x)
+  in
   let dtype = Nx.dtype x in
   let m = last_dim mel in
   if Nx.numel mel = 0 then

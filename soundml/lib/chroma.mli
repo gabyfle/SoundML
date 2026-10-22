@@ -263,3 +263,15 @@ val of_cqt_stage :
 
     librosa's [threshold] parameter is deliberately absent: its default of
     [0.] zeroes nothing in a projection of non-negative magnitudes. *)
+
+(**/**)
+
+val power_chromagram :
+     ?norm:norm
+  -> Stft.Config.t
+  -> Config.t
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t option
+(* Library-internal: [apply ?norm c (Stft.power_spectrum stft x)] at float32 and
+   float64, bit for bit, without materializing the power spectrum; [None]
+   otherwise. *)
