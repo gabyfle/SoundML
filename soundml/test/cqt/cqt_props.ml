@@ -219,8 +219,8 @@ let tone_tests =
             let frames = Nx.dim 1 power in
             let column =
               Nx.to_array
-                (Nx.shrink
-                   [|(0, Nx.dim 0 power); (frames / 2, (frames / 2) + 1)|]
+                (Nx.slice
+                   [Nx.R (0, Nx.dim 0 power); Nx.R (frames / 2, (frames / 2) + 1)]
                    power )
             in
             let best = ref 0 in
@@ -286,10 +286,10 @@ let batch_tests =
             in
             let slice =
               Nx.reshape (Nx.shape alone)
-                (Nx.shrink
-                   [| (row, row + 1)
-                    ; (0, Nx.dim 1 stacked)
-                    ; (0, Nx.dim 2 stacked) |]
+                (Nx.slice
+                   [ Nx.R (row, row + 1)
+                   ; Nx.R (0, Nx.dim 1 stacked)
+                   ; Nx.R (0, Nx.dim 2 stacked) ]
                    stacked )
             in
             let e = Nx.to_array alone and a = Nx.to_array slice in

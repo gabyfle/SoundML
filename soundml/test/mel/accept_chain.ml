@@ -51,7 +51,7 @@ let suite =
                explicitly *)
             let pushed =
               List.filter_map (Pipeline.Stream.push s)
-                (List.init 5 (fun i -> Nx.shrink [|(i * 8, (i + 1) * 8)|] x))
+                (List.init 5 (fun i -> Nx.slice [Nx.R (i * 8, (i + 1) * 8)] x))
             in
             let outs = pushed @ Pipeline.Stream.flush s in
             let streamed =
