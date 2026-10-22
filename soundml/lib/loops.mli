@@ -140,3 +140,52 @@ val flatness :
 (** [flatness] is [exp (mean (log v)) /. mean v] over the frame's bins, [v]
     being each bin raised to [power] (squared at [power = 2.]) and floored at
     [amin]. *)
+
+(** {1 Synthesis} *)
+
+val overlap_add :
+     window:Float.Array.t
+  -> hop:int
+  -> period:Float.Array.t
+  -> partial:(int -> float)
+  -> head:int
+  -> stop:int
+  -> left:int
+  -> out_len:int
+  -> valid:int
+  -> (float, Nx.float64_elt) Nx.t
+  -> (float, Nx.float64_elt) Nx.t
+(** [overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len
+    ~valid frames] is the least-squares synthesis of the inverse-transformed
+    frames [frames] ([[...; count; fft]]): [[...; out_len]], output [i] being
+    padded position [left + i]. Its numerator adds the windowed taps of the
+    frames reaching the position, the frame opening latest first; its
+    denominator is the envelope, [period.(q mod hop)] at padded positions
+    [q] in [\[head, stop)] and [partial q] elsewhere. Outputs from [valid]
+    on are zero. *)
+
+val gl_update :
+     beta:float
+  -> magnitudes:(float, Nx.float64_elt) Nx.t
+  -> ?previous:(Complex.t, Nx.complex64_elt) Nx.t
+  -> (Complex.t, Nx.complex64_elt) Nx.t
+  -> (Complex.t, Nx.complex64_elt) Nx.t
+(** [gl_update ~beta ~magnitudes ?previous rebuilt] is one fast Griffin-Lim
+    spectrum, elementwise over tensors of one shape and layout: [e] is
+    [rebuilt], less [beta] times [previous] when given, and the result is
+    [magnitudes *. e /. (|e| +. min_float)], [|e|] computed by
+    [Float.hypot]. *)
+
+(** {1 Band extremes} *)
+
+val extremes :
+     bands:int array
+  -> (float, 'a) Nx.t
+  -> (float, Nx.float64_elt) Nx.t * (float, Nx.float64_elt) Nx.t
+(** [extremes ~bands s] is the valleys and peaks of the non-empty spectrogram
+    [s] ([[...; k; n]]): for each band [b] — rows [\[lo, lo + len)] with
+    [bands.(3b) = lo], [bands.(3b + 1) = len] and [bands.(3b + 2) = take], [1
+    <= take <= len] — and each frame, the mean of the [take] least values and
+    the mean of the [take] greatest, each [take] values added in ascending
+    order from [0.] in double precision, NaN ordering after every number.
+    Both are [[...; nb; n]] at float64, [nb] the number of bands. *)

@@ -57,19 +57,10 @@
    The time filter runs along the contiguous axis: each lane is materialised
    once into its reflect-extended form ([n + k - 1] floats) and swept. The
    frequency filter runs along the strided axis, and rather than transpose it
-   keeps all [frames] windows live at once ([frames * k] floats) and streams the
-   source rows in storage order, so every read is contiguous. *)
-
-(* The Bigarray kind of the two element widths the kernels carry: the seam
-   between the tensor faces and the median kernels, which read a tensor's
-   storage in place and write a Bigarray the result then takes over. *)
-let kind : type a. (float, a) Nx.dtype -> (float, a) Bigarray.kind = function
-  | Nx.Float64 ->
-      Bigarray.float64
-  | Nx.Float32 ->
-      Bigarray.float32
-  | _ ->
-      assert false
+   keeps the windows of a range of frames live at once ([k] floats per frame)
+   and streams that range of the source rows in storage order, so every read is
+   contiguous. Each domain sweeps lanes of its own: rows for the time filter,
+   frame ranges for the frequency filter. *)
 
 (* {1 Line geometry} *)
 
@@ -132,12 +123,12 @@ let[@inline] replace (win : float array) base k old nw =
 let median_rows_f64
     (src : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t)
     (dst : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t)
-    ~rows ~n ~k =
+    ~n ~k r0 r1 =
   let pl = k / 2 in
   let mid = k / 2 in
   let ext = Array.make (n + k - 1) 0. in
   let win = Array.make k 0. in
-  for r = 0 to rows - 1 do
+  for r = r0 to r1 - 1 do
     let base = r * n in
     for t = 0 to n + k - 2 do
       Array.unsafe_set ext t
@@ -157,12 +148,12 @@ let median_rows_f64
 let median_rows_f32
     (src : (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t)
     (dst : (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t)
-    ~rows ~n ~k =
+    ~n ~k r0 r1 =
   let pl = k / 2 in
   let mid = k / 2 in
   let ext = Array.make (n + k - 1) 0. in
   let win = Array.make k 0. in
-  for r = 0 to rows - 1 do
+  for r = r0 to r1 - 1 do
     let base = r * n in
     for t = 0 to n + k - 2 do
       Array.unsafe_set ext t
@@ -186,29 +177,29 @@ let median_rows_f32
 let median_cols_f64
     (src : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t)
     (dst : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t)
-    ~planes ~rows ~cols ~k =
+    ~rows ~cols ~k plane j0 j1 =
   let pl = k / 2 in
   let mid = k / 2 in
-  let wins = Array.make (cols * k) 0. in
+  let wins = Array.make ((j1 - j0) * k) 0. in
   let scratch = Array.make k 0. in
-  for plane = 0 to planes - 1 do
+  begin
     let origin = plane * rows * cols in
-    for j = 0 to cols - 1 do
+    for j = j0 to j1 - 1 do
       for t = 0 to k - 1 do
         Array.unsafe_set scratch t
           (Bigarray.Array1.unsafe_get src
              (origin + (refl (t - pl) rows * cols) + j) )
       done ;
       sorted_insert scratch k ;
-      Array.blit scratch 0 wins (j * k) k ;
+      Array.blit scratch 0 wins ((j - j0) * k) k ;
       Bigarray.Array1.unsafe_set dst (origin + j) (Array.unsafe_get scratch mid)
     done ;
     for r = 1 to rows - 1 do
       let out_row = origin + (refl (r - pl - 1) rows * cols) in
       let in_row = origin + (refl (r + k - 1 - pl) rows * cols) in
       let d = origin + (r * cols) in
-      for j = 0 to cols - 1 do
-        let base = j * k in
+      for j = j0 to j1 - 1 do
+        let base = (j - j0) * k in
         replace wins base k
           (Bigarray.Array1.unsafe_get src (out_row + j))
           (Bigarray.Array1.unsafe_get src (in_row + j)) ;
@@ -216,34 +207,34 @@ let median_cols_f64
           (Array.unsafe_get wins (base + mid))
       done
     done
-  done
+  end
 
 let median_cols_f32
     (src : (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t)
     (dst : (float, Bigarray.float32_elt, Bigarray.c_layout) Bigarray.Array1.t)
-    ~planes ~rows ~cols ~k =
+    ~rows ~cols ~k plane j0 j1 =
   let pl = k / 2 in
   let mid = k / 2 in
-  let wins = Array.make (cols * k) 0. in
+  let wins = Array.make ((j1 - j0) * k) 0. in
   let scratch = Array.make k 0. in
-  for plane = 0 to planes - 1 do
+  begin
     let origin = plane * rows * cols in
-    for j = 0 to cols - 1 do
+    for j = j0 to j1 - 1 do
       for t = 0 to k - 1 do
         Array.unsafe_set scratch t
           (Bigarray.Array1.unsafe_get src
              (origin + (refl (t - pl) rows * cols) + j) )
       done ;
       sorted_insert scratch k ;
-      Array.blit scratch 0 wins (j * k) k ;
+      Array.blit scratch 0 wins ((j - j0) * k) k ;
       Bigarray.Array1.unsafe_set dst (origin + j) (Array.unsafe_get scratch mid)
     done ;
     for r = 1 to rows - 1 do
       let out_row = origin + (refl (r - pl - 1) rows * cols) in
       let in_row = origin + (refl (r + k - 1 - pl) rows * cols) in
       let d = origin + (r * cols) in
-      for j = 0 to cols - 1 do
-        let base = j * k in
+      for j = j0 to j1 - 1 do
+        let base = (j - j0) * k in
         replace wins base k
           (Bigarray.Array1.unsafe_get src (out_row + j))
           (Bigarray.Array1.unsafe_get src (in_row + j)) ;
@@ -251,14 +242,19 @@ let median_cols_f32
           (Array.unsafe_get wins (base + mid))
       done
     done
-  done
+  end
 
 (* {1 Tensor faces of the kernels}
 
    The last two axes are the bin and frame axes; leading axes are independent
    planes. Both faces read the input's C-order storage in place (a contiguous
-   copy only when it has none) and fill a fresh Bigarray of the same shape that
-   the returned tensor takes over. *)
+   copy only when it has none) and fill a fresh tensor of the same shape. Lanes
+   are independent — rows for the time median, columns for the frequency median
+   — so they are split across domains ({!Par}), each range with its own windows:
+   the medians are those one domain computes. *)
+
+(* About 64 Ksteps of window update per chunk. *)
+let grain_lanes ~length = Stdlib.max 1 (65_536 / Stdlib.max 1 length)
 
 let median_time : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
  fun s ~k ->
@@ -267,19 +263,17 @@ let median_time : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
   let n = shape.(Array.length shape - 1) in
   let rows = if n = 0 then 0 else Nx.numel s / n in
   if rows = 0 then Nx.zeros dtype shape
-  else begin
-    let out = Bigarray.Genarray.create (kind dtype) Bigarray.c_layout shape in
-    let dst = Bigarray.reshape_1 out (Nx.numel s) in
-    Rig.Buffer.read (Nx.to_buffer s) (kind dtype) (fun src ->
-        match dtype with
-        | Nx.Float64 ->
-            median_rows_f64 src dst ~rows ~n ~k
-        | Nx.Float32 ->
-            median_rows_f32 src dst ~rows ~n ~k
-        | _ ->
-            assert false ) ;
-    Nx.of_bigarray out
-  end
+  else
+    let lanes run = Par.ranges ~n:rows ~grain:(grain_lanes ~length:n) run in
+    match dtype with
+    | Nx.Float64 ->
+        Store.make64 shape (fun dst ->
+            Store.read64 s (fun src -> lanes (median_rows_f64 src dst ~n ~k)) )
+    | Nx.Float32 ->
+        Store.make32 shape (fun dst ->
+            Store.read32 s (fun src -> lanes (median_rows_f32 src dst ~n ~k)) )
+    | _ ->
+        assert false
 
 let median_freq : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
  fun s ~k ->
@@ -289,24 +283,30 @@ let median_freq : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
   let cols = shape.(nd - 1) and rows = shape.(nd - 2) in
   let planes = if rows = 0 || cols = 0 then 0 else Nx.numel s / (rows * cols) in
   if planes = 0 then Nx.zeros dtype shape
-  else begin
-    let out = Bigarray.Genarray.create (kind dtype) Bigarray.c_layout shape in
-    let dst = Bigarray.reshape_1 out (Nx.numel s) in
-    Rig.Buffer.read (Nx.to_buffer s) (kind dtype) (fun src ->
-        match dtype with
-        | Nx.Float64 ->
-            median_cols_f64 src dst ~planes ~rows ~cols ~k
-        | Nx.Float32 ->
-            median_cols_f32 src dst ~planes ~rows ~cols ~k
-        | _ ->
-            assert false ) ;
-    Nx.of_bigarray out
-  end
-
-(* {1 Masks}
-
-   [tiny dtype] is the smallest positive normal of the element width: the floor
-   below which a pair of enhanced values carries no decidable energy. *)
+  else
+    (* a unit is one plane's column range; ranges never straddle planes *)
+    let lanes run =
+      Par.ranges ~n:(planes * cols) ~grain:(grain_lanes ~length:rows)
+        (fun lo hi ->
+          let u = ref lo in
+          while !u < hi do
+            let plane = !u / cols in
+            let stop = Stdlib.min hi ((plane + 1) * cols) in
+            run plane (!u - (plane * cols)) (stop - (plane * cols)) ;
+            u := stop
+          done )
+    in
+    match dtype with
+    | Nx.Float64 ->
+        Store.make64 shape (fun dst ->
+            Store.read64 s (fun src ->
+                lanes (median_cols_f64 src dst ~rows ~cols ~k) ) )
+    | Nx.Float32 ->
+        Store.make32 shape (fun dst ->
+            Store.read32 s (fun src ->
+                lanes (median_cols_f32 src dst ~rows ~cols ~k) ) )
+    | _ ->
+        assert false
 
 let tiny : type a. (float, a) Nx.dtype -> float = function
   | Nx.Float64 ->

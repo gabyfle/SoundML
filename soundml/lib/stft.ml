@@ -40,12 +40,12 @@
    real-valued conveniences pick the complex storage whose component width
    matches the input's dtype ([spectrum_witness]).
 
-   - Synthesis is the mirror image: one batched inverse real transform, one
-   window multiply, and an overlap-add expressed as [ceil (fft_size / hop)]
-   dense additions of whole hop-sized blocks ([overlap_add]) rather than a
-   scatter. Its denominator is one rank-one tensor, periodic with the hop over
-   all but its two borders and tiled from a single period ([envelope]), so
-   neither side of the quotient ever materialises a per-frame buffer. *)
+   - Synthesis is the mirror image: one batched inverse real transform, then one
+   fused loop ({!Loops.overlap_add}) that windows, overlap-adds and divides by
+   the envelope position by position, each position adding its taps in a fixed
+   order. The envelope is periodic with the hop over all but its two borders, so
+   it is read from one period there and summed at the borders, and neither side
+   of the quotient is ever materialised. *)
 
 module Config = struct
   type t =
@@ -828,42 +828,6 @@ let batch_shape t =
   let shape = Nx.shape t in
   Array.sub shape 0 (Array.length shape - 2)
 
-(* [overlap_add c ~frames windowed] sums the windowed frames [[...; frames;
-   fft_size]] back at the positions they were taken from, returning the [(frames
-   - 1) * hop + fft_size] padded positions they span.
-
-   Frames are padded to a whole number [blocks] of hops and read as [[...;
-   frames; blocks; hop]]: padded position [(p + k) * hop + j] then receives
-   exactly the tap [[p; k; j]], so the overlap-add is the sum over [k] of the
-   [k]-th block plane, each shifted by [k] whole blocks. That is [blocks] dense
-   additions over the output, and it touches every tap exactly once. *)
-let overlap_add (c : Config.t) ~frames windowed =
-  let fft = Config.fft_size c and hop = Config.hop c in
-  let blocks = ceil_div fft hop in
-  let lead = batch_shape windowed in
-  let rank = Array.length lead in
-  let widened =
-    if blocks * hop = fft then windowed
-    else Nx.pad (full_widths windowed 0 ((blocks * hop) - fft)) 0. windowed
-  in
-  let grid = Nx.reshape (Array.append lead [|frames; blocks; hop|]) widened in
-  let shifted k =
-    Nx.slice
-      (List.init (rank + 3) (fun i ->
-           if i = rank + 1 then Nx.R (k, k + 1) else Nx.A ) )
-      grid
-    |> Nx.reshape (Array.append lead [|frames; hop|])
-    |> Nx.pad
-         (Array.init (rank + 2) (fun i ->
-              if i = rank then (k, blocks - 1 - k) else (0, 0) ) )
-         0.
-    |> Nx.reshape (Array.append lead [|(frames + blocks - 1) * hop|])
-  in
-  let rec sum k acc =
-    if k = blocks then acc else sum (k + 1) (Nx.add acc (shifted k))
-  in
-  shrink_last (sum 1 (shifted 0)) 0 (((frames - 1) * hop) + fft)
-
 (* [guard v] is [v] with an exact zero replaced by one: a position whose
    envelope vanishes exactly has an exactly zero numerator too — every tap
    reaching it is a zero of the window — so dividing by one returns the honest 0
@@ -887,39 +851,6 @@ let partial_envelope (c : Config.t) w ~last q =
   done ;
   guard !total
 
-(* [envelope c ~frames] is the overlap-added squared analysis window over the
-   same padded positions, guarded as above.
-
-   Positions in [[fft_size - hop, frames * hop)] receive every tap of their
-   residue class, so the envelope repeats with the hop there and one period
-   tiles it. The at most [fft_size - hop] positions on either side receive a
-   partial run, and are summed by {!partial_envelope}. *)
-let envelope (c : Config.t) ~frames =
-  let fft = Config.fft_size c and hop = Config.hop c in
-  let w = Nx.to_array c.analysis_window in
-  let complete = folded_square_window c in
-  let partial q = partial_envelope c w ~last:(frames - 1) q in
-  let span = ((frames - 1) * hop) + fft in
-  let head = Stdlib.min span (fft - hop) in
-  let stop = Stdlib.max head (Stdlib.min span (frames * hop)) in
-  let border start count =
-    if count = 0 then []
-    else
-      [ Nx.create Nx.float64 [|count|]
-          (Array.init count (fun i -> partial (start + i))) ]
-  in
-  let interior =
-    let count = stop - head in
-    if count = 0 then []
-    else
-      let period =
-        Nx.create Nx.float64 [|hop|]
-          (Array.init hop (fun t -> guard complete.((head + t) mod hop)))
-      in
-      [shrink_last (Nx.tile [|ceil_div count hop|] period) 0 count]
-  in
-  concat_last (border 0 head @ interior @ border stop (span - stop))
-
 (* [to_complex128 t] is [t] as complex128, sharing [t] when it already is: the
    widening the double interior needs, exact in both components. *)
 let to_complex128 : type c.
@@ -927,23 +858,23 @@ let to_complex128 : type c.
  fun t ->
   match Nx.dtype t with Nx.Complex128 -> t | _ -> Nx.cast Nx.complex128 t
 
-(* [synthesise c ?length z] is the synthesis equation above, on a checked
-   complex spectrum [z] shaped [[...; bins; frames]], widened to complex128
-   after it is viewed frames-major, so the widening reads the layout the
-   analysis writes and the inverse transform receives contiguous rows.
+(* [synthesise_rows c ?length rows] is the synthesis equation above, on a
+   complex128 spectrum [rows] laid out frames-major, [[...; frames; bins]].
 
    Only the frames the output can reach are inverted: a named [length] keeps
    padded positions [[left, left + length)], and frame [p] opens at padded
    position [p * hop], so the frames from [ceil ((length + left) / hop)] on lie
    entirely past the output and are dropped before any transform runs. The
-   retained frames are inverted in one batched real transform, windowed,
-   overlap-added and divided by the envelope in padded coordinates; the left
-   extension is then trimmed and the result cut or zero-extended to the
-   requested length. *)
-let synthesise (c : Config.t) ?length z =
+   retained frames are inverted in one batched real transform; one fused loop
+   ({!Loops.overlap_add}) then windows them, overlap-adds them and divides by
+   the envelope in padded coordinates, keeping only the positions past the left
+   extension, and zero-extends the result to the requested length. *)
+let synthesise_rows (c : Config.t) ?length rows =
   let fft = Config.fft_size c and hop = Config.hop c in
   let left = left_width c in
-  let frames = last_dim z in
+  let nd = Nx.ndim rows in
+  let frames = Nx.dim (nd - 2) rows in
+  let lead = Array.sub (Nx.shape rows) 0 (nd - 2) in
   let out_len =
     match length with Some n -> n | None -> output_length c ~frames
   in
@@ -954,22 +885,34 @@ let synthesise (c : Config.t) ?length z =
     | Some n ->
         Stdlib.min frames (ceil_div (n + left) hop)
   in
-  if count = 0 || out_len = 0 || Array.exists (fun d -> d = 0) (batch_shape z)
-  then Nx.zeros Nx.float64 (Array.append (batch_shape z) [|out_len|])
+  if count = 0 || out_len = 0 || Array.exists (fun d -> d = 0) lead then
+    Nx.zeros Nx.float64 (Array.append lead [|out_len|])
   else
-    let z = if count = frames then z else shrink_last z 0 count in
-    let span = ((count - 1) * hop) + fft in
-    let y =
-      Nx.irfft Nx.float64 ~axis:(-1) ~n:fft
-        (to_complex128 (Nx.swapaxes (-1) (-2) z))
-      |> Fun.flip Nx.mul c.analysis_window
-      |> overlap_add c ~frames:count
-      |> Fun.flip Nx.div (envelope c ~frames:count)
+    let rows =
+      if count = frames then rows
+      else
+        Nx.slice
+          (List.init nd (fun i -> if i = nd - 2 then Nx.R (0, count) else Nx.A))
+          rows
     in
-    let stop = Stdlib.min span (left + out_len) in
-    let y = shrink_last y left stop in
-    if stop - left = out_len then y
-    else Nx.pad (full_widths y 0 (out_len - (stop - left))) 0. y
+    let span = ((count - 1) * hop) + fft in
+    let w = Nx.to_array c.analysis_window in
+    let complete = folded_square_window c in
+    let head = Stdlib.min span (fft - hop) in
+    let stop = Stdlib.max head (Stdlib.min span (count * hop)) in
+    let period = Float.Array.init hop (fun r -> guard complete.(r)) in
+    Loops.overlap_add ~window:c.window_values ~hop ~period
+      ~partial:(partial_envelope c w ~last:(count - 1))
+      ~head ~stop ~left ~out_len
+      ~valid:(Stdlib.min span (left + out_len) - left)
+      (Nx.irfft Nx.float64 ~axis:(-1) ~n:fft rows)
+
+(* [synthesise c ?length z] is {!synthesise_rows} on a spectrum [z] shaped
+   [[...; bins; frames]], viewed frames-major and then widened to complex128, so
+   the widening reads the layout the analysis writes and the inverse transform
+   receives contiguous rows. *)
+let synthesise (c : Config.t) ?length z =
+  synthesise_rows c ?length (to_complex128 (Nx.swapaxes (-1) (-2) z))
 
 let invert dtype c ?length z =
   check_synthesis "invert" c ?length z ;
@@ -993,11 +936,6 @@ let invert dtype c ?length z =
    so the magnitude asked for there is left out of the spectrum that iteration
    synthesises instead of being placed at an arbitrary phase. *)
 
-let unit_phase a =
-  Nx.div a
-    (Nx.cast Nx.complex128
-       (Nx.add_s (Nx.magnitude Nx.float64 a) Float.min_float) )
-
 let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
     c s =
   check_synthesis "griffin_lim" c ?length s ;
@@ -1013,11 +951,16 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
           non-negative)"
          momentum ) ;
   let dtype = Nx.dtype s in
-  let magnitudes = Nx.cast Nx.complex128 (to_double s) in
-  let angles =
+  (* The iteration runs frames-major, the layout the transforms read and write:
+     the magnitudes are transposed once, and the spectrum the next synthesis
+     reads — the magnitudes times the current phase — is all that crosses from
+     one iteration to the next. *)
+  let magnitudes = Nx.contiguous (bins_major (to_double s)) in
+  let spectrum =
     match init with
     | `Zero_phase ->
-        Nx.full Nx.complex128 (Nx.shape s) Complex.one
+        Nx.complex Nx.complex128 ~re:magnitudes
+          ~im:(Nx.zeros Nx.float64 (Nx.shape magnitudes))
     | `Phase p ->
         if Nx.shape p <> Nx.shape s then
           invalid_arg
@@ -1029,11 +972,13 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
                   (List.map string_of_int (Array.to_list (Nx.shape p))) )
                (String.concat "; "
                   (List.map string_of_int (Array.to_list (Nx.shape s))) ) ) ;
-        let p = to_double p in
-        Nx.complex Nx.complex128 ~re:(Nx.cos p) ~im:(Nx.sin p)
+        let p = bins_major (to_double p) in
+        Nx.complex Nx.complex128
+          ~re:(Nx.mul magnitudes (Nx.cos p))
+          ~im:(Nx.mul magnitudes (Nx.sin p))
   in
   let frames = last_dim s in
-  let beta = Complex.{re= momentum /. (1. +. momentum); im= 0.} in
+  let beta = momentum /. (1. +. momentum) in
   (* the loop runs at the natural synthesis length, the one geometry that
      re-analyses to exactly [frames] frames; a named [length] applies to the
      final synthesis only *)
@@ -1042,24 +987,19 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
     && frames > 0
     && not (Array.exists (fun d -> d = 0) (batch_shape s))
   in
-  let rec run k angles previous =
-    if k = 0 || not iterate then angles
+  let rec run k spectrum previous =
+    if k = 0 || not iterate then spectrum
     else
+      let signal = synthesise_rows c spectrum in
       let rebuilt =
-        transform_range Nx.complex128 c ~p0:0 ~p1:frames
-          (synthesise c (Nx.mul magnitudes angles))
+        analyse_signal c Nx.complex128 signal ~first:0 ~count:frames
       in
-      let extrapolated =
-        match previous with
-        | None ->
-            rebuilt
-        | Some previous ->
-            Nx.sub rebuilt (Nx.mul_s previous beta)
-      in
-      run (k - 1) (unit_phase extrapolated) (Some rebuilt)
+      run (k - 1)
+        (Loops.gl_update ~beta ~magnitudes ?previous rebuilt)
+        (Some rebuilt)
   in
-  let angles = run n_iter angles None in
-  Nx.cast dtype (synthesise c ?length (Nx.mul magnitudes angles))
+  let spectrum = run n_iter spectrum None in
+  Nx.cast dtype (synthesise_rows c ?length spectrum)
 
 (* {1 Incremental synthesis}
 
@@ -1079,11 +1019,11 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
 
    Both folds are the offline ones, position by position and in the same order.
    The numerator sums the [blocks] taps of a position with the tap offset
-   ascending, the association [overlap_add] performs. The denominator reads
-   [envelope]'s three regions: the head partial below [fft_size - hop], the
-   periodic tile above it, and the tail partial past [frames * hop] — the one
-   region the frame count moves, which is therefore computed at the drain and
-   nowhere else. *)
+   ascending, the association {!Loops.overlap_add} performs. The denominator
+   reads the offline envelope's three regions: the head partial below [fft_size
+   - hop], the periodic tile above it, and the tail partial past [frames * hop]
+   — the one region the frame count moves, which is therefore computed at the
+   drain and nowhere else. *)
 
 type synthesis_state =
   { scfg: Config.t
@@ -1144,8 +1084,8 @@ let frame_axis t start stop =
    Block [blocks - 1 + i] receives tap [j] of frame [blocks - 1 + i - j], and
    every one of those frames is in [local]: reading each [j] as one [[...;
    count; hop]] plane makes the block sum [blocks] dense additions with the tap
-   offset ascending, which is [overlap_add]'s association restricted to the
-   blocks the frames at hand complete. *)
+   offset ascending, which is {!Loops.overlap_add}'s association restricted to
+   the blocks the frames at hand complete. *)
 let synthesis_blocks s local ~frames ~count =
   let hop = Config.hop s.scfg and b = s.sblocks in
   let lead = batch_shape local in
@@ -1237,7 +1177,7 @@ let synthesis_step s z =
               hist
           | None ->
               (* the frames before the stream are absent, and an absent frame
-                 lands the exact zeros [overlap_add] pads its planes with *)
+                 adds the exact zeros {!Loops.overlap_add} adds for it *)
               Nx.zeros Nx.float64
                 (Array.append (batch_shape z) [|b - 1; width|])
         in

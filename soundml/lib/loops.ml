@@ -920,3 +920,332 @@ let flatness ~amin ~power ~invalid x =
     sums
   in
   reduce_frames ~invalid x ~tile32 ~tile64
+
+(* {1 Synthesis}
+
+   [ola64] carries one range of output positions of one plane. Output [i] is
+   padded position [q = left + i]: block [m = q / hop], residue [r]. Frame [m -
+   k] reaches it with its sample [k * hop + r], for [k] from [0] to [blocks -
+   1]; the windowed taps are added in that order, a missing frame or a sample
+   past the window adding an exact zero, which is the association the
+   whole-signal overlap-add of shifted hop blocks performs. The sum is divided
+   by the envelope: one period of complete taps in [[head, stop)], the [partial]
+   sum of the frames that exist elsewhere. Positions past [valid] are the zero
+   extension of a requested length. *)
+let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
+    ~period ~partial ~head ~stop ~left ~out_len ~valid o lo hi =
+  let sbase = o * count * fft and dbase = o * out_len in
+  for i = lo to hi - 1 do
+    if i >= valid then Array1.unsafe_set dst (dbase + i) 0.
+    else begin
+      let q = left + i in
+      let m = q / hop in
+      let r = q - (m * hop) in
+      let acc = ref 0. in
+      for k = 0 to blocks - 1 do
+        let p = m - k and j = (k * hop) + r in
+        let v =
+          if p >= 0 && p < count && j < fft then
+            Array1.unsafe_get src (sbase + (p * fft) + j)
+            *. Float.Array.unsafe_get w j
+          else 0.
+        in
+        if k = 0 then acc := v else acc := !acc +. v
+      done ;
+      let env =
+        if q < head || q >= stop then partial q
+        else Float.Array.unsafe_get period (q mod hop)
+      in
+      Array1.unsafe_set dst (dbase + i) (!acc /. env)
+    end
+  done
+
+let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
+    frames =
+  let fft = Float.Array.length window in
+  let shape = Nx.shape frames in
+  let nd = Array.length shape in
+  let count = shape.(nd - 2) in
+  let lead = Array.sub shape 0 (nd - 2) in
+  let outer = Array.fold_left ( * ) 1 lead in
+  let blocks = (fft + hop - 1) / hop in
+  (* a position costs [blocks] taps; about 64 Ktaps per chunk *)
+  let grain = Stdlib.max 1 (65_536 / Stdlib.max 1 blocks) in
+  Store.make64 (Array.append lead [|out_len|]) (fun dst ->
+      Store.read64 frames (fun src ->
+          Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
+              let u = ref lo in
+              while !u < hi do
+                let o = !u / out_len in
+                let stop_u = Stdlib.min hi ((o + 1) * out_len) in
+                ola64 src dst window ~fft ~hop ~count ~blocks ~period ~partial
+                  ~head ~stop ~left ~out_len ~valid o
+                  (!u - (o * out_len))
+                  (stop_u - (o * out_len)) ;
+                u := stop_u
+              done ) ) )
+
+(* [update64] carries one range of elements of the Griffin-Lim step: [e] is the
+   rebuilt spectrum less [beta] times the previous one, its unit-modulus value
+   [e /. (|e| +. min_float)] is scaled by the magnitude, as the complex product
+   and quotient by a real compute it. *)
+let update64 (r : f64) (prev : f64 option) (mag : f64) (dst : f64) ~beta lo hi =
+  match prev with
+  | None ->
+      for i = lo to hi - 1 do
+        let er = Array1.unsafe_get r (2 * i)
+        and ei = Array1.unsafe_get r ((2 * i) + 1) in
+        let d = Float.hypot er ei +. Float.min_float in
+        let m = Array1.unsafe_get mag i in
+        Array1.unsafe_set dst (2 * i) (m *. (er /. d)) ;
+        Array1.unsafe_set dst ((2 * i) + 1) (m *. (ei /. d))
+      done
+  | Some p ->
+      for i = lo to hi - 1 do
+        let er =
+          Array1.unsafe_get r (2 * i) -. (Array1.unsafe_get p (2 * i) *. beta)
+        and ei =
+          Array1.unsafe_get r ((2 * i) + 1)
+          -. (Array1.unsafe_get p ((2 * i) + 1) *. beta)
+        in
+        let d = Float.hypot er ei +. Float.min_float in
+        let m = Array1.unsafe_get mag i in
+        Array1.unsafe_set dst (2 * i) (m *. (er /. d)) ;
+        Array1.unsafe_set dst ((2 * i) + 1) (m *. (ei /. d))
+      done
+
+let gl_update ~beta ~magnitudes ?previous rebuilt =
+  let n = Nx.numel rebuilt in
+  Store.make_c128 (Nx.shape rebuilt) (fun dst ->
+      Store.read64 magnitudes (fun mag ->
+          Store.read_parts64 rebuilt (fun r ->
+              let run prev =
+                Par.ranges ~n ~grain:16_384 (fun lo hi ->
+                    update64 r prev mag dst ~beta lo hi )
+              in
+              match previous with
+              | None ->
+                  run None
+              | Some p ->
+                  Store.read_parts64 p (fun p -> run (Some p)) ) ) )
+
+(* [extremes32 src valley peak ~k ~n ~bands o t0 w small large] carries one tile
+   of [w] frames of plane [o] through every band. A band is rows [lo, lo + len)
+   and keeps, per frame, its [take] least and [take] greatest values in two
+   ascending buffers ([small] and [large], [take] slots per frame): the rows a
+   full sort would put first and last, NaN ordering after every number as the
+   sort orders it. The buffers fill from the band's first [take] rows, then
+   admit a value only when it beats their current worst. Each mean adds its
+   buffer in ascending order from [0.] and divides by [take]. *)
+let extremes32 (src : f32) (valley : f64) (peak : f64) ~k ~n ~bands o t0 w small
+    large =
+  let nb = Array.length bands / 3 in
+  let plane = o * k * n in
+  for b = 0 to nb - 1 do
+    let lo = bands.(3 * b) and len = bands.((3 * b) + 1) in
+    let take = bands.((3 * b) + 2) in
+    for r = 0 to len - 1 do
+      let row = plane + ((lo + r) * n) + t0 in
+      for t = 0 to w - 1 do
+        let v = Array1.unsafe_get src (row + t) in
+        let base = t * take in
+        if r < take then begin
+          (* insert into the [r] values held, both buffers *)
+          let i = ref r in
+          while
+            !i > 0
+            &&
+            let a = Float.Array.unsafe_get small (base + !i - 1) in
+            v < a || (a <> a && v = v)
+          do
+            Float.Array.unsafe_set small (base + !i)
+              (Float.Array.unsafe_get small (base + !i - 1)) ;
+            decr i
+          done ;
+          Float.Array.unsafe_set small (base + !i) v ;
+          let i = ref r in
+          while
+            !i > 0
+            &&
+            let a = Float.Array.unsafe_get large (base + !i - 1) in
+            v < a || (a <> a && v = v)
+          do
+            Float.Array.unsafe_set large (base + !i)
+              (Float.Array.unsafe_get large (base + !i - 1)) ;
+            decr i
+          done ;
+          Float.Array.unsafe_set large (base + !i) v
+        end
+        else begin
+          let worst = Float.Array.unsafe_get small (base + take - 1) in
+          if v < worst || (worst <> worst && v = v) then begin
+            (* drop the greatest held, insert [v] *)
+            let i = ref (take - 1) in
+            while
+              !i > 0
+              &&
+              let a = Float.Array.unsafe_get small (base + !i - 1) in
+              v < a || (a <> a && v = v)
+            do
+              Float.Array.unsafe_set small (base + !i)
+                (Float.Array.unsafe_get small (base + !i - 1)) ;
+              decr i
+            done ;
+            Float.Array.unsafe_set small (base + !i) v
+          end ;
+          let least = Float.Array.unsafe_get large base in
+          if least < v || (v <> v && least = least) then begin
+            (* drop the least held, insert [v] *)
+            let i = ref 0 in
+            while
+              !i < take - 1
+              &&
+              let a = Float.Array.unsafe_get large (base + !i + 1) in
+              a < v || (v <> v && a = a)
+            do
+              Float.Array.unsafe_set large (base + !i)
+                (Float.Array.unsafe_get large (base + !i + 1)) ;
+              incr i
+            done ;
+            Float.Array.unsafe_set large (base + !i) v
+          end
+        end
+      done
+    done ;
+    let count = Float.of_int take in
+    let out = (((o * nb) + b) * n) + t0 in
+    for t = 0 to w - 1 do
+      let base = t * take in
+      let sv = ref 0. and sp = ref 0. in
+      for i = 0 to take - 1 do
+        sv := !sv +. Float.Array.unsafe_get small (base + i) ;
+        sp := !sp +. Float.Array.unsafe_get large (base + i)
+      done ;
+      Array1.unsafe_set valley (out + t) (!sv /. count) ;
+      Array1.unsafe_set peak (out + t) (!sp /. count)
+    done
+  done
+
+let extremes64 (src : f64) (valley : f64) (peak : f64) ~k ~n ~bands o t0 w small
+    large =
+  let nb = Array.length bands / 3 in
+  let plane = o * k * n in
+  for b = 0 to nb - 1 do
+    let lo = bands.(3 * b) and len = bands.((3 * b) + 1) in
+    let take = bands.((3 * b) + 2) in
+    for r = 0 to len - 1 do
+      let row = plane + ((lo + r) * n) + t0 in
+      for t = 0 to w - 1 do
+        let v = Array1.unsafe_get src (row + t) in
+        let base = t * take in
+        if r < take then begin
+          (* insert into the [r] values held, both buffers *)
+          let i = ref r in
+          while
+            !i > 0
+            &&
+            let a = Float.Array.unsafe_get small (base + !i - 1) in
+            v < a || (a <> a && v = v)
+          do
+            Float.Array.unsafe_set small (base + !i)
+              (Float.Array.unsafe_get small (base + !i - 1)) ;
+            decr i
+          done ;
+          Float.Array.unsafe_set small (base + !i) v ;
+          let i = ref r in
+          while
+            !i > 0
+            &&
+            let a = Float.Array.unsafe_get large (base + !i - 1) in
+            v < a || (a <> a && v = v)
+          do
+            Float.Array.unsafe_set large (base + !i)
+              (Float.Array.unsafe_get large (base + !i - 1)) ;
+            decr i
+          done ;
+          Float.Array.unsafe_set large (base + !i) v
+        end
+        else begin
+          let worst = Float.Array.unsafe_get small (base + take - 1) in
+          if v < worst || (worst <> worst && v = v) then begin
+            (* drop the greatest held, insert [v] *)
+            let i = ref (take - 1) in
+            while
+              !i > 0
+              &&
+              let a = Float.Array.unsafe_get small (base + !i - 1) in
+              v < a || (a <> a && v = v)
+            do
+              Float.Array.unsafe_set small (base + !i)
+                (Float.Array.unsafe_get small (base + !i - 1)) ;
+              decr i
+            done ;
+            Float.Array.unsafe_set small (base + !i) v
+          end ;
+          let least = Float.Array.unsafe_get large base in
+          if least < v || (v <> v && least = least) then begin
+            (* drop the least held, insert [v] *)
+            let i = ref 0 in
+            while
+              !i < take - 1
+              &&
+              let a = Float.Array.unsafe_get large (base + !i + 1) in
+              a < v || (v <> v && a = a)
+            do
+              Float.Array.unsafe_set large (base + !i)
+                (Float.Array.unsafe_get large (base + !i + 1)) ;
+              incr i
+            done ;
+            Float.Array.unsafe_set large (base + !i) v
+          end
+        end
+      done
+    done ;
+    let count = Float.of_int take in
+    let out = (((o * nb) + b) * n) + t0 in
+    for t = 0 to w - 1 do
+      let base = t * take in
+      let sv = ref 0. and sp = ref 0. in
+      for i = 0 to take - 1 do
+        sv := !sv +. Float.Array.unsafe_get small (base + i) ;
+        sp := !sp +. Float.Array.unsafe_get large (base + i)
+      done ;
+      Array1.unsafe_set valley (out + t) (!sv /. count) ;
+      Array1.unsafe_set peak (out + t) (!sp /. count)
+    done
+  done
+
+let extremes (type a) ~bands (x : (float, a) Nx.t) =
+  let shape = Nx.shape x in
+  let nd = Array.length shape in
+  let k = shape.(nd - 2) and n = shape.(nd - 1) in
+  let lead = Array.sub shape 0 (nd - 2) in
+  let outer = Array.fold_left ( * ) 1 lead in
+  let nb = Array.length bands / 3 in
+  let most = ref 1 in
+  for b = 0 to nb - 1 do
+    most := Stdlib.max !most bands.((3 * b) + 2)
+  done ;
+  let out_shape = Array.append lead [|nb; n|] in
+  let tiles = (n + tile - 1) / tile in
+  let grain = Stdlib.max 1 (32_768 / Stdlib.max 1 (k * tile)) in
+  let units run =
+    Par.ranges ~n:(outer * tiles) ~grain (fun lo hi ->
+        let small = Float.Array.create (tile * !most)
+        and large = Float.Array.create (tile * !most) in
+        for u = lo to hi - 1 do
+          let o = u / tiles and t0 = u mod tiles * tile in
+          run o t0 (Stdlib.min n (t0 + tile) - t0) small large
+        done )
+  in
+  Store.make64_pair out_shape (fun valley peak ->
+      match Nx.dtype x with
+      | Nx.Float32 ->
+          Store.read32 x (fun src ->
+              units (extremes32 src valley peak ~k ~n ~bands) )
+      | Nx.Float64 ->
+          Store.read64 x (fun src ->
+              units (extremes64 src valley peak ~k ~n ~bands) )
+      | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+          Store.read64 (Nx.cast Nx.float64 x) (fun src ->
+              units (extremes64 src valley peak ~k ~n ~bands) ) )
