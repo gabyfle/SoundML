@@ -19,14 +19,14 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(* Every feature is one batched pass over the whole spectrogram tensor:
-   reductions run along the bin axis (axis -2) with [keepdims], so the result is
-   [[...; 1; frames]] and leading axes broadcast untouched. The reductions go
-   through {!Ordered}, whose fixed association makes a frame's value the same
-   bits alone or among others, so the stages agree with the offline functions on
-   every chunking. The interior is double precision, in the operation order the
-   module's parity contract fixes (see the interface); the one cast to the input
-   dtype sits at the boundary. *)
+(* Every feature is one fused loop over the whole spectrogram ({!Loops}): each
+   frame's bins are reduced in ascending order from [0.], so the result is
+   [[...; 1; frames]], leading axes are mapped independently, and a frame's
+   value is the same bits alone or among others — the stages agree with the
+   offline functions on every chunking. The interior is double precision, in the
+   operation order the module's parity contract fixes (see the interface); the
+   one rounding to the input dtype sits at the boundary. The loops also check
+   that the magnitudes are non-negative, in the same pass. *)
 
 let bins_of s = Nx.dim (Nx.ndim s - 2) s
 
@@ -91,22 +91,21 @@ let check_power op power =
           and positive)"
          op power )
 
-(* [check_magnitudes op s] rejects negative entries: the features are only
-   defined over non-negative energies. NaN entries fail the same comparison, so
-   they are caught here too. *)
-let check_magnitudes op s =
-  if Nx.numel s > 0 && not (Nx.item [] (Nx.all (Nx.greater_equal_s s 0.))) then
-    invalid_arg
-      (Printf.sprintf
-         "%s: cannot analyse a spectrogram with negative or NaN values (a \
-          magnitude spectrogram is non-negative)"
-         op )
+(* [negative op ()] rejects negative entries: the features are only defined over
+   non-negative energies. NaN entries fail the same comparison, so the loops
+   report them too. *)
+let negative op () =
+  invalid_arg
+    (Printf.sprintf
+       "%s: cannot analyse a spectrogram with negative or NaN values (a \
+        magnitude spectrogram is non-negative)"
+       op )
 
-(* [grid op ?freqs ~sample_rate s] is the rank-one double-precision bin
-   frequency vector: [freqs] validated and cast, or the FFT grid of the [2 *
-   (bins - 1)]-point transform the bin count implies — bin [k] at [k *
-   sample_rate / fft_size], evaluated as one reciprocal and one multiply per
-   bin, the reference arithmetic the parity contract fixes. *)
+(* [grid op ?freqs ~sample_rate s] is the double-precision bin frequencies:
+   [freqs] validated and widened, or the FFT grid of the [2 * (bins - 1)]-point
+   transform the bin count implies — bin [k] at [k * sample_rate / fft_size],
+   evaluated as one reciprocal and one multiply per bin, the reference
+   arithmetic the parity contract fixes. *)
 let grid op ?freqs ~sample_rate s =
   check_sample_rate op sample_rate ;
   check_freqs_rank op freqs ;
@@ -119,7 +118,7 @@ let grid op ?freqs ~sample_rate s =
              "%s: cannot pair %d bin frequencies with %d bins (freqs holds one \
               frequency per bin)"
              op (Nx.dim 0 f) bins ) ;
-      Nx.cast Nx.float64 f
+      Float.Array.map_from_array Fun.id (Nx.to_array (Nx.cast Nx.float64 f))
   | None ->
       if bins < 2 then
         invalid_arg
@@ -132,11 +131,7 @@ let grid op ?freqs ~sample_rate s =
       let step =
         1.0 /. (Float.of_int fft_size *. (1.0 /. Float.of_int sample_rate))
       in
-      Nx.mul_s (Nx.arange_f Nx.float64 0. (Float.of_int bins) 1.) step
-
-(* [col fq] is the grid as a [[bins; 1]] column, broadcastable against [[...;
-   bins; frames]]. *)
-let col fq = Nx.reshape [|Nx.dim 0 fq; 1|] fq
+      Float.Array.init bins (fun k -> Float.of_int k *. step)
 
 let is_empty s = Array.exists (fun d -> d = 0) (Nx.shape s)
 
@@ -147,30 +142,17 @@ let empty_feature s =
   out.(Array.length out - 2) <- 1 ;
   Nx.zeros (Nx.dtype s) out
 
-(* [normalised s64] is each frame scaled to unit magnitude sum. Frames whose sum
+(* The centroid normalises each frame to unit magnitude sum — frames whose sum
    falls below the smallest positive normal double divide by [1] instead (the
-   underflow guard), so an all-zero frame stays all-zero. *)
-let normalised s64 =
-  let length = Ordered.sum s64 in
-  let safe =
-    Nx.where
-      (Nx.less length (Nx.scalar Nx.float64 Float.min_float))
-      (Nx.scalar Nx.float64 1.) length
-  in
-  Nx.div s64 safe
-
-(* [centroid_core fq s64] is the double-precision centroid, in the operation
-   order the parity contract fixes: normalise, weight by the bin frequencies,
-   reduce. *)
-let centroid_core fq s64 = Ordered.sum (Nx.mul (col fq) (normalised s64))
-
+   underflow guard), so an all-zero frame stays all-zero — then weights the
+   normalised bins by their frequencies and reduces: the operation order the
+   parity contract fixes. *)
 let centroid ?freqs ~sample_rate s =
   let op = "spectral_centroid" in
   check_rank op s ;
   let fq = grid op ?freqs ~sample_rate s in
-  check_magnitudes op s ;
   if is_empty s then empty_feature s
-  else Nx.cast (Nx.dtype s) (centroid_core fq (Nx.cast Nx.float64 s))
+  else Loops.centroid ~fq ~invalid:(negative op) s
 
 let bandwidth ?(p = 2.) ?freqs ?centroid ~sample_rate s =
   let op = "spectral_bandwidth" in
@@ -196,57 +178,33 @@ let bandwidth ?(p = 2.) ?freqs ?centroid ~sample_rate s =
              op
              (Nx.dim (Nx.ndim c - 2) c)
              (frames_of c) (frames_of s) ) ) ;
-  check_magnitudes op s ;
   if is_empty s then empty_feature s
   else
-    let s64 = Nx.cast Nx.float64 s in
-    let c64 =
-      match centroid with
-      | Some c ->
-          Nx.cast Nx.float64 c
-      | None ->
-          centroid_core fq s64
+    let centroid =
+      Option.map
+        (fun c ->
+          let shape = Array.copy (Nx.shape s) in
+          shape.(Array.length shape - 2) <- 1 ;
+          Nx.broadcast_to shape (Nx.cast Nx.float64 c) )
+        centroid
     in
-    let deviation = Nx.abs (Nx.sub c64 (col fq)) in
-    let weighted = Nx.mul (normalised s64) (Nx.pow_s deviation p) in
-    Nx.cast (Nx.dtype s) (Nx.pow_s (Ordered.sum weighted) (1. /. p))
+    Loops.bandwidth ~fq ~p ?centroid ~invalid:(negative op) s
 
 let rolloff ?(roll_percent = 0.85) ?freqs ~sample_rate s =
   let op = "spectral_rolloff" in
   check_rank op s ;
   check_roll_percent op roll_percent ;
   let fq = grid op ?freqs ~sample_rate s in
-  check_magnitudes op s ;
   if is_empty s then empty_feature s
-  else
-    let s64 = Nx.cast Nx.float64 s in
-    let nd = Nx.ndim s64 in
-    let cumulative = Ordered.cumsum s64 in
-    let bins = bins_of s in
-    let total =
-      Nx.slice
-        (List.init nd (fun i ->
-             if i = nd - 2 then Nx.R (bins - 1, bins) else Nx.A ) )
-        cumulative
-    in
-    let reached = Nx.greater_equal cumulative (Nx.mul_s total roll_percent) in
-    let candidates =
-      Nx.where reached (col fq) (Nx.scalar Nx.float64 Float.infinity)
-    in
-    Nx.cast (Nx.dtype s) (Nx.min ~axes:[-2] ~keepdims:true candidates)
+  else Loops.rolloff ~fq ~roll:roll_percent ~invalid:(negative op) s
 
 let flatness ?(amin = 1e-10) ?(power = 2.) s =
   let op = "spectral_flatness" in
   check_rank op s ;
   check_amin op amin ;
   check_power op power ;
-  check_magnitudes op s ;
   if is_empty s then empty_feature s
-  else
-    let floored = Nx.maximum_s (Nx.pow_s (Nx.cast Nx.float64 s) power) amin in
-    let geometric = Nx.exp (Ordered.mean (Nx.log floored)) in
-    let arithmetic = Ordered.mean floored in
-    Nx.cast (Nx.dtype s) (Nx.div geometric arithmetic)
+  else Loops.flatness ~amin ~power ~invalid:(negative op) s
 
 (* {1 Pipeline stages}
 

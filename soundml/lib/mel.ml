@@ -242,6 +242,6 @@ let apply (c : Config.t) s =
        band adds its bins in ascending order — so a frame projects to the same
        bits alone or among others, whatever the chunking; the cast rounds once,
        at the boundary. *)
-    Nx.cast dtype (Ordered.project c.Config.projection (Nx.cast Nx.float64 s))
+    Ordered.project_cast c.Config.projection s
 
 let stage c = Pipeline.stateless (apply c)

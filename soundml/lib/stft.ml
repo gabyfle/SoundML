@@ -21,22 +21,24 @@
 
 (* Internals:
 
-   - Framing and transform are one [Nx.stft]: the padded stream is windowed
-   through a strided frame view and carried by a single batched [rfft], so no
-   framed scratch is ever gathered.
+   - Framing is one fused loop ({!Loops.frames}) that reads the signal in place
+   — float32 or float64, its boundary extension mapped by index rather than
+   materialized — and writes the windowed frames for one batched [rfft]. Frames
+   are written frames-major, the layout [rfft] produces, and the complex paths
+   view the result transposed.
 
    - The windowed product is computed in double — the arithmetic the module's
-   parity contract fixes (see the interface): the frames are multiplied by the
-   float64 window (promoting float32 audio) and transformed in double, rounding
-   once into the complex storage. The double promotion is applied to the stream,
-   not the frames — widening is exact, so the product is unchanged, and it costs
-   one cast per sample instead of one per framed position. [Nx.rfft] takes the
-   output dtype first, so the caller's witness supplies that storage natively —
-   no boundary cast of the spectrum.
+   parity contract fixes (see the interface): each sample is widened, which is
+   exact, and multiplied by the float64 window, then transformed in double,
+   rounding once into the complex storage. [Nx.rfft] takes the output dtype
+   first, so the caller's witness supplies that storage natively — no boundary
+   cast of the spectrum.
 
-   - Complex magnitudes are [Nx.magnitude], dtype-first, landing directly in the
-   caller's float dtype. The real-valued conveniences pick the complex storage
-   whose component width matches the input's dtype ([spectrum_witness]).
+   - Power and magnitude spectra are one fused loop ({!Loops.spectrum_power})
+   that reads the frames-major spectrum in place and writes it bins-major in the
+   caller's float dtype, each element computed in double and rounded once. The
+   real-valued conveniences pick the complex storage whose component width
+   matches the input's dtype ([spectrum_witness]).
 
    - Synthesis is the mirror image: one batched inverse real transform, one
    window multiply, and an overlap-add expressed as [ceil (fft_size / hop)]
@@ -56,7 +58,8 @@ module Config = struct
     ; fft_size: int
     ; analysis_window: (float, Nx.float64_elt) Nx.t
           (* [win_length] points of [window], centered in [fft_size] samples and
-             normalised per [scale]; precomputed once, in double. *) }
+             normalised per [scale]; precomputed once, in double. *)
+    ; window_values: Float.Array.t (* [analysis_window]'s elements *) }
 
   let create ?(window = Window.Hann) ?win_length ?hop ?(alignment = `Centered)
       ?(pad = `Reflect) ?(scale = `None) ~fft_size () =
@@ -108,7 +111,18 @@ module Config = struct
       | `Psd ->
           Nx.div_s padded (Float.sqrt (Nx.item [] (Nx.sum (Nx.square padded))))
     in
-    {window; win_length; hop; alignment; pad; scale; fft_size; analysis_window}
+    let window_values =
+      Float.Array.map_from_array Fun.id (Nx.to_array analysis_window)
+    in
+    { window
+    ; win_length
+    ; hop
+    ; alignment
+    ; pad
+    ; scale
+    ; fft_size
+    ; analysis_window
+    ; window_values }
 
   let fft_size t = t.fft_size
 
@@ -337,29 +351,47 @@ let pad_signal (c : Config.t) x =
 
 (* {1 The batched frame computation} *)
 
-(* [to_double t] is [t] as float64, sharing [t] when it already is: the one
-   framing gather of [analyse], fused with the promotion to the double
-   interior. *)
+(* [to_double t] is [t] as float64, sharing [t] when it already is: the
+   promotion to the double interior. *)
 let to_double : type b. (float, b) Nx.t -> (float, Nx.float64_elt) Nx.t =
  fun t -> match Nx.dtype t with Nx.Float64 -> t | _ -> Nx.cast Nx.float64 t
 
 (* [analyse c cdtype samples count] is frames [0, count) of the padded-stream
-   segment [samples], shaped [[...; bins; count]]; [samples] must span at least
-   [(count - 1) * hop + fft_size] positions. Shrinking to exactly that span is
-   what fixes the frame count: [Nx.stft] frames every whole window the axis
-   holds, so a longer segment would analyse past [count]. The analysis is one
-   double-precision window multiply (see the header note) and one batched [rfft]
-   straight into the caller's witness dtype; per-frame work never routes through
-   per-frame Nx calls. *)
+   segment [samples], frames-major: shaped [[...; count; bins]], the layout the
+   batched transform writes, which the complex paths view transposed and the
+   power paths read in place; [samples] must span at least [(count - 1) * hop +
+   fft_size] positions, and a longer segment's tail is not read. The analysis is
+   one fused double-precision window multiply (see the header note) and one
+   batched [rfft] straight into the caller's witness dtype; per-frame work never
+   routes through per-frame Nx calls. The segment is already padded, so the
+   extension passed to the framing loop is never consulted. *)
 let analyse (c : Config.t) cdtype samples count =
-  let fft = c.fft_size and hop = c.hop in
-  let span = ((count - 1) * hop) + fft in
-  let samples =
-    if last_dim samples = span then samples else shrink_last samples 0 span
-  in
-  Nx.swapaxes (-1) (-2)
-    (Nx.stft cdtype ~window:fft ~step:hop ~win:c.analysis_window
-       (to_double samples) )
+  Nx.rfft cdtype
+    (Loops.frames ~window:c.window_values ~hop:c.hop ~left:0 ~ext:Loops.Edge
+       ~first:0 ~count samples )
+
+(* [extension c x] is [c]'s boundary extension of [x]; a constant is first
+   stored at [x]'s dtype, as padding [x] would store it. *)
+let extension (c : Config.t) x =
+  match c.pad with
+  | `Reflect ->
+      Loops.Reflect
+  | `Edge ->
+      Loops.Edge
+  | `Constant v ->
+      Loops.Constant
+        (Nx.item [] (Nx.cast Nx.float64 (Nx.scalar (Nx.dtype x) v)))
+
+(* [analyse_signal c cdtype x ~first ~count] is frames [first, first + count) of
+   the whole signal [x], frames-major, its boundary extension read in place
+   rather than materialized. *)
+let analyse_signal (c : Config.t) cdtype x ~first ~count =
+  Nx.rfft cdtype
+    (Loops.frames ~window:c.window_values ~hop:c.hop ~left:(left_width c)
+       ~ext:(extension c x) ~first ~count x )
+
+(* [bins_major rows] is the frames-major [rows] viewed [[...; bins; frames]]. *)
+let bins_major rows = Nx.swapaxes (-1) (-2) rows
 
 (* {1 The streaming kernel} *)
 
@@ -612,9 +644,9 @@ module Kernel = struct
            max_block ) ;
     {state= state_create cfg; cdtype; dtype}
 
-  let step k chunk = state_step k.state k.cdtype chunk
+  let step k chunk = Option.map bins_major (state_step k.state k.cdtype chunk)
 
-  let flush k = state_flush k.state k.cdtype
+  let flush k = Option.map bins_major (state_flush k.state k.cdtype)
 
   let reset k = state_reset k.state
 end
@@ -627,25 +659,22 @@ end
 let frameless_spectrum cdtype (c : Config.t) x count =
   Nx.zeros cdtype (Array.append (leading_shape x) [|Config.bins c; count|])
 
+(* [rows_of cdtype c x] is the whole transform of [x], frames-major, or [None]
+   when no frame is evaluated. A signal in hand is analysed in one batch, its
+   extension read in place: each frame depends on its own samples alone, so this
+   is frame for frame what the streaming kernel emits on any partitioning. *)
+let rows_of cdtype c x =
+  let count = frames c ~n:(last_dim x) in
+  if count = 0 || zero_leading x then None
+  else Some (analyse_signal c cdtype x ~first:0 ~count)
+
 let transform cdtype c x =
   check_rank "transform" x ;
-  let n = last_dim x in
-  if zero_leading x then frameless_spectrum cdtype c x (frames c ~n)
-  else
-    let channels = Array.fold_left (fun acc d -> acc * d) 1 (leading_shape x) in
-    let k =
-      Kernel.prepare cdtype c (Nx.dtype x) ~channels ~max_block:(Stdlib.max 1 n)
-    in
-    (* [@] evaluates its right operand first: sequence step before flush *)
-    let stepped = Kernel.step k x in
-    let drained = Kernel.flush k in
-    match Option.to_list stepped @ Option.to_list drained with
-    | [] ->
-        frameless_spectrum cdtype c x 0
-    | [one] ->
-        one
-    | many ->
-        concat_last many
+  match rows_of cdtype c x with
+  | Some rows ->
+      bins_major rows
+  | None ->
+      frameless_spectrum cdtype c x (frames c ~n:(last_dim x))
 
 let transform_range cdtype c ~p0 ~p1 x =
   check_rank "transform_range" x ;
@@ -657,19 +686,20 @@ let transform_range cdtype c ~p0 ~p1 x =
           (the range must satisfy 0 <= p0 <= p1 <= frames)"
          p0 p1 total ) ;
   if p0 = p1 || zero_leading x then frameless_spectrum cdtype c x (p1 - p0)
-  else
-    let padded = pad_signal c x in
-    let hop = Config.hop c and fft = Config.fft_size c in
-    let seg = shrink_last padded (p0 * hop) (((p1 - 1) * hop) + fft) in
-    analyse c cdtype seg (p1 - p0)
+  else bins_major (analyse_signal c cdtype x ~first:p0 ~count:(p1 - p0))
 
-(* [magnitude_pow dtype power z] is [|z| ^ power] in [dtype]: one dtype-first
-   [Nx.magnitude], one power. *)
-let magnitude_pow dtype power z =
-  let m = Nx.magnitude dtype z in
-  if Float.equal power 2. then Nx.square m
-  else if Float.equal power 1. then m
-  else Nx.pow_s m power
+(* [rows_power dtype power rows] is [|rows| ^ power] in [dtype], bins-major: one
+   fused transpose at float32 and float64 (see {!Loops.spectrum_power}), and at
+   the narrower dtypes one dtype-first [Nx.magnitude] and one power. *)
+let rows_power dtype power rows =
+  match Loops.spectrum_power dtype ~power rows with
+  | Some p ->
+      p
+  | None ->
+      let m = Nx.magnitude dtype (bins_major rows) in
+      if Float.equal power 2. then Nx.square m
+      else if Float.equal power 1. then m
+      else Nx.pow_s m power
 
 (* [spectrum_witness dtype] is the complex storage whose component width matches
    [dtype]: what the real-valued conveniences analyse into when the caller never
@@ -686,7 +716,13 @@ let power_spectrum ?(power = 2.) c x =
   check_rank "power_spectrum" x ;
   let dtype = Nx.dtype x in
   let (Cdtype cdtype) = spectrum_witness dtype in
-  magnitude_pow dtype power (transform cdtype c x)
+  match rows_of cdtype c x with
+  | Some rows ->
+      rows_power dtype power rows
+  | None ->
+      Nx.zeros dtype
+        (Array.append (leading_shape x)
+           [|Config.bins c; frames c ~n:(last_dim x)|] )
 
 (* {1 Least-squares synthesis}
 
@@ -884,8 +920,17 @@ let envelope (c : Config.t) ~frames =
   in
   concat_last (border 0 head @ interior @ border stop (span - stop))
 
+(* [to_complex128 t] is [t] as complex128, sharing [t] when it already is: the
+   widening the double interior needs, exact in both components. *)
+let to_complex128 : type c.
+    (Complex.t, c) Nx.t -> (Complex.t, Nx.complex64_elt) Nx.t =
+ fun t ->
+  match Nx.dtype t with Nx.Complex128 -> t | _ -> Nx.cast Nx.complex128 t
+
 (* [synthesise c ?length z] is the synthesis equation above, on a checked
-   complex128 spectrum [z] shaped [[...; bins; frames]].
+   complex spectrum [z] shaped [[...; bins; frames]], widened to complex128
+   after it is viewed frames-major, so the widening reads the layout the
+   analysis writes and the inverse transform receives contiguous rows.
 
    Only the frames the output can reach are inverted: a named [length] keeps
    padded positions [[left, left + length)], and frame [p] opens at padded
@@ -915,7 +960,8 @@ let synthesise (c : Config.t) ?length z =
     let z = if count = frames then z else shrink_last z 0 count in
     let span = ((count - 1) * hop) + fft in
     let y =
-      Nx.irfft Nx.float64 ~axis:(-1) ~n:fft (Nx.swapaxes (-1) (-2) z)
+      Nx.irfft Nx.float64 ~axis:(-1) ~n:fft
+        (to_complex128 (Nx.swapaxes (-1) (-2) z))
       |> Fun.flip Nx.mul c.analysis_window
       |> overlap_add c ~frames:count
       |> Fun.flip Nx.div (envelope c ~frames:count)
@@ -925,16 +971,9 @@ let synthesise (c : Config.t) ?length z =
     if stop - left = out_len then y
     else Nx.pad (full_widths y 0 (out_len - (stop - left))) 0. y
 
-(* [to_complex128 t] is [t] as complex128, sharing [t] when it already is: the
-   widening the double interior needs, exact in both components. *)
-let to_complex128 : type c.
-    (Complex.t, c) Nx.t -> (Complex.t, Nx.complex64_elt) Nx.t =
- fun t ->
-  match Nx.dtype t with Nx.Complex128 -> t | _ -> Nx.cast Nx.complex128 t
-
 let invert dtype c ?length z =
   check_synthesis "invert" c ?length z ;
-  Nx.cast dtype (synthesise c ?length (to_complex128 z))
+  Nx.cast dtype (synthesise c ?length z)
 
 (* {1 Griffin-Lim phase reconstruction}
 
@@ -1182,7 +1221,7 @@ let synthesis_step s z =
     let width = b * hop in
     let windowed =
       Nx.irfft Nx.float64 ~axis:(-1) ~n:fft
-        (Nx.swapaxes (-1) (-2) (to_complex128 z))
+        (to_complex128 (Nx.swapaxes (-1) (-2) z))
       |> Fun.flip Nx.mul c.analysis_window
     in
     let windowed =
@@ -1352,13 +1391,14 @@ let stage cdtype c =
       match state_flush s.state cdtype with
       | None ->
           []
-      | Some out ->
-          split_frames s.bound out )
+      | Some rows ->
+          split_frames s.bound (bins_major rows) )
     ~reset:(fun s -> state_reset s.state)
     ~concat:(function
       | [] -> Nx.zeros cdtype [|bins; 0|] | parts -> concat_last parts )
     ~prepare:(fun fmt -> {state= state_create c; bound= threaded_bound c fmt})
-    ~step:(fun s chunk -> state_step s.state cdtype chunk)
+    ~step:(fun s chunk ->
+      Option.map bins_major (state_step s.state cdtype chunk) )
     ()
 
 let power_stage ?(power = 2.) c =
@@ -1377,8 +1417,8 @@ let power_stage ?(power = 2.) c =
           match state_flush s.state cdtype with
           | None ->
               []
-          | Some out ->
-              split_frames s.bound (magnitude_pow dtype power out) )
+          | Some rows ->
+              split_frames s.bound (rows_power dtype power rows) )
       | None ->
           (* the kernel emits only after receiving samples, and every received
              chunk records the witness first; an unfed flush still drains the
@@ -1402,7 +1442,7 @@ let power_stage ?(power = 2.) c =
       let dtype = Nx.dtype chunk in
       witness := Some dtype ;
       let (Cdtype cdtype) = spectrum_witness dtype in
-      state_step s.state cdtype chunk |> Option.map (magnitude_pow dtype power) )
+      state_step s.state cdtype chunk |> Option.map (rows_power dtype power) )
     ()
 
 (* [synthesis_stage dtype c] declares its whole holdback on the output side: the
