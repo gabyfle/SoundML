@@ -288,7 +288,7 @@ let design_prototype ~l ~k ~fc ~beta =
       let a = Float.Array.create 4 in
       let i = ref (mid + lo) in
       while !i < mid + hi do
-        let count = Stdlib.min 4 (mid + hi - !i) in
+        let count = Int.min 4 (mid + hi - !i) in
         for q = 0 to 3 do
           let x =
             if q < count then begin
@@ -460,7 +460,7 @@ let ols_ceiling_ms = 130
    stage needs [3 | N]) with [N >= 10*K] — edge waste [N/(N - 2K) <= 1.25] — or
    [None] past the emission ceiling. *)
 let ols_block_n ~rate ~f_div ~k =
-  let target = Stdlib.max 64 (10 * k) in
+  let target = Int.max 64 (10 * k) in
   let base = if f_div mod 3 = 0 then 3 else 1 in
   let n = ref base in
   while !n < target do
@@ -647,7 +647,7 @@ let gemm_span = 16384
    at least two so the product never degenerates to a matrix-vector shape. It
    fixes the product's batch extent, hence the emission granularity ([R*M] stage
    inputs) and the per-call gather transient. *)
-let gemm_rows_of ~m = Stdlib.max 2 (gemm_span / m)
+let gemm_rows_of ~m = Int.max 2 (gemm_span / m)
 
 (* The stages the matrix product takes: at least this many phases — the product
    is [L] columns wide, and a narrow one leaves the machine idle between
@@ -809,7 +809,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
     Float.of_int len *. ((2. *. Float.of_int k) +. 1.) *. 8.
     <= Float.of_int bank_budget_bytes
   in
-  let near_unity = Stdlib.max l m < 2 * Stdlib.min l m in
+  let near_unity = Int.max l m < 2 * Int.min l m in
   let best = ref None in
   let take cost s1 s2 =
     match !best with
@@ -824,7 +824,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
      always dearer than one stage — so F stops strictly short of the full
      span. *)
   if m > l then
-    for f = 2 to Stdlib.min ((m - 1) / l) 128 do
+    for f = 2 to Int.min ((m - 1) / l) 128 do
       let f_mid = sr /. Float.of_int f in
       let stop1 = f_mid -. f_n in
       let width1 = (stop1 -. pass) /. (sr /. 2.) in
@@ -833,9 +833,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
          lengthening a Kaiser window at fixed beta and cutoff only deepens the
          stopband, so the bump is spec-safe *)
       let k1 =
-        Stdlib.max
-          (Float.to_int (Float.ceil ((nt1 -. 1.) /. 2.)))
-          (ceil_pos m l)
+        Int.max (Float.to_int (Float.ceil ((nt1 -. 1.) /. 2.))) (ceil_pos m l)
       in
       let g2 = gcd (l * f) m in
       let l2 = l * f / g2 and m2 = m / g2 in
@@ -843,7 +841,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
       let width2 = (1. -. passband) *. f_n /. (interp2 /. 2.) in
       let nt2 = kaiser_numtaps att width2 in
       let k2 =
-        Stdlib.max 1
+        Int.max 1
           (Float.to_int (Float.ceil ((nt2 -. 1.) /. (2. *. Float.of_int l2))))
       in
       if bank_ok 1 k1 && bank_ok l2 k2 then
@@ -862,7 +860,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
           let width1 = (1. -. passband) *. f_n /. (interp1 /. 2.) in
           let nt1 = kaiser_numtaps att width1 in
           let k1 =
-            Stdlib.max 1
+            Int.max 1
               (Float.to_int
                  (Float.ceil ((nt1 -. 1.) /. (2. *. Float.of_int l1))) )
           in
@@ -873,7 +871,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
           let width2 = (stop2 -. pass) /. (interp2 /. 2.) in
           let nt2 = kaiser_numtaps att width2 in
           let k2n =
-            Stdlib.max 1
+            Int.max 1
               (Float.to_int
                  (Float.ceil ((nt2 -. 1.) /. (2. *. Float.of_int l2))) )
           in
@@ -910,17 +908,15 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
           let width1 = (stop1 -. pass) /. (interp1 /. 2.) in
           let nt1 = kaiser_numtaps att width1 in
           let k1 =
-            Stdlib.max
-              (Stdlib.max 1
+            Int.max
+              (Int.max 1
                  (Float.to_int
                     (Float.ceil ((nt1 -. 1.) /. (2. *. Float.of_int l1))) ) )
               (ceil_pos m l)
           in
           let width2 = (f_n -. pass) /. (f_mid /. 2.) in
           let nt2 = kaiser_numtaps att width2 in
-          let k2n =
-            Stdlib.max 1 (Float.to_int (Float.ceil ((nt2 -. 1.) /. 2.)))
-          in
+          let k2n = Int.max 1 (Float.to_int (Float.ceil ((nt2 -. 1.) /. 2.))) in
           (* [L1 | K2 * M1] keeps the composite delay integral; L1 and M1 are
              coprime, so K2 rounds to a multiple of L1 *)
           let k2 = l1 * ceil_pos k2n l1 in
@@ -953,7 +949,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
      fixed-ratio resampler refuses by design — the creation error, not a plan,
      is the contract there. *)
   let drift_class =
-    Float.of_int (Stdlib.max l m) < 1.01 *. Float.of_int (Stdlib.min l m)
+    Float.of_int (Int.max l m) < 1.01 *. Float.of_int (Int.min l m)
   in
   if ((not near_unity) || near_unity_ols) && not drift_class then
     List.iter
@@ -965,8 +961,8 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
           let width1 = (f_n -. pass) /. (interp1 /. 2.) in
           let nt1 = kaiser_numtaps att width1 in
           let k1 =
-            Stdlib.max
-              (Stdlib.max 1
+            Int.max
+              (Int.max 1
                  (Float.to_int
                     (Float.ceil ((nt1 -. 1.) /. (2. *. Float.of_int f))) ) )
               (ceil_pos m l)
@@ -978,7 +974,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
           let width2 = (stop2 -. pass) /. (interp2 /. 2.) in
           let nt2 = kaiser_numtaps att width2 in
           let k2n =
-            Stdlib.max 1
+            Int.max 1
               (Float.to_int
                  (Float.ceil ((nt2 -. 1.) /. (2. *. Float.of_int l2))) )
           in
@@ -1024,7 +1020,7 @@ let plan_cascade ~l ~m ~attenuation ~passband ~sample_rate ~cost_bar =
    stages on the natural one-cycle arrangement. *)
 let gemm_block = 64
 
-let gemm_blocks l = Stdlib.max 1 (gemm_block / l)
+let gemm_blocks l = Int.max 1 (gemm_block / l)
 
 (* The executor a plan assigns a stage, before the stage is designed: the OLS
    variant carries the block geometry [ols_geom] returned. *)
@@ -1118,19 +1114,19 @@ module Config = struct
             ; sgemm= lazy (Nx.create Nx.float64 [|1; 1|] [|1.|])
             ; sexec= Sdirect } ] }
     else begin
-      let width = (1. -. passband) /. Float.of_int (Stdlib.max l m) in
+      let width = (1. -. passband) /. Float.of_int (Int.max l m) in
       let ntaps = kaiser_numtaps attenuation width in
       (* K in float first: the budget check must precede any conversion that
          could overflow or any array that could not be allocated *)
       let k_f = Float.ceil ((ntaps -. 1.) /. (2. *. Float.of_int l)) in
       let bank_bytes = Float.of_int l *. ((2. *. k_f) +. 1.) *. 8. in
       let single_fits = bank_bytes <= Float.of_int bank_budget_bytes in
-      let k_single = Stdlib.max 1 (Float.to_int k_f) in
+      let k_single = Int.max 1 (Float.to_int k_f) in
       let cost_single =
         if single_fits then bank_cost l k_single else Float.infinity
       in
       let single exec =
-        let fc = (1. +. passband) /. (2. *. Float.of_int (Stdlib.max l m)) in
+        let fc = (1. +. passband) /. (2. *. Float.of_int (Int.max l m)) in
         let beta = kaiser_beta attenuation in
         { sample_rate
         ; target
@@ -1205,8 +1201,8 @@ module Config = struct
                  sample_rate target l pp_bytes bank_bytes pp_bytes
                  (Float.of_int bank_budget_bytes)
                  ( if
-                     Float.of_int (Stdlib.max l m)
-                     < 1.01 *. Float.of_int (Stdlib.min l m)
+                     Float.of_int (Int.max l m)
+                     < 1.01 *. Float.of_int (Int.min l m)
                    then
                      " hint: near-unity conversion is clock-drift correction, \
                       which the fixed-ratio resampler does not do"
@@ -1244,7 +1240,7 @@ module Config = struct
            "output_frames: cannot resample a signal of length %d (length must \
             be non-negative)"
            n ) ;
-    if n > 0 && n > Stdlib.max_int / c.l then
+    if n > 0 && n > Int.max_int / c.l then
       invalid_arg
         (Printf.sprintf
            "output_frames: cannot resample a signal of length %d (n * %d \
@@ -1408,18 +1404,18 @@ external resample_shape_c :
 let stage_out_bound sp ~n =
   match sp.sexec with
   | Sdirect ->
-      ceil_pos (Stdlib.max n sp.sk * sp.sl) sp.sm + 1
+      ceil_pos (Int.max n sp.sk * sp.sl) sp.sm + 1
   | Sgemm _ ->
       let rows = gemm_rows_of ~m:sp.sm in
       let per_call = rows * sp.sl and b = rows * sp.sm in
-      let calls_step = ((Stdlib.max 1 n - 1) / b) + 2 in
+      let calls_step = ((Int.max 1 n - 1) / b) + 2 in
       let calls_drain = (sp.sk / b) + 2 in
-      Stdlib.max calls_step calls_drain * per_call
+      Int.max calls_step calls_drain * per_call
   | Sols o ->
       let per_block = if sp.sl > 1 then o.ob * sp.sl else o.ob / sp.sm in
-      let blocks_step = ((Stdlib.max 1 n - 1) / o.ob) + 2 in
+      let blocks_step = ((Int.max 1 n - 1) / o.ob) + 2 in
       let blocks_drain = (((2 * sp.sk) + o.odelta) / o.ob) + 2 in
-      (Stdlib.max blocks_step blocks_drain * per_block) + (2 * sp.sm) + 2
+      (Int.max blocks_step blocks_drain * per_block) + (2 * sp.sm) + 2
 
 (* {1 Incremental kernel} *)
 
@@ -1585,8 +1581,8 @@ module Kernel = struct
               { bank= Nx.cast dtype (if visit then sp.svisit else sp.sbank)
               ; visit
               ; hist= zeroed (kind dtype) (channels * 2 * sp.sk)
-              ; scratch=
-                  array1 (kind dtype) ((2 * sp.sk) + Stdlib.max max_in sp.sk) }
+              ; scratch= array1 (kind dtype) ((2 * sp.sk) + Int.max max_in sp.sk)
+              }
         | Sols o ->
             Ox
               { op= o
@@ -1740,9 +1736,7 @@ module Kernel = struct
             for j = 0 to stack - 1 do
               let b = os.oblocks + j0 + j in
               let i0 = st.emitted + !out_pos in
-              let cnt =
-                Stdlib.min (ols_hi sp o b + 1 - i0) (n_out - !out_pos)
-              in
+              let cnt = Int.min (ols_hi sp o b + 1 - i0) (n_out - !out_pos) in
               if cnt > 0 then begin
                 let pos =
                   if sp.sl > 1 then i0 + (sp.sl * ((3 * kk) - (b * o.ob)))
@@ -1766,7 +1760,7 @@ module Kernel = struct
            [ols_tile_lines] lines — bit-identical to the per-block loop (and to
            any other stacking) under the standing probe, so the tile bound only
            caps the per-call transient, never the result *)
-        let tile = Stdlib.max 1 (ols_tile_lines / ch) in
+        let tile = Int.max 1 (ols_tile_lines / ch) in
         if t <= tile then
           (* the common shape — every step and every clip under ~15 s mono: one
              stack, no tiling views, exactly the pre-tiling call *)
@@ -1774,7 +1768,7 @@ module Kernel = struct
         else begin
           let j0 = ref 0 in
           while !j0 < t do
-            let tsz = Stdlib.min tile (t - !j0) in
+            let tsz = Int.min tile (t - !j0) in
             emit (transform_spec (framed_spec ~j0:!j0 tsz)) ~stack:tsz ~j0:!j0 ;
             j0 := !j0 + tsz
           done
@@ -1825,10 +1819,10 @@ module Kernel = struct
        row is one. The product is read before the next gather writes. *)
     let gather c j =
       let off = j * gs.gb in
-      let held = Stdlib.min span (Stdlib.max 0 (pend - off)) in
+      let held = Int.min span (Int.max 0 (pend - off)) in
       for r = 0 to gs.gr - 1 do
         let w = r * sp.sm and dst = r * gs.gp in
-        let kept = Stdlib.min gs.gp (Stdlib.max 0 (held - w)) in
+        let kept = Int.min gs.gp (Int.max 0 (held - w)) in
         if kept > 0 then
           Bigarray.Array1.blit
             (Bigarray.Array1.sub gs.gcarry ((c * span) + off + w) kept)
@@ -1855,7 +1849,7 @@ module Kernel = struct
       for j = 0 to t - 1 do
         let b = gs.gcalls + j in
         let i0 = st.emitted + !out_pos in
-        let cnt = Stdlib.min (((b + 1) * per_call) - i0) (n_out - !out_pos) in
+        let cnt = Int.min (((b + 1) * per_call) - i0) (n_out - !out_pos) in
         if cnt > 0 then begin
           let pos = i0 - (b * per_call) in
           for c = 0 to ch - 1 do
@@ -1879,7 +1873,7 @@ module Kernel = struct
     let base = t * gs.gb in
     let pend' = alen - base in
     for c = 0 to ch - 1 do
-      let held = Stdlib.min pend' (Stdlib.max 0 (pend - base)) in
+      let held = Int.min pend' (Int.max 0 (pend - base)) in
       (* what the executed calls left behind moves down by their advance; with
          no call executed it is already in place. The move is strictly leftward,
          so a forward copy is in order *)
@@ -2033,7 +2027,7 @@ module Kernel = struct
         if keep > 0 then begin
           let n1 = ceil_pos (s1.fed * s1.sp.sl) s1.sp.sm - s1.emitted in
           if n1 > 0 then drain k s1 ~n_out:n1 ~y_off:0 ~y_stride:n1 k.mid ;
-          let n2a = Stdlib.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
+          let n2a = Int.min (avail s2 (s2.fed + n1) - s2.emitted) keep in
           if n2a = 0 then
             begin if n1 > 0 then
               (* thread the tail into stage-2 state: the stage-2 drain below
@@ -2171,7 +2165,7 @@ let gemm_stage ~sl ~sm ~sk sgemm ~total dtype lead x =
      input [-K]); on the right, exactly enough for the last block's patch. The
      clamp only ever discards surplus signal, and the frame axis is cut back to
      [frames] below either way. *)
-  let right = Stdlib.max 0 (((frames - 1) * sm) + p_len - (sk + n)) in
+  let right = Int.max 0 (((frames - 1) * sm) + p_len - (sk + n)) in
   let pad_spec =
     Array.init
       (Array.length lead + 1)
@@ -2253,7 +2247,7 @@ let stage_kernel s chunk =
             b
         | None ->
             (* unbounded chunks: the offline driver pushes exactly once *)
-            Stdlib.max 1 (last_dim chunk)
+            Int.max 1 (last_dim chunk)
       in
       let k =
         Kernel.prepare s.cfg (Nx.dtype chunk) ~channels:s.channels ~max_block
@@ -2283,7 +2277,7 @@ let stage_bound cfg b =
         stage_out_bound s2 ~n:(stage_out_bound s1 ~n:0)
         + stage_out_bound s2 ~n:0
       in
-      Stdlib.max (through b + 1) drain
+      Int.max (through b + 1) drain
   | _ ->
       assert false
 

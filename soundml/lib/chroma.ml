@@ -332,6 +332,37 @@ let apply ?(norm = `Inf) (c : Config.t) s =
   | Product raw ->
       Nx.cast dtype (normalise ~norm ~tiny:(smallest_normal dtype) raw)
 
+(* [power_chromagram ?norm stft c x] is [apply ?norm c (Stft.power_spectrum stft
+   x)] at float32 and float64, the power projected tile by tile as the transform
+   leaves it ({!Ordered.project_power}) instead of materialized whole; [None]
+   for the other dtypes and for a rank-zero [x], which take the two-step
+   path. *)
+let power_chromagram (type a) ?(norm = `Inf) stft (c : Config.t)
+    (x : (float, a) Nx.t) : (float, a) Nx.t option =
+  if Nx.ndim x < 1 then None
+  else
+    let () = check_norm "apply" norm in
+    let rows cdtype = Nx.swapaxes (-1) (-2) (Stft.transform cdtype stft x) in
+    let raw : (float, Nx.float64_elt) Nx.t option =
+      match Nx.dtype x with
+      | Nx.Float32 ->
+          Ordered.project_power c.Config.projection Nx.float32
+            (rows Nx.complex64)
+      | Nx.Float64 ->
+          Ordered.project_power c.Config.projection Nx.float64
+            (rows Nx.complex128)
+      | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+          None
+    in
+    let dtype = Nx.dtype x in
+    match raw with
+    | Some raw when Nx.numel raw > 0 ->
+        Some (Nx.cast dtype (normalise ~norm ~tiny:(smallest_normal dtype) raw))
+    | Some raw ->
+        Some (Nx.zeros dtype (Nx.shape raw))
+    | None ->
+        None
+
 (* The projection is memoryless and adds its terms in a fixed order, so the
    stage is [apply] on each chunk and every chunking yields [apply]'s bits. *)
 let stage ?(norm = `Inf) c =

@@ -70,7 +70,8 @@ let state_reset s = s.carry <- None
 (* [flux dtype cur prev] is the mean over bins of [max 0 (cur - prev)], in
    double and in {!Ordered}'s fixed association, so a frame's flux is the same
    bits whatever the chunk it arrives in; rounded to [dtype] once at the
-   boundary. *)
+   boundary. Float32 and float64 chunks take {!Loops.flux}, the same values in
+   one pass. *)
 let flux dtype cur prev =
   let mean =
     Ordered.mean
@@ -107,21 +108,25 @@ let state_step fn s chunk =
       match s.carry with None -> chunk | Some t -> concat_last [t; chunk]
     in
     let l = last_dim ext in
-    let count = Stdlib.min m (Stdlib.max 0 (l - s.lag)) in
+    let count = Int.min m (Int.max 0 (l - s.lag)) in
     let out =
       if count = 0 then Nx.zeros dtype (collapsed_shape chunk m)
       else
         let values =
-          flux dtype
-            (shrink_last ext (l - count) l)
-            (shrink_last ext (l - count - s.lag) (l - s.lag))
+          match Loops.flux ~lag:s.lag ~first:(l - count) ~count ext with
+          | Some mean ->
+              Nx.cast dtype mean
+          | None ->
+              flux dtype
+                (shrink_last ext (l - count) l)
+                (shrink_last ext (l - count - s.lag) (l - s.lag))
         in
         if count = m then values
         else
           concat_last
             [Nx.zeros dtype (collapsed_shape chunk (m - count)); values]
     in
-    let keep = Stdlib.min s.lag l in
+    let keep = Int.min s.lag l in
     s.carry <- Some (Nx.copy (shrink_last ext (l - keep) l)) ;
     out
   end
@@ -169,7 +174,13 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
   if Nx.ndim x < 1 then
     invalid_arg
       (fn ^ ": cannot analyse a rank-zero tensor (the time axis must exist)") ;
-  let mel = Mel.apply mel_config (Stft.power_spectrum stft_config x) in
+  let mel =
+    match Mel.power_spectrogram stft_config mel_config x with
+    | Some mel ->
+        mel
+    | None ->
+        Mel.apply mel_config (Stft.power_spectrum stft_config x)
+  in
   let dtype = Nx.dtype x in
   let m = last_dim mel in
   if Nx.numel mel = 0 then
@@ -180,7 +191,17 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
     (* The log-power mel: power_to_db with its defaults — reference 1, floor
        1e-10 and the 80 dB clamp under each channel's maximum — in double
        precision. *)
-    let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
+    let db =
+      match
+        Loops.decibels64
+          ~scale:(10. /. Float.log 10.)
+          ~offset:0. ~amin:1e-10 ~magnitude:false ~range:(Some 80.) mel
+      with
+      | Some db ->
+          db
+      | None ->
+          Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel)
+    in
     (* The flat flux is the kernel on one chunk. *)
     let z = state_step fn (state_create lag) db in
     (* Centered analysis reads [fft_size / 2] samples ahead of each grid

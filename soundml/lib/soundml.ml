@@ -21,7 +21,14 @@ let check_fft_sizes fn stft_config mel_config =
 
 let mel_spectrogram stft_config mel_config ?(power = 2.) x =
   check_fft_sizes "mel_spectrogram" stft_config mel_config ;
-  Mel.apply mel_config (Stft.power_spectrum ~power stft_config x)
+  match
+    if Float.equal power 2. then Mel.power_spectrogram stft_config mel_config x
+    else None
+  with
+  | Some mel ->
+      mel
+  | None ->
+      Mel.apply mel_config (Stft.power_spectrum ~power stft_config x)
 
 let check_mfcc op ~n_mels ~n_mfcc lifter =
   if n_mfcc < 1 || n_mfcc > n_mels then
@@ -149,7 +156,16 @@ let chroma_stft stft_config chroma_config ?(power = 2.) ?norm x =
           built for an FFT of size %d (the two configurations must agree on \
           fft_size)"
          stft_size chroma_size ) ;
-  Chroma.apply ?norm chroma_config (Stft.power_spectrum ~power stft_config x)
+  match
+    if Float.equal power 2. then
+      Chroma.power_chromagram ?norm stft_config chroma_config x
+    else None
+  with
+  | Some chroma ->
+      chroma
+  | None ->
+      Chroma.apply ?norm chroma_config
+        (Stft.power_spectrum ~power stft_config x)
 
 let chroma_cqt cqt_config ?n_chroma ?norm x =
   Chroma.of_cqt ?n_chroma ?norm cqt_config

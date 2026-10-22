@@ -50,7 +50,7 @@ let alive = Atomic.make 0
 let ids = Atomic.make 0
 
 (* Workers beyond the calling domain. *)
-let capacity = Stdlib.max 0 (Domain.recommended_domain_count () - 1)
+let capacity = Int.max 0 (Domain.recommended_domain_count () - 1)
 
 (* Some tens of microseconds of [Domain.cpu_relax] on current hardware. *)
 let linger = 8_000
@@ -115,7 +115,7 @@ let run ~chunks f =
     if not (Atomic.compare_and_set current None (Some job)) then
       sequential ~chunks f
     else begin
-      spawn job (Stdlib.min capacity (chunks - 1)) ;
+      spawn job (Int.min capacity (chunks - 1)) ;
       claim job ;
       while Atomic.get job.finished < chunks do
         Domain.cpu_relax ()
@@ -125,8 +125,8 @@ let run ~chunks f =
     end
 
 let ranges ~n ~grain f =
-  let grain = Stdlib.max 1 grain in
+  let grain = Int.max 1 grain in
   let most = 4 * (capacity + 1) in
-  let chunks = Stdlib.max 1 (Stdlib.min most (n / grain)) in
+  let chunks = Int.max 1 (Int.min most (n / grain)) in
   if chunks = 1 then (if n > 0 then f 0 n)
   else run ~chunks (fun c -> f (c * n / chunks) ((c + 1) * n / chunks))

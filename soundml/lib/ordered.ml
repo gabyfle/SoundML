@@ -66,11 +66,11 @@ let geometry op x =
    pair, [cost] being the additions one tile column costs. *)
 let units ~outer ~n ~cost f =
   let per_plane = tiles n in
-  let grain = Stdlib.max 1 (grain_terms / Stdlib.max 1 (cost * tile)) in
+  let grain = Int.max 1 (grain_terms / Int.max 1 (cost * tile)) in
   Par.ranges ~n:(outer * per_plane) ~grain (fun lo hi ->
       for u = lo to hi - 1 do
         let o = u / per_plane and t0 = u mod per_plane * tile in
-        f o t0 (Stdlib.min n (t0 + tile))
+        f o t0 (Int.min n (t0 + tile))
       done )
 
 (* {1 Sums} *)
@@ -166,8 +166,8 @@ let plan ~k weights bounds m =
     let lo = ref 0 and hi = ref max_int in
     if !i + 4 <= m then
       for r = !i to !i + 3 do
-        lo := Stdlib.max !lo bounds.(2 * r) ;
-        hi := Stdlib.min !hi bounds.((2 * r) + 1)
+        lo := Int.max !lo bounds.(2 * r) ;
+        hi := Int.min !hi bounds.((2 * r) + 1)
       done ;
     if !i + 4 <= m && !hi - !lo >= min_stretch then begin
       let lo = !lo and hi = !hi and row = !i in
@@ -519,50 +519,52 @@ let stretch32 (src : f32) ~n b acc ~width ~x =
     incr c
   done
 
-(* [project_units mx ~outer ~n span stretch store] runs every (plane, tile)
-   unit, step by step: a row's span, or a block's rows alone before and after
-   their shared stretch, accumulate from zero in the scratch, and [store acc ~a
-   ~row ~width] writes [acc.(a + c)], [c < width], out at output offset [row].
-   [span] and [stretch] take the unit's scratch and the offset of its
-   samples. *)
+(* [run_steps mx span stretch store acc ~width ~x ~out] computes one unit's
+   outputs, step by step: a row's span, or a block's rows alone before and after
+   their shared stretch, accumulate from zero in the scratch [acc] over the
+   samples at [x], and [store acc ~a ~row ~width] writes [acc.(a + c)], [c <
+   width], out at output offset [out i] for row [i]. *)
+let run_steps mx span stretch store acc ~width ~x ~out =
+  Array.iter
+    (function
+      | Row i ->
+          Float.Array.fill acc 0 width 0. ;
+          span acc ~a:0 ~width ~i
+            ~j0:mx.bounds.(2 * i)
+            ~j1:mx.bounds.((2 * i) + 1)
+            ~x ;
+          store acc ~a:0 ~row:(out i) ~width
+      | Block b ->
+          Float.Array.fill acc 0 (4 * tile) 0. ;
+          for r = 0 to 3 do
+            span acc ~a:(r * tile) ~width ~i:(b.row + r)
+              ~j0:mx.bounds.(2 * (b.row + r))
+              ~j1:b.lo ~x
+          done ;
+          stretch b acc ~width ~x ;
+          for r = 0 to 3 do
+            let i = b.row + r in
+            span acc ~a:(r * tile) ~width ~i ~j0:b.hi
+              ~j1:mx.bounds.((2 * i) + 1)
+              ~x ;
+            store acc ~a:(r * tile) ~row:(out i) ~width
+          done )
+    mx.steps
+
+(* [project_units mx ~outer ~n span stretch store] runs {!run_steps} over every
+   (plane, tile) unit; [span] and [stretch] read the operand. *)
 let project_units mx ~outer ~n span stretch store =
   let k = mx.k and m = mx.m in
   let per_plane = tiles n in
-  let grain =
-    Stdlib.max 1 (grain_terms / Stdlib.max 1 (Stdlib.max 1 mx.terms * tile))
-  in
+  let grain = Int.max 1 (grain_terms / Int.max 1 (Int.max 1 mx.terms * tile)) in
   Par.ranges ~n:(outer * per_plane) ~grain (fun lo hi ->
       let acc = scratch () in
       for u = lo to hi - 1 do
         let o = u / per_plane and t0 = u mod per_plane * tile in
-        let width = Stdlib.min n (t0 + tile) - t0 in
-        let x = (o * k * n) + t0 in
-        let out i = (((o * m) + i) * n) + t0 in
-        Array.iter
-          (function
-            | Row i ->
-                Float.Array.fill acc 0 width 0. ;
-                span acc ~a:0 ~width ~i
-                  ~j0:mx.bounds.(2 * i)
-                  ~j1:mx.bounds.((2 * i) + 1)
-                  ~x ;
-                store acc ~a:0 ~row:(out i) ~width
-            | Block b ->
-                Float.Array.fill acc 0 (4 * tile) 0. ;
-                for r = 0 to 3 do
-                  span acc ~a:(r * tile) ~width ~i:(b.row + r)
-                    ~j0:mx.bounds.(2 * (b.row + r))
-                    ~j1:b.lo ~x
-                done ;
-                stretch b acc ~width ~x ;
-                for r = 0 to 3 do
-                  let i = b.row + r in
-                  span acc ~a:(r * tile) ~width ~i ~j0:b.hi
-                    ~j1:mx.bounds.((2 * i) + 1)
-                    ~x ;
-                  store acc ~a:(r * tile) ~row:(out i) ~width
-                done )
-          mx.steps
+        run_steps mx span stretch store acc
+          ~width:(Int.min n (t0 + tile) - t0)
+          ~x:((o * k * n) + t0)
+          ~out:(fun i -> (((o * m) + i) * n) + t0)
       done )
 
 let store64 (out : f64) acc ~a ~row ~width =
@@ -617,3 +619,171 @@ let project_cast (type a) mx (x : (float, a) Nx.t) : (float, a) Nx.t =
           project_into mx x ~outer ~n (store64 out) )
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       Nx.cast (Nx.dtype x) (project mx x)
+
+(* {1 Projections of a spectrum's power}
+
+   The power of a frames-major complex spectrum is projected without being
+   materialized: each unit, a tile of frames of one plane, first writes the
+   tile's powers bins-major into a scratch the unit's domain keeps, then runs
+   the steps over that scratch as over any operand. A power is [re *. re +. im
+   *. im] from the components widened to double, spelled as
+   {!Loops.spectrum_power} spells it (so each platform contracts it alike) and
+   rounded into the scratch's dtype: float32 for a complex64 spectrum, float64
+   for complex128 — the power spectrum's own values. *)
+
+(* The frames of a unit: a tile narrower than the projections' own, so a
+   spectrogram splits into units enough to keep every domain busy to the end. *)
+let power_tile = 16
+
+(* The powers of a tile are written a band of [power_band] bins at a time, so
+   the scratch rows a band fills stay in the first-level cache while every frame
+   of the tile reaches them. *)
+let power_band = 32
+
+let power_fill32 (z : f32) (p : f32) ~k ~n ~o ~t0 ~w =
+  let b0 = ref 0 in
+  while !b0 < k do
+    let b1 = Int.min k (!b0 + power_band) in
+    for t = 0 to w - 1 do
+      let row = 2 * (((o * n) + t0 + t) * k) in
+      let j = ref !b0 in
+      while !j + 3 < b1 do
+        let i = row + (2 * !j) and d = (!j * w) + t in
+        let r0 = Array1.unsafe_get z i and m0 = Array1.unsafe_get z (i + 1) in
+        let r1 = Array1.unsafe_get z (i + 2)
+        and m1 = Array1.unsafe_get z (i + 3) in
+        let r2 = Array1.unsafe_get z (i + 4)
+        and m2 = Array1.unsafe_get z (i + 5) in
+        let r3 = Array1.unsafe_get z (i + 6)
+        and m3 = Array1.unsafe_get z (i + 7) in
+        Array1.unsafe_set p d ((r0 *. r0) +. (m0 *. m0)) ;
+        Array1.unsafe_set p (d + w) ((r1 *. r1) +. (m1 *. m1)) ;
+        Array1.unsafe_set p (d + (2 * w)) ((r2 *. r2) +. (m2 *. m2)) ;
+        Array1.unsafe_set p (d + (3 * w)) ((r3 *. r3) +. (m3 *. m3)) ;
+        j := !j + 4
+      done ;
+      while !j < b1 do
+        let i = row + (2 * !j) in
+        let re = Array1.unsafe_get z i and im = Array1.unsafe_get z (i + 1) in
+        Array1.unsafe_set p ((!j * w) + t) ((re *. re) +. (im *. im)) ;
+        incr j
+      done
+    done ;
+    b0 := b1
+  done
+
+let power_fill64 (z : f64) (p : f64) ~k ~n ~o ~t0 ~w =
+  let b0 = ref 0 in
+  while !b0 < k do
+    let b1 = Int.min k (!b0 + power_band) in
+    for t = 0 to w - 1 do
+      let row = 2 * (((o * n) + t0 + t) * k) in
+      let j = ref !b0 in
+      while !j + 3 < b1 do
+        let i = row + (2 * !j) and d = (!j * w) + t in
+        let r0 = Array1.unsafe_get z i and m0 = Array1.unsafe_get z (i + 1) in
+        let r1 = Array1.unsafe_get z (i + 2)
+        and m1 = Array1.unsafe_get z (i + 3) in
+        let r2 = Array1.unsafe_get z (i + 4)
+        and m2 = Array1.unsafe_get z (i + 5) in
+        let r3 = Array1.unsafe_get z (i + 6)
+        and m3 = Array1.unsafe_get z (i + 7) in
+        Array1.unsafe_set p d ((r0 *. r0) +. (m0 *. m0)) ;
+        Array1.unsafe_set p (d + w) ((r1 *. r1) +. (m1 *. m1)) ;
+        Array1.unsafe_set p (d + (2 * w)) ((r2 *. r2) +. (m2 *. m2)) ;
+        Array1.unsafe_set p (d + (3 * w)) ((r3 *. r3) +. (m3 *. m3)) ;
+        j := !j + 4
+      done ;
+      while !j < b1 do
+        let i = row + (2 * !j) in
+        let re = Array1.unsafe_get z i and im = Array1.unsafe_get z (i + 1) in
+        Array1.unsafe_set p ((!j * w) + t) ((re *. re) +. (im *. im)) ;
+        incr j
+      done
+    done ;
+    b0 := b1
+  done
+
+(* [power_units mx ~outer ~n ~k ~scratch:make fill span stretch store] runs
+   every (plane, tile) unit over the powers [fill p ~o ~t0 ~w] writes into the
+   unit domain's scratch [p], [make (k * tile)] once per domain. *)
+let power_units mx ~outer ~n ~k ~make fill span stretch store =
+  let m = mx.m in
+  let per_plane = (n + power_tile - 1) / power_tile in
+  let grain =
+    Int.max 1 (grain_terms / Int.max 1 ((Int.max 1 mx.terms + k) * power_tile))
+  in
+  Par.ranges ~n:(outer * per_plane) ~grain (fun lo hi ->
+      let acc = scratch () and p = make (k * power_tile) in
+      for u = lo to hi - 1 do
+        let o = u / per_plane and t0 = u mod per_plane * power_tile in
+        let width = Int.min n (t0 + power_tile) - t0 in
+        fill p ~o ~t0 ~w:width ;
+        run_steps mx (span p ~n:width) (stretch p ~n:width) store acc ~width
+          ~x:0 ~out:(fun i -> (((o * m) + i) * n) + t0 )
+      done )
+
+let check_power mx z =
+  let nd = Nx.ndim z in
+  if nd < 2 then
+    invalid_arg
+      (Printf.sprintf
+         "Ordered.project_power: cannot project a rank-%d spectrum (the \
+          projection needs [...; n; k])"
+         nd ) ;
+  let shape = Nx.shape z in
+  let n = shape.(nd - 2) and k = shape.(nd - 1) in
+  if k <> mx.k then
+    invalid_arg
+      (Printf.sprintf
+         "Ordered.project_power: cannot project %d bins through a matrix of %d \
+          columns"
+         k mx.k ) ;
+  let lead = Array.sub shape 0 (nd - 2) in
+  (Array.append lead [|mx.m; n|], Array.fold_left ( * ) 1 lead, n, k)
+
+let make32 len = Array1.create float32 c_layout len
+
+let make64 len = Array1.create float64 c_layout len
+
+let project_power (type a c) mx (dtype : (float, a) Nx.dtype)
+    (z : (Complex.t, c) Nx.t) : (float, Nx.float64_elt) Nx.t option =
+  let shape, outer, n, k = check_power mx z in
+  match (dtype, Nx.dtype z) with
+  | Nx.Float32, Nx.Complex64 ->
+      Some
+        (Store.make64 shape (fun out ->
+             Store.read_parts32 z (fun src ->
+                 power_units mx ~outer ~n ~k ~make:make32
+                   (power_fill32 src ~k ~n) (span32 mx) stretch32 (store64 out) ) )
+        )
+  | Nx.Float64, Nx.Complex128 ->
+      Some
+        (Store.make64 shape (fun out ->
+             Store.read_parts64 z (fun src ->
+                 power_units mx ~outer ~n ~k ~make:make64
+                   (power_fill64 src ~k ~n) (span64 mx) stretch64 (store64 out) ) )
+        )
+  | _ ->
+      None
+
+let project_power_cast (type a c) mx (dtype : (float, a) Nx.dtype)
+    (z : (Complex.t, c) Nx.t) : (float, a) Nx.t option =
+  let shape, outer, n, k = check_power mx z in
+  match (dtype, Nx.dtype z) with
+  | Nx.Float32, Nx.Complex64 ->
+      Some
+        (Store.make32 shape (fun out ->
+             Store.read_parts32 z (fun src ->
+                 power_units mx ~outer ~n ~k ~make:make32
+                   (power_fill32 src ~k ~n) (span32 mx) stretch32 (store32 out) ) )
+        )
+  | Nx.Float64, Nx.Complex128 ->
+      Some
+        (Store.make64 shape (fun out ->
+             Store.read_parts64 z (fun src ->
+                 power_units mx ~outer ~n ~k ~make:make64
+                   (power_fill64 src ~k ~n) (span64 mx) stretch64 (store64 out) ) )
+        )
+  | _ ->
+      None

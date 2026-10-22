@@ -187,11 +187,11 @@ let planes_of z =
 let transpose_units ~outer ~frames ~bins f =
   let bands = (bins + band - 1) / band in
   (* about 32 Kelements per chunk *)
-  let grain = Stdlib.max 1 (32_768 / Stdlib.max 1 (band * frames)) in
+  let grain = Int.max 1 (32_768 / Int.max 1 (band * frames)) in
   Par.ranges ~n:(outer * bands) ~grain (fun lo hi ->
       for u = lo to hi - 1 do
         let o = u / bands and b0 = u mod bands * band in
-        f o b0 (Stdlib.min bins (b0 + band))
+        f o b0 (Int.min bins (b0 + band))
       done )
 
 let spectrum_power (type a c) (dtype : (float, a) Nx.dtype) ~power
@@ -254,9 +254,9 @@ let frame32 (src : f32) (dst : f64) (w : Float.Array.t) ~ext ~n ~fft ~hop ~left
   let get i = Array1.unsafe_get src (sbase + i) in
   for r = lo to hi - 1 do
     let s0 = ((first + r) * hop) - left and d = dbase + (r * fft) in
-    let jlo = Stdlib.max 0 (Stdlib.min fft (-s0))
-    and jhi = Stdlib.max 0 (Stdlib.min fft (n - s0)) in
-    let jhi = Stdlib.max jlo jhi in
+    let jlo = Int.max 0 (Int.min fft (-s0))
+    and jhi = Int.max 0 (Int.min fft (n - s0)) in
+    let jhi = Int.max jlo jhi in
     for j = 0 to jlo - 1 do
       Array1.unsafe_set dst (d + j)
         (border ext get ~n (s0 + j) *. Float.Array.unsafe_get w j)
@@ -294,9 +294,9 @@ let frame64 (src : f64) (dst : f64) (w : Float.Array.t) ~ext ~n ~fft ~hop ~left
   let get i = Array1.unsafe_get src (sbase + i) in
   for r = lo to hi - 1 do
     let s0 = ((first + r) * hop) - left and d = dbase + (r * fft) in
-    let jlo = Stdlib.max 0 (Stdlib.min fft (-s0))
-    and jhi = Stdlib.max 0 (Stdlib.min fft (n - s0)) in
-    let jhi = Stdlib.max jlo jhi in
+    let jlo = Int.max 0 (Int.min fft (-s0))
+    and jhi = Int.max 0 (Int.min fft (n - s0)) in
+    let jhi = Int.max jlo jhi in
     for j = 0 to jlo - 1 do
       Array1.unsafe_set dst (d + j)
         (border ext get ~n (s0 + j) *. Float.Array.unsafe_get w j)
@@ -337,14 +337,14 @@ let frames (type a) ~window ~hop ~left ~ext ~first ~count (x : (float, a) Nx.t)
   let lead = Array.sub shape 0 (nd - 1) in
   let outer = Array.fold_left ( * ) 1 lead in
   (* about 64 Kelements per chunk *)
-  let grain = Stdlib.max 1 (65_536 / Stdlib.max 1 fft) in
+  let grain = Int.max 1 (65_536 / Int.max 1 fft) in
   let units f =
     Par.ranges ~n:(outer * count) ~grain (fun lo hi ->
         (* split [lo, hi) at plane boundaries *)
         let u = ref lo in
         while !u < hi do
           let o = !u / count in
-          let stop = Stdlib.min hi ((o + 1) * count) in
+          let stop = Int.min hi ((o + 1) * count) in
           f o (!u - (o * count)) (stop - (o * count)) ;
           u := stop
         done )
@@ -521,13 +521,13 @@ let energy (type a) kind ~frame_length ~hop ~count (x : (float, a) Nx.t) :
   let out_shape = Array.append lead [|1; count|] in
   let fl = frame_length in
   (* a frame costs [frame_length] steps; about 64 Ksteps per chunk *)
-  let grain = Stdlib.max 1 (65_536 / Stdlib.max 1 fl) in
+  let grain = Int.max 1 (65_536 / Int.max 1 fl) in
   let units f =
     Par.ranges ~n:(outer * count) ~grain (fun lo hi ->
         let u = ref lo in
         while !u < hi do
           let o = !u / count in
-          let stop = Stdlib.min hi ((o + 1) * count) in
+          let stop = Int.min hi ((o + 1) * count) in
           f o (!u - (o * count)) (stop - (o * count)) ;
           u := stop
         done )
@@ -757,12 +757,12 @@ let reduce_frames (type a) ~invalid (x : (float, a) Nx.t) ~tile32 ~tile64 :
   let bad = ref false in
   let tiles = (n + tile - 1) / tile in
   (* a tile costs [k * tile] steps per pass; about 32 Ksteps per chunk *)
-  let grain = Stdlib.max 1 (32_768 / Stdlib.max 1 (k * tile)) in
+  let grain = Int.max 1 (32_768 / Int.max 1 (k * tile)) in
   let units f =
     Par.ranges ~n:(outer * tiles) ~grain (fun lo hi ->
         for u = lo to hi - 1 do
           let o = u / tiles and t0 = u mod tiles * tile in
-          f o t0 (Stdlib.min n (t0 + tile) - t0)
+          f o t0 (Int.min n (t0 + tile) - t0)
         done )
   in
   let run64 x =
@@ -970,14 +970,14 @@ let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
   let outer = Array.fold_left ( * ) 1 lead in
   let blocks = (fft + hop - 1) / hop in
   (* a position costs [blocks] taps; about 64 Ktaps per chunk *)
-  let grain = Stdlib.max 1 (65_536 / Stdlib.max 1 blocks) in
+  let grain = Int.max 1 (65_536 / Int.max 1 blocks) in
   Store.make64 (Array.append lead [|out_len|]) (fun dst ->
       Store.read64 frames (fun src ->
           Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
               let u = ref lo in
               while !u < hi do
                 let o = !u / out_len in
-                let stop_u = Stdlib.min hi ((o + 1) * out_len) in
+                let stop_u = Int.min hi ((o + 1) * out_len) in
                 ola64 src dst window ~fft ~hop ~count ~blocks ~period ~partial
                   ~head ~stop ~left ~out_len ~valid o
                   (!u - (o * out_len))
@@ -1224,18 +1224,18 @@ let extremes (type a) ~bands (x : (float, a) Nx.t) =
   let nb = Array.length bands / 3 in
   let most = ref 1 in
   for b = 0 to nb - 1 do
-    most := Stdlib.max !most bands.((3 * b) + 2)
+    most := Int.max !most bands.((3 * b) + 2)
   done ;
   let out_shape = Array.append lead [|nb; n|] in
   let tiles = (n + tile - 1) / tile in
-  let grain = Stdlib.max 1 (32_768 / Stdlib.max 1 (k * tile)) in
+  let grain = Int.max 1 (32_768 / Int.max 1 (k * tile)) in
   let units run =
     Par.ranges ~n:(outer * tiles) ~grain (fun lo hi ->
         let small = Float.Array.create (tile * !most)
         and large = Float.Array.create (tile * !most) in
         for u = lo to hi - 1 do
           let o = u / tiles and t0 = u mod tiles * tile in
-          run o t0 (Stdlib.min n (t0 + tile) - t0) small large
+          run o t0 (Int.min n (t0 + tile) - t0) small large
         done )
   in
   Store.make64_pair out_shape (fun valley peak ->
@@ -1340,7 +1340,7 @@ let db_run ~shape ~range ~round fill floor =
   let blocks = channels * per in
   let span b =
     let c = b / per and q = b mod per in
-    ((c * len) + (q * db_block), (c * len) + Stdlib.min len ((q + 1) * db_block))
+    ((c * len) + (q * db_block), (c * len) + Int.min len ((q + 1) * db_block))
   in
   let peaks = Float.Array.make blocks Float.neg_infinity in
   Par.ranges ~n:blocks ~grain:1 (fun b0 b1 ->
@@ -1405,5 +1405,84 @@ let decibels64 (type a) ~scale ~offset ~amin ~magnitude ~range
                    (floor64 dst) ) ) )
   | Nx.Float64 ->
       decibels ~scale ~offset ~amin ~magnitude ~range x
+  | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+      None
+
+(* {1 Onset flux}
+
+   A parallel unit is one tile of [tile] output frames of one plane: the bin
+   rows are read one at a time, each frame's positive difference added to its
+   accumulator, so every frame takes its bins in ascending order from [0.] — the
+   association of {!Ordered.sum}. *)
+
+let flux32 (src : f32) (dst : f64) ~k ~n ~lag ~first ~count o t0 w acc =
+  Float.Array.fill acc 0 w 0. ;
+  for j = 0 to k - 1 do
+    let r = (((o * k) + j) * n) + first + t0 in
+    for t = 0 to w - 1 do
+      let d =
+        Array1.unsafe_get src (r + t) -. Array1.unsafe_get src (r + t - lag)
+      in
+      let v = if d < 0. then 0. else d in
+      Float.Array.unsafe_set acc t (Float.Array.unsafe_get acc t +. v)
+    done
+  done ;
+  let bins = Float.of_int k in
+  for t = 0 to w - 1 do
+    Array1.unsafe_set dst
+      ((o * count) + t0 + t)
+      (Float.Array.unsafe_get acc t /. bins)
+  done
+
+let flux64 (src : f64) (dst : f64) ~k ~n ~lag ~first ~count o t0 w acc =
+  Float.Array.fill acc 0 w 0. ;
+  for j = 0 to k - 1 do
+    let r = (((o * k) + j) * n) + first + t0 in
+    for t = 0 to w - 1 do
+      let d =
+        Array1.unsafe_get src (r + t) -. Array1.unsafe_get src (r + t - lag)
+      in
+      let v = if d < 0. then 0. else d in
+      Float.Array.unsafe_set acc t (Float.Array.unsafe_get acc t +. v)
+    done
+  done ;
+  let bins = Float.of_int k in
+  for t = 0 to w - 1 do
+    Array1.unsafe_set dst
+      ((o * count) + t0 + t)
+      (Float.Array.unsafe_get acc t /. bins)
+  done
+
+let flux (type a) ~lag ~first ~count (x : (float, a) Nx.t) :
+    (float, Nx.float64_elt) Nx.t option =
+  let shape = Nx.shape x in
+  let nd = Array.length shape in
+  let k = shape.(nd - 2) and n = shape.(nd - 1) in
+  let lead = Array.sub shape 0 (nd - 2) in
+  let outer = Array.fold_left ( * ) 1 lead in
+  let tiles = (count + tile - 1) / tile in
+  let grain = Int.max 1 (32_768 / Int.max 1 (k * tile)) in
+  let run kernel dst =
+    Par.ranges ~n:(outer * tiles) ~grain (fun lo hi ->
+        let acc = Float.Array.create tile in
+        for u = lo to hi - 1 do
+          let o = u / tiles and t0 = u mod tiles * tile in
+          kernel dst o t0 (Int.min count (t0 + tile) - t0) acc
+        done )
+  in
+  let out = Array.append lead [|count|] in
+  match Nx.dtype x with
+  | Nx.Float32 ->
+      Some
+        (Store.make64 out (fun dst ->
+             Store.read32 x (fun src ->
+                 run (fun dst -> flux32 src dst ~k ~n ~lag ~first ~count) dst ) )
+        )
+  | Nx.Float64 ->
+      Some
+        (Store.make64 out (fun dst ->
+             Store.read64 x (fun src ->
+                 run (fun dst -> flux64 src dst ~k ~n ~lag ~first ~count) dst ) )
+        )
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       None
