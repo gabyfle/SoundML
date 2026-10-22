@@ -328,8 +328,8 @@ let frame64 (src : f64) (dst : f64) (w : Float.Array.t) ~ext ~n ~fft ~hop ~left
     done
   done
 
-let frames (type a) ~window ~hop ~left ~ext ~first ~count (x : (float, a) Nx.t)
-    =
+let frames (type a) ?into ~window ~hop ~left ~ext ~first ~count
+    (x : (float, a) Nx.t) =
   let fft = Float.Array.length window in
   let shape = Nx.shape x in
   let nd = Array.length shape in
@@ -349,7 +349,7 @@ let frames (type a) ~window ~hop ~left ~ext ~first ~count (x : (float, a) Nx.t)
           u := stop
         done )
   in
-  Store.make64
+  Store.make64 ?into
     (Array.append lead [|count; fft|])
     (fun dst ->
       match Nx.dtype x with
@@ -461,52 +461,80 @@ let zcr32 (src : f32) (dst : f32) ~n ~fl ~hop ~count ~threshold o lo hi =
   let sbase = o * n and dbase = o * count in
   let len = Float.of_int fl in
   let below = -.threshold in
-  let first = lo * hop and last = ((hi - 1) * hop) + fl - 1 in
+  let first = lo * hop in
   let starts = Array.make (hi - lo) 0 in
-  let running = ref 0 in
-  let prev = ref (Array1.unsafe_get src (sbase + first) < below) in
+  (* [running] counts the sign changes between consecutive positions of
+     [\[first, q\]]; the frame boundaries are the only events, so the samples
+     between two of them run in one branch-free loop *)
+  let running = ref 0 and q = ref first in
+  let prev =
+    ref (Bool.to_int (Array1.unsafe_get src (sbase + first) < below))
+  in
   let s = ref lo and e = ref lo in
-  for q = first to last do
-    if q > first then begin
-      let neg = Array1.unsafe_get src (sbase + q) < below in
-      if neg <> !prev then incr running ;
-      prev := neg
-    end ;
-    while !s < hi && !s * hop = q do
+  while !e < hi do
+    while !s < hi && !s * hop = !q do
       starts.(!s - lo) <- !running ;
       incr s
     done ;
-    while !e < hi && (!e * hop) + fl - 1 = q do
+    while !e < hi && (!e * hop) + fl - 1 = !q do
       Array1.unsafe_set dst (dbase + !e)
         (Float.of_int (!running - starts.(!e - lo)) /. len) ;
       incr e
-    done
+    done ;
+    if !e < hi then begin
+      let stop =
+        Int.min (if !s < hi then !s * hop else max_int) ((!e * hop) + fl - 1)
+      in
+      let r = ref !running and pv = ref !prev in
+      for i = !q + 1 to stop do
+        let neg = Bool.to_int (Array1.unsafe_get src (sbase + i) < below) in
+        r := !r + (neg lxor !pv) ;
+        pv := neg
+      done ;
+      running := !r ;
+      prev := !pv ;
+      q := stop
+    end
   done
 
 let zcr64 (src : f64) (dst : f64) ~n ~fl ~hop ~count ~threshold o lo hi =
   let sbase = o * n and dbase = o * count in
   let len = Float.of_int fl in
   let below = -.threshold in
-  let first = lo * hop and last = ((hi - 1) * hop) + fl - 1 in
+  let first = lo * hop in
   let starts = Array.make (hi - lo) 0 in
-  let running = ref 0 in
-  let prev = ref (Array1.unsafe_get src (sbase + first) < below) in
+  (* [running] counts the sign changes between consecutive positions of
+     [\[first, q\]]; the frame boundaries are the only events, so the samples
+     between two of them run in one branch-free loop *)
+  let running = ref 0 and q = ref first in
+  let prev =
+    ref (Bool.to_int (Array1.unsafe_get src (sbase + first) < below))
+  in
   let s = ref lo and e = ref lo in
-  for q = first to last do
-    if q > first then begin
-      let neg = Array1.unsafe_get src (sbase + q) < below in
-      if neg <> !prev then incr running ;
-      prev := neg
-    end ;
-    while !s < hi && !s * hop = q do
+  while !e < hi do
+    while !s < hi && !s * hop = !q do
       starts.(!s - lo) <- !running ;
       incr s
     done ;
-    while !e < hi && (!e * hop) + fl - 1 = q do
+    while !e < hi && (!e * hop) + fl - 1 = !q do
       Array1.unsafe_set dst (dbase + !e)
         (Float.of_int (!running - starts.(!e - lo)) /. len) ;
       incr e
-    done
+    done ;
+    if !e < hi then begin
+      let stop =
+        Int.min (if !s < hi then !s * hop else max_int) ((!e * hop) + fl - 1)
+      in
+      let r = ref !running and pv = ref !prev in
+      for i = !q + 1 to stop do
+        let neg = Bool.to_int (Array1.unsafe_get src (sbase + i) < below) in
+        r := !r + (neg lxor !pv) ;
+        pv := neg
+      done ;
+      running := !r ;
+      prev := !pv ;
+      q := stop
+    end
   done
 
 type energy = Rms | Zcr of float
@@ -960,8 +988,8 @@ let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
     end
   done
 
-let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
-    frames =
+let overlap_add ?into ~window ~hop ~period ~partial ~head ~stop ~left ~out_len
+    ~valid frames =
   let fft = Float.Array.length window in
   let shape = Nx.shape frames in
   let nd = Array.length shape in
@@ -971,7 +999,7 @@ let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
   let blocks = (fft + hop - 1) / hop in
   (* a position costs [blocks] taps; about 64 Ktaps per chunk *)
   let grain = Int.max 1 (65_536 / Int.max 1 blocks) in
-  Store.make64 (Array.append lead [|out_len|]) (fun dst ->
+  Store.make64 ?into (Array.append lead [|out_len|]) (fun dst ->
       Store.read64 frames (fun src ->
           Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
               let u = ref lo in
@@ -1014,9 +1042,9 @@ let update64 (r : f64) (prev : f64 option) (mag : f64) (dst : f64) ~beta lo hi =
         Array1.unsafe_set dst ((2 * i) + 1) (m *. (ei /. d))
       done
 
-let gl_update ~beta ~magnitudes ?previous rebuilt =
+let gl_update ?into ~beta ~magnitudes ?previous rebuilt =
   let n = Nx.numel rebuilt in
-  Store.make_c128 (Nx.shape rebuilt) (fun dst ->
+  Store.make_c128 ?into (Nx.shape rebuilt) (fun dst ->
       Store.read64 magnitudes (fun mag ->
           Store.read_parts64 rebuilt (fun r ->
               let run prev =

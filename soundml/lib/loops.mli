@@ -51,7 +51,8 @@ val spectrum_power :
 type extension = Reflect | Edge | Constant of float
 
 val frames :
-     window:Float.Array.t
+     ?into:Store.buffer
+  -> window:Float.Array.t
   -> hop:int
   -> left:int
   -> ext:extension
@@ -67,7 +68,8 @@ val frames :
     by [ext] outside it. Element [j] of frame [p] is the padded sample widened
     to double times [window.(j)]: the product [Nx.stft] forms.
 
-    Requires [n >= 1] whenever a frame reaches outside the signal. *)
+    Requires [n >= 1] whenever a frame reaches outside the signal. [into] is
+    {!Store.make64}'s. *)
 
 (** A frame energy: the root mean square, or the zero-crossing rate with a
     threshold. *)
@@ -144,7 +146,8 @@ val flatness :
 (** {1 Synthesis} *)
 
 val overlap_add :
-     window:Float.Array.t
+     ?into:Store.buffer
+  -> window:Float.Array.t
   -> hop:int
   -> period:Float.Array.t
   -> partial:(int -> float)
@@ -162,10 +165,11 @@ val overlap_add :
     frames reaching the position, the frame opening latest first; its
     denominator is the envelope, [period.(q mod hop)] at padded positions
     [q] in [\[head, stop)] and [partial q] elsewhere. Outputs from [valid]
-    on are zero. *)
+    on are zero. [into] is {!Store.make64}'s. *)
 
 val gl_update :
-     beta:float
+     ?into:Store.buffer
+  -> beta:float
   -> magnitudes:(float, Nx.float64_elt) Nx.t
   -> ?previous:(Complex.t, Nx.complex64_elt) Nx.t
   -> (Complex.t, Nx.complex64_elt) Nx.t
@@ -174,7 +178,7 @@ val gl_update :
     spectrum, elementwise over tensors of one shape and layout: [e] is
     [rebuilt], less [beta] times [previous] when given, and the result is
     [magnitudes *. e /. (|e| +. min_float)], [|e|] computed by
-    [Float.hypot]. *)
+    [Float.hypot]. [into] is {!Store.make64}'s. *)
 
 (** {1 Band extremes} *)
 

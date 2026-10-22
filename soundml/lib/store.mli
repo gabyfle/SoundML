@@ -37,13 +37,28 @@ val make32 : int array -> (f32 -> unit) -> (float, Nx.float32_elt) Nx.t
     elements [fill] wrote; [fill] is not called when [shape] holds no
     element, and must write every element otherwise. *)
 
-val make64 : int array -> (f64 -> unit) -> (float, Nx.float64_elt) Nx.t
-(** [make64] is {!make32} at float64. *)
+(** The type for host buffers that successive results reuse. *)
+type buffer
 
-val make_c128 : int array -> (f64 -> unit) -> (Complex.t, Nx.complex64_elt) Nx.t
+val buffer : int -> buffer
+(** [buffer bytes] is a fresh host buffer of [bytes] bytes. *)
+
+val make64 :
+  ?into:buffer -> int array -> (f64 -> unit) -> (float, Nx.float64_elt) Nx.t
+(** [make64] is {!make32} at float64. With [into], the tensor lies in that
+    buffer's memory instead of fresh memory, which every tensor made in it
+    before must no longer be used to read: it is overwritten. Raises
+    [Invalid_argument] if the buffer is too small. *)
+
+val make_c128 :
+     ?into:buffer
+  -> int array
+  -> (f64 -> unit)
+  -> (Complex.t, Nx.complex64_elt) Nx.t
 (** [make_c128 shape fill] is the complex128 tensor of [shape] whose
     components [fill] wrote: element [2i] of the array is the real part of
-    element [i] in C order, element [2i + 1] its imaginary part. *)
+    element [i] in C order, element [2i + 1] its imaginary part. [into] is
+    {!make64}'s. *)
 
 val make64_pair :
      int array

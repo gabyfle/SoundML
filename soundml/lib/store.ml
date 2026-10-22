@@ -35,11 +35,32 @@ let make dtype kind bytes shape fill =
   if n > 0 then Rig.Buffer.write buffer kind fill ;
   Nx.of_buffer dtype shape buffer
 
+type buffer = {bytes: int; memory: Rig.Buffer.t}
+
+let buffer bytes = {bytes; memory= Rig.Buffer.create Rig.host bytes}
+
+(* A reused buffer is rewritten only once every tensor made over it before is
+   dead, the caller's obligation: it is then, again, memory nothing else
+   reads. *)
+let remake dtype kind bytes b shape fill =
+  let n = numel shape in
+  if bytes * n > b.bytes then invalid_arg "Store.remake: buffer too small" ;
+  if n > 0 then Rig.Buffer.write b.memory kind fill ;
+  Nx.of_buffer dtype shape b.memory
+
+let make_into dtype kind bytes into shape fill =
+  match into with
+  | None ->
+      make dtype kind bytes shape fill
+  | Some b ->
+      remake dtype kind bytes b shape fill
+
 let make32 shape fill = make Nx.float32 float32 4 shape fill
 
-let make64 shape fill = make Nx.float64 float64 8 shape fill
+let make64 ?into shape fill = make_into Nx.float64 float64 8 into shape fill
 
-let make_c128 shape fill = make Nx.complex128 float64 16 shape fill
+let make_c128 ?into shape fill =
+  make_into Nx.complex128 float64 16 into shape fill
 
 let make64_pair shape fill =
   let n = numel shape in
