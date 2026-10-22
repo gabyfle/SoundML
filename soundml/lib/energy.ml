@@ -47,29 +47,26 @@ let leading_shape t =
   Array.sub shape 0 (Array.length shape - 1)
 
 (* [zero_leading t] is [true] iff a leading axis of [t] has size zero: the
-   tensor holds no signals at all, and slicing machinery below cannot express
-   zero-size ranges. Requires rank >= 1. *)
+   tensor holds no signals at all. Requires rank >= 1. *)
 let zero_leading t = Array.exists (fun d -> d = 0) (leading_shape t)
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let shrink_frame_axis t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 2 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 2 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
 
 let take_last t indices =
   let indices =
-    Nx.create Nx.int32 [|Array.length indices|] (Array.map Int32.of_int indices)
+    Nx.create Nx.int64 [|Array.length indices|] (Array.map Int64.of_int indices)
   in
   Nx.take ~axis:(-1) ~indices t
 

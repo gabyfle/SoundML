@@ -269,15 +269,13 @@ let leading_shape t =
   Array.sub shape 0 (Array.length shape - 1)
 
 (* [zero_leading t] is [true] iff a leading axis of [t] has size zero: the
-   tensor holds no signals at all, and slicing machinery below cannot express
-   zero-size ranges. Requires rank >= 1. *)
+   tensor holds no signals at all. Requires rank >= 1. *)
 let zero_leading t = Array.exists (fun d -> d = 0) (leading_shape t)
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
@@ -306,7 +304,7 @@ let reflect_index n q =
 
 let take_last t indices =
   let indices =
-    Nx.create Nx.int32 [|Array.length indices|] (Array.map Int32.of_int indices)
+    Nx.create Nx.int64 [|Array.length indices|] (Array.map Int64.of_int indices)
   in
   Nx.take ~axis:(-1) ~indices t
 
@@ -814,9 +812,9 @@ let overlap_add (c : Config.t) ~frames windowed =
   in
   let grid = Nx.reshape (Array.append lead [|frames; blocks; hop|]) widened in
   let shifted k =
-    Nx.shrink
-      (Array.init (rank + 3) (fun i ->
-           if i = rank + 1 then (k, k + 1) else (0, Nx.dim i grid) ) )
+    Nx.slice
+      (List.init (rank + 3) (fun i ->
+           if i = rank + 1 then Nx.R (k, k + 1) else Nx.A ) )
       grid
     |> Nx.reshape (Array.append lead [|frames; hop|])
     |> Nx.pad
@@ -1096,9 +1094,8 @@ let synthesis_reset s =
    axis before its last. *)
 let frame_axis t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 2 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 2 then Nx.R (start, stop) else Nx.A))
     t
 
 (* [synthesis_blocks s local ~frames ~count] is the overlap-add of the windowed
@@ -1116,11 +1113,11 @@ let synthesis_blocks s local ~frames ~count =
   let rank = Array.length lead in
   let grid = Nx.reshape (Array.append lead [|frames; b; hop|]) local in
   let plane j =
-    Nx.shrink
-      (Array.init (rank + 3) (fun i ->
-           if i = rank then (b - 1 - j, b - 1 - j + count)
-           else if i = rank + 1 then (j, j + 1)
-           else (0, Nx.dim i grid) ) )
+    Nx.slice
+      (List.init (rank + 3) (fun i ->
+           if i = rank then Nx.R (b - 1 - j, b - 1 - j + count)
+           else if i = rank + 1 then Nx.R (j, j + 1)
+           else Nx.A ) )
       grid
     |> Nx.reshape (Array.append lead [|count; hop|])
   in

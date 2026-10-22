@@ -60,9 +60,16 @@
    keeps all [frames] windows live at once ([frames * k] floats) and streams the
    source rows in storage order, so every read is contiguous. *)
 
-(* The flat storage of a contiguous tensor, shared (not copied): the seam
-   between the tensor faces and the median kernels. *)
-let array1_of t = Nx_buffer.to_bigarray1 (Nx.to_buffer t)
+(* The Bigarray kind of the two element widths the kernels carry: the seam
+   between the tensor faces and the median kernels, which read a tensor's
+   storage in place and write a Bigarray the result then takes over. *)
+let kind : type a. (float, a) Nx.dtype -> (float, a) Bigarray.kind = function
+  | Nx.Float64 ->
+      Bigarray.float64
+  | Nx.Float32 ->
+      Bigarray.float32
+  | _ ->
+      assert false
 
 (* {1 Line geometry} *)
 
@@ -249,47 +256,52 @@ let median_cols_f32
 (* {1 Tensor faces of the kernels}
 
    The last two axes are the bin and frame axes; leading axes are independent
-   planes. Both faces read a contiguous copy of the input and write a fresh
-   output of the same shape. *)
+   planes. Both faces read the input's C-order storage in place (a contiguous
+   copy only when it has none) and fill a fresh Bigarray of the same shape that
+   the returned tensor takes over. *)
 
 let median_time : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
  fun s ~k ->
+  let dtype = Nx.dtype s in
   let shape = Nx.shape s in
   let n = shape.(Array.length shape - 1) in
   let rows = if n = 0 then 0 else Nx.numel s / n in
-  let out = Nx.empty (Nx.dtype s) shape in
-  if rows > 0 then begin
-    let src = array1_of (Nx.contiguous s) in
-    let dst = array1_of out in
-    match Nx.dtype s with
-    | Nx.Float64 ->
-        median_rows_f64 src dst ~rows ~n ~k
-    | Nx.Float32 ->
-        median_rows_f32 src dst ~rows ~n ~k
-    | _ ->
-        assert false
-  end ;
-  out
+  if rows = 0 then Nx.zeros dtype shape
+  else begin
+    let out = Bigarray.Genarray.create (kind dtype) Bigarray.c_layout shape in
+    let dst = Bigarray.reshape_1 out (Nx.numel s) in
+    Rig.Buffer.read (Nx.to_buffer s) (kind dtype) (fun src ->
+        match dtype with
+        | Nx.Float64 ->
+            median_rows_f64 src dst ~rows ~n ~k
+        | Nx.Float32 ->
+            median_rows_f32 src dst ~rows ~n ~k
+        | _ ->
+            assert false ) ;
+    Nx.of_bigarray out
+  end
 
 let median_freq : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
  fun s ~k ->
+  let dtype = Nx.dtype s in
   let shape = Nx.shape s in
   let nd = Array.length shape in
   let cols = shape.(nd - 1) and rows = shape.(nd - 2) in
   let planes = if rows = 0 || cols = 0 then 0 else Nx.numel s / (rows * cols) in
-  let out = Nx.empty (Nx.dtype s) shape in
-  if planes > 0 then begin
-    let src = array1_of (Nx.contiguous s) in
-    let dst = array1_of out in
-    match Nx.dtype s with
-    | Nx.Float64 ->
-        median_cols_f64 src dst ~planes ~rows ~cols ~k
-    | Nx.Float32 ->
-        median_cols_f32 src dst ~planes ~rows ~cols ~k
-    | _ ->
-        assert false
-  end ;
-  out
+  if planes = 0 then Nx.zeros dtype shape
+  else begin
+    let out = Bigarray.Genarray.create (kind dtype) Bigarray.c_layout shape in
+    let dst = Bigarray.reshape_1 out (Nx.numel s) in
+    Rig.Buffer.read (Nx.to_buffer s) (kind dtype) (fun src ->
+        match dtype with
+        | Nx.Float64 ->
+            median_cols_f64 src dst ~planes ~rows ~cols ~k
+        | Nx.Float32 ->
+            median_cols_f32 src dst ~planes ~rows ~cols ~k
+        | _ ->
+            assert false ) ;
+    Nx.of_bigarray out
+  end
 
 (* {1 Masks}
 

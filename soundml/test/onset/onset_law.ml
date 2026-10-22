@@ -75,9 +75,9 @@ let chunks_of x sizes =
       Nx.zeros (Nx.dtype x) shape
     end
     else
-      Nx.shrink
-        (Array.init nd (fun i ->
-             if i = nd - 1 then (off, off + s) else (0, Nx.dim i x) ) )
+      Nx.slice
+        (List.init nd (fun i ->
+             if i = nd - 1 then Nx.R (off, off + s) else Nx.A ) )
         x
   in
   let rec go off = function

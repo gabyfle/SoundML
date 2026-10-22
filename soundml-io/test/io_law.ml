@@ -10,9 +10,9 @@
    double flush, no chunk mangling).
 
    The fold and Reader laws: concatenating the chunks of [fold] (every block
-   size, including one-frame blocks) or of a [Reader] (random schedules, with
-   and without [?out]) equals the corresponding [read] bit-identically, native
-   and resampled.
+   size, including one-frame blocks) or of a [Reader] (random schedules, chunks
+   copied or retained as delivered) equals the corresponding [read]
+   bit-identically, native and resampled.
 
    Fixture lengths are chosen to cross the decode staging block (32768 frames
    for stereo float32, 16384 for stereo float64), so the kernel is genuinely fed
@@ -257,7 +257,7 @@ let fold_tests =
 (* {2 Reader == read, random schedules} *)
 
 let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
-    ~use_out seed =
+    ~retain seed =
   let name =
     Printf.sprintf "%s%s %s%s%s seed %d" (file_name file)
       ( match sample_rate with
@@ -267,7 +267,7 @@ let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
           Printf.sprintf " -> %d Hz" r )
       (dtype_name dt)
       (if mono then " mono" else "")
-      (if use_out then " ?out" else "")
+      (if retain then " retained" else "")
       seed
   in
   test name (fun () ->
@@ -278,10 +278,7 @@ let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
       let draw = lcg seed in
       let rec drain acc =
         let frames = 1 + int_of_float (draw () *. 4999.) in
-        let out =
-          if use_out then Some (Nx.zeros dt [|channels; frames|]) else None
-        in
-        match Reader.read ?out r ~frames with
+        match Reader.read r ~frames with
         | Error e ->
             failf "Reader.read: %a" pp_error e
         | Ok None ->
@@ -290,7 +287,9 @@ let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
             let shape = Nx.shape chunk in
             if shape.(1) > frames then
               failf "a %d-frame chunk exceeds the request" shape.(1) ;
-            drain (Nx.copy chunk :: acc)
+            (* chunks are caller-owned: a retained one must survive every later
+               read untouched *)
+            drain ((if retain then chunk else Nx.copy chunk) :: acc)
       in
       let pieces = drain [] in
       Reader.close r ;
@@ -302,21 +301,21 @@ let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
             (Nx.concatenate ~axis:1 pieces) )
 
 let reader_tests =
-  [ reader_case `Wav_pcm16 Nx.float32 ~mono:false ~use_out:false 11
-  ; reader_case `Wav_pcm16 Nx.float32 ~mono:false ~use_out:true 12
-  ; reader_case `Wav_pcm16 Nx.float64 ~mono:true ~use_out:false 13
-  ; reader_case `Flac Nx.float64 ~mono:false ~use_out:true 14
+  [ reader_case `Wav_pcm16 Nx.float32 ~mono:false ~retain:false 11
+  ; reader_case `Wav_pcm16 Nx.float32 ~mono:false ~retain:true 12
+  ; reader_case `Wav_pcm16 Nx.float64 ~mono:true ~retain:false 13
+  ; reader_case `Flac Nx.float64 ~mono:false ~retain:true 14
   ; reader_case `Wav_pcm16 ~sample_rate:16000 Nx.float32 ~mono:false
-      ~use_out:false 15
+      ~retain:false 15
   ; reader_case `Wav_pcm16 ~sample_rate:16000 Nx.float32 ~mono:false
-      ~use_out:true 16
+      ~retain:true 16
   ; reader_case `Wav_44k1 ~sample_rate:48000 Nx.float32 ~mono:false
-      ~use_out:false 17
-  ; reader_case `Wav_44k1 ~sample_rate:48000 Nx.float64 ~mono:true ~use_out:true
+      ~retain:false 17
+  ; reader_case `Wav_44k1 ~sample_rate:48000 Nx.float64 ~mono:true ~retain:true
       18
-  ; reader_case `Ogg ~sample_rate:48000 Nx.float32 ~mono:false ~use_out:false 19
+  ; reader_case `Ogg ~sample_rate:48000 Nx.float32 ~mono:false ~retain:false 19
   ; reader_case `Wav_11k025_mono ~sample_rate:8000 Nx.float32 ~mono:false
-      ~use_out:true 20 ]
+      ~retain:true 20 ]
 
 (* {2 Seek == uninterrupted read} *)
 
@@ -350,7 +349,9 @@ let seek_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~frames
           | Ok (Some chunk) ->
               check_bits
                 ~msg:(Printf.sprintf "span [%d; %d)" frame (frame + n))
-                (Nx.shrink [|(0, channels); (frame, frame + n)|] whole.data)
+                (Nx.slice
+                   [Nx.R (0, channels); Nx.R (frame, frame + n)]
+                   whole.data )
                 chunk )
         positions ;
       (* seeking to the very end reads EOF; past it is a typed refusal *)

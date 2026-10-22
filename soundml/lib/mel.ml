@@ -30,7 +30,8 @@ module Config = struct
     ; fft_size: int
     ; weights: (float, Nx.float64_elt) Nx.t
           (* The [[n_mels; bins]] filter matrix, precomputed once in double;
-             config-owned — accessors copy, kernels read without copying. *) }
+             config-owned and immutable — accessors hand it out, cast to their
+             dtype, and kernels read it without copying. *) }
 
   (* [fft_frequencies sample_rate fft_size bins] is the center frequency of each
      bin in hertz, evaluated as one reciprocal and one multiply per bin — the
@@ -70,8 +71,8 @@ module Config = struct
     let points = breakpoints scale f_min f_max count in
     let steps =
       Nx.sub
-        (Nx.shrink [|(1, count)|] points)
-        (Nx.shrink [|(0, count - 1)|] points)
+        (Nx.slice [Nx.R (1, count)] points)
+        (Nx.slice [Nx.R (0, count - 1)] points)
     in
     if has_true (Nx.less_equal steps (Nx.scalar Nx.float64 0.)) then
       invalid_arg
@@ -86,13 +87,13 @@ module Config = struct
     in
     let lower =
       Nx.div
-        (Nx.neg (Nx.shrink [|(0, n_mels); (0, bins)|] ramps))
-        (Nx.reshape [|n_mels; 1|] (Nx.shrink [|(0, n_mels)|] steps))
+        (Nx.neg (Nx.slice [Nx.R (0, n_mels); Nx.R (0, bins)] ramps))
+        (Nx.reshape [|n_mels; 1|] (Nx.slice [Nx.R (0, n_mels)] steps))
     in
     let upper =
       Nx.div
-        (Nx.shrink [|(2, count); (0, bins)|] ramps)
-        (Nx.reshape [|n_mels; 1|] (Nx.shrink [|(1, n_mels + 1)|] steps))
+        (Nx.slice [Nx.R (2, count); Nx.R (0, bins)] ramps)
+        (Nx.reshape [|n_mels; 1|] (Nx.slice [Nx.R (1, n_mels + 1)] steps))
     in
     let weights =
       Nx.maximum (Nx.zeros Nx.float64 [|n_mels; bins|]) (Nx.minimum lower upper)
@@ -110,8 +111,8 @@ module Config = struct
     | `Slaney ->
         let span =
           Nx.sub
-            (Nx.shrink [|(2, count)|] points)
-            (Nx.shrink [|(0, n_mels)|] points)
+            (Nx.slice [Nx.R (2, count)] points)
+            (Nx.slice [Nx.R (0, n_mels)] points)
         in
         Nx.mul weights
           (Nx.reshape [|n_mels; 1|] (Nx.div (Nx.scalar Nx.float64 2.) span))
@@ -195,8 +196,8 @@ module Config = struct
     && a.fft_size = b.fft_size
 end
 
-(* [Nx.cast] copies even onto the same dtype, so the config-owned matrix never
-   escapes: mutating a returned filterbank cannot corrupt the config. *)
+(* Tensors are immutable, so handing out the config-owned matrix — [Nx.cast]
+   returns it itself at float64 — cannot let a caller corrupt the config. *)
 let filterbank dtype (c : Config.t) = Nx.cast dtype c.Config.weights
 
 let apply (c : Config.t) s =

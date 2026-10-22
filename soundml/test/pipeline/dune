@@ -8,4 +8,4 @@
   test_alloc
   accept_causal_stream
   test_pipeline)
- (libraries soundml nx windtrap))
+ (libraries soundml nx rig windtrap))

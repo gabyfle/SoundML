@@ -1,6 +1,6 @@
 (* Contracts of the chroma configuration and both projections: creation
-   validation, accessors and defaults, pp/equal, the fresh-copy semantics of
-   [filterbank], the shape and broadcast behavior of the projections, the
+   validation, accessors and defaults, pp/equal, the isolation of the config
+   behind [filterbank], the shape and broadcast behavior of the projections, the
    normalisation options including the sub-tiny frame that is left alone, the
    structure of the constant-Q assignment matrix, and the flat features' own
    preconditions. *)
@@ -107,11 +107,18 @@ let accessor_tests =
 (* {2 The filterbank} *)
 
 let filterbank_tests =
-  [ test "filterbank returns a fresh copy" (fun () ->
+  [ test "editing a returned filterbank leaves the config untouched" (fun () ->
         let c = config () in
         let first = Chroma.filterbank Nx.float64 c in
         let before = Nx.to_array first in
-        Nx.set_item [0; 0] 12345. first ;
+        (* [first] is the config-owned matrix itself; [Nx.set] derives a
+           different one and leaves its operand as it was *)
+        let edited =
+          Nx.set [Nx.I 0; Nx.I 0] (Nx.scalar Nx.float64 12345.) first
+        in
+        equal ~msg:"the edit took" float_exact 12345. (Nx.item [0; 0] edited) ;
+        equal ~msg:"the returned matrix is unaffected" (array float_exact)
+          before (Nx.to_array first) ;
         let second = Chroma.filterbank Nx.float64 c in
         equal ~msg:"config untouched" float_exact before.(0)
           (Nx.item [0; 0] second) )
@@ -248,7 +255,9 @@ let shape_tests =
             let alone = Chroma.apply c s in
             let slice =
               Nx.reshape (Nx.shape alone)
-                (Nx.shrink [|(row, row + 1); (0, 12); (0, 5)|] stacked)
+                (Nx.slice
+                   [Nx.R (row, row + 1); Nx.R (0, 12); Nx.R (0, 5)]
+                   stacked )
             in
             Tutils.check_close
               ~msg:(Printf.sprintf "row %d" row)

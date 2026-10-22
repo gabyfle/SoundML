@@ -94,7 +94,7 @@ let stream_bench () =
           let acc = ref 0 in
           while !i < n_in do
             let len = min chunk (n_in - !i) in
-            let sl = Nx.shrink [|(!i, !i + len)|] x in
+            let sl = Nx.slice [Nx.R (!i, !i + len)] x in
             ( match R.Kernel.step k sl with
             | Some o ->
                 acc := !acc + Nx.dim 0 o
@@ -161,7 +161,10 @@ let overhead () =
   p "reset_step_only_1s" (fun () -> R.Kernel.reset k ; R.Kernel.step k x) ;
   p "kernel_prepare" (fun () ->
       R.Kernel.prepare c Nx.float32 ~channels:1 ~max_block:n ) ;
-  p "nx_empty_out" (fun () -> Nx.empty Nx.float32 [|n_out|]) ;
+  p "fresh_out" (fun () ->
+      Nx.of_bigarray
+        (Bigarray.genarray_of_array1
+           (Bigarray.Array1.create Bigarray.float32 Bigarray.c_layout n_out) ) ) ;
   p "nx_rand_touch" (fun () -> Nx.copy x)
 
 let () =

@@ -21,9 +21,24 @@
 
 (pin
  (url
-  "git+https://github.com/gabyfle/raven.git#cec410b0bbde98fe94c0b1ac3717211659d00910")
+  "git+https://github.com/gabyfle/raven.git#13ea63112e1859a9697c889da41f063763b3704b")
  (package
-  (name nx)))
+  (name nx))
+ (package
+  (name compress))
+ (package
+  (name rig)))
+
+; Raven pins windtrap to a commit and thumper pins it to v0.2.0; dune refuses
+; two assignments of one package, so the root settles it on Raven's commit.
+
+(pin
+ (url
+  "git+https://github.com/invariant-hq/windtrap.git#7be03df651610949a87ed3bb797984015e9691b9")
+ (package
+  (name windtrap))
+ (package
+  (name ppx_windtrap)))
 
 ; thumper is not published to the opam repository yet: pin it the way nx is
 ; pinned, to a fixed commit so the lock is reproducible.
@@ -45,6 +60,8 @@
    (>= 5.5.0))
   dune
   (nx
+   (= dev))
+  (rig
    (= dev))
   (odoc :with-doc)
   (windtrap
@@ -69,6 +86,8 @@
   (soundml
    (= :version))
   (nx
+   (= dev))
+  (rig
    (= dev))
   (conf-pkg-config :build)
   (conf-sndfile :build)

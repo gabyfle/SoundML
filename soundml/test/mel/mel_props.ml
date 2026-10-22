@@ -1,9 +1,9 @@
 (* Contracts of the Mel configuration and projection: creation validation (every
    precondition raises its documented message), accessors and defaults,
-   pp/equal, the fresh-copy semantics of [filterbank], the shape and broadcast
-   behavior of [apply], and the flat features' own preconditions — the fft_size
-   agreement naming both sizes, the [n_mfcc] range, the lifter domain, and the
-   zero-lifter equivalence. *)
+   pp/equal, the isolation of the config behind [filterbank], the shape and
+   broadcast behavior of [apply], and the flat features' own preconditions — the
+   fft_size agreement naming both sizes, the [n_mfcc] range, the lifter domain,
+   and the zero-lifter equivalence. *)
 
 open Windtrap
 open Soundml
@@ -105,22 +105,32 @@ let accessor_tests =
           (not (Mel.Config.equal (mel_config ()) (mel_config ~f_max:3000. ()))) )
   ]
 
-(* {2 The filterbank accessor copies} *)
+(* {2 The filterbank accessor isolates the config} *)
 
-let copy_tests =
-  [ test "filterbank returns a fresh tensor every call" (fun () ->
+let isolation_tests =
+  [ test "editing a returned filterbank never reaches the config" (fun () ->
         let c = mel_config () in
         let before = Nx.to_array (Mel.filterbank Nx.float64 c) in
+        (* at float64 this is the config-owned matrix itself; [Nx.set] is the
+           only way to derive a different one, and it leaves its operand as it
+           was *)
         let stolen = Mel.filterbank Nx.float64 c in
-        Nx.set_item [0; 1] 1e9 stolen ;
+        let edited =
+          Nx.set [Nx.I 0; Nx.I 1] (Nx.scalar Nx.float64 1e9) stolen
+        in
+        equal ~msg:"the edit took" float_exact 1e9 (Nx.item [0; 1] edited) ;
+        equal ~msg:"the returned matrix is unaffected" farray before
+          (Nx.to_array stolen) ;
         equal ~msg:"the config-owned matrix is unaffected" farray before
           (Nx.to_array (Mel.filterbank Nx.float64 c)) ;
-        (* two calls never alias each other either *)
+        (* an edit of one call's result never shows in another's either *)
         let a = Mel.filterbank Nx.float32 c in
         let b = Mel.filterbank Nx.float32 c in
         let expected = Nx.to_array b in
-        Nx.set_item [0; 1] 1e9 a ;
-        equal ~msg:"sibling copies are independent" farray expected
+        let edited = Nx.set [Nx.I 0; Nx.I 1] (Nx.scalar Nx.float32 1e9) a in
+        equal ~msg:"the sibling edit took" float_exact 1e9
+          (Nx.item [0; 1] edited) ;
+        equal ~msg:"sibling results are independent" farray expected
           (Nx.to_array b) )
   ; test "a float32 filterbank is the float64 matrix rounded" (fun () ->
         let c = mel_config ~n_mels:6 ~fft_size:128 () in
@@ -261,6 +271,6 @@ let feature_tests =
 let suite =
   [ group "config-validation" validation_tests
   ; group "config-accessors" accessor_tests
-  ; group "filterbank-copies" copy_tests
+  ; group "filterbank-isolation" isolation_tests
   ; group "apply" apply_tests
   ; group "features" feature_tests ]

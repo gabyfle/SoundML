@@ -25,7 +25,7 @@ let check_exact msg expected actual =
           x.re x.im y.re y.im )
     e
 
-let shrink_frames z p0 p1 = Nx.shrink [|(0, Nx.dim 0 z); (p0, p1)|] z
+let shrink_frames z p0 p1 = Nx.slice [Nx.A; Nx.R (p0, p1)] z
 
 (* {2 transform_range tiling} *)
 

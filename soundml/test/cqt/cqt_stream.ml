@@ -64,9 +64,8 @@ let empty_like x =
 
 let slice x start stop =
   let nd = Nx.ndim x in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i x) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     x
 
 let chunks_of x sizes =
@@ -231,10 +230,10 @@ let multichannel_tests =
             in
             let taken =
               Nx.reshape (Nx.shape alone)
-                (Nx.shrink
-                   [| (row, row + 1)
-                    ; (0, Nx.dim 1 expected)
-                    ; (0, Nx.dim 2 expected) |]
+                (Nx.slice
+                   [ Nx.R (row, row + 1)
+                   ; Nx.R (0, Nx.dim 1 expected)
+                   ; Nx.R (0, Nx.dim 2 expected) ]
                    expected )
             in
             check_bits ~msg:(Printf.sprintf "2ch/row %d" row) alone taken )

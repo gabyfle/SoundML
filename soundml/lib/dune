@@ -21,4 +21,4 @@
  (foreign_stubs
   (language c)
   (names resample_stubs))
- (libraries nx nx.buffer))
+ (libraries nx rig))

@@ -286,8 +286,7 @@ module Kernel : sig
       history, a GEMM-executed stage a per-channel window carry and the one
       gather its calls reuse, and their {!step} additionally allocates bounded
       per-block transform or per-call product transients on top of the output —
-      gated by the allocation tests, and collapsing back to output-only when
-      the tensor library grows destination passing.
+      gated by the allocation tests.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1], or if
       [dtype] is neither float32 nor float64 — the two sample types the

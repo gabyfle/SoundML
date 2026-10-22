@@ -1,9 +1,9 @@
 (* Reader semantics: the handle contract around the laws of io_law.ml — EOF is
-   [Ok None] forever, the short final chunk is exact, [?out] is written and
-   viewed (never retained), [info] stays native while [format] describes the
-   post-option output, truncation surfaces at the failing chunk through every
-   reading face, and closed readers refuse typed misuse with
-   [Invalid_argument]. *)
+   [Ok None] forever, the short final chunk is exact, chunks are fresh and
+   caller-owned (never retained, never rewritten by later reads), [info] stays
+   native while [format] describes the post-option output, truncation surfaces
+   at the failing chunk through every reading face, and closed readers refuse
+   typed misuse with [Invalid_argument]. *)
 
 open Windtrap
 open Soundml_io
@@ -58,24 +58,37 @@ let protocol_tests =
               failf "EOF errored: %a" pp_error e
         done ;
         Reader.close r )
-  ; test "?out is written through and the full-chunk view is out itself"
+  ; test "a full chunk is fresh and keeps its samples across later reads"
       (fun () ->
         let r = ok ~msg:"open_" (Reader.open_ Nx.float32 (fixture_path ())) in
-        let out = Nx.zeros Nx.float32 [|2; 1024|] in
-        ( match Reader.read ~out r ~frames:1024 with
+        ( match Reader.read r ~frames:1024 with
         | Ok (Some c) ->
-            is_true ~msg:"the returned chunk is out" (c == out) ;
+            equal ~msg:"full chunk" (array int) [|2; 1024|] (Nx.shape c) ;
+            is_true ~msg:"the full chunk is C-contiguous" (Nx.is_c_contiguous c) ;
+            (* drain the rest: no later read may reach the retained chunk *)
+            let rec drain () =
+              match Reader.read r ~frames:1024 with
+              | Ok (Some _) ->
+                  drain ()
+              | Ok None ->
+                  ()
+              | Error e ->
+                  failf "drain: %a" pp_error e
+            in
+            drain () ;
             let reference =
               ok ~msg:"read" (read Nx.float32 (fixture_path ()))
             in
             let e =
-              Nx.to_array (Nx.shrink [|(0, 2); (0, 1024)|] reference.data)
+              Nx.to_array
+                (Nx.slice [Nx.R (0, 2); Nx.R (0, 1024)] reference.data)
             in
-            let a = Nx.to_array out in
+            let a = Nx.to_array c in
             Array.iteri
               (fun i ev ->
                 if Float.compare ev a.(i) <> 0 then
-                  failf "out sample %d is %.9g, the file holds %.9g" i a.(i) ev )
+                  failf "chunk sample %d is %.9g, the file holds %.9g" i a.(i)
+                    ev )
               e
         | _ ->
             fail "expected a chunk" ) ;
@@ -217,25 +230,6 @@ let precondition_tests =
             raises_match
               (function Invalid_argument _ -> true | _ -> false)
               (fun () -> Reader.read r ~frames:0) ) )
-  ; test "read refuses an out of the wrong shape" (fun () ->
-        let r = ok ~msg:"open_" (Reader.open_ Nx.float32 (fixture_path ())) in
-        Fun.protect
-          ~finally:(fun () -> Reader.close r)
-          (fun () ->
-            raises_match
-              (function Invalid_argument _ -> true | _ -> false)
-              (fun () ->
-                Reader.read ~out:(Nx.zeros Nx.float32 [|2; 100|]) r ~frames:64 ) ) )
-  ; test "read refuses a non-contiguous out" (fun () ->
-        let r = ok ~msg:"open_" (Reader.open_ Nx.float32 (fixture_path ())) in
-        Fun.protect
-          ~finally:(fun () -> Reader.close r)
-          (fun () ->
-            let base = Nx.zeros Nx.float32 [|64; 2|] in
-            let out = Nx.transpose base in
-            raises_match
-              (function Invalid_argument _ -> true | _ -> false)
-              (fun () -> Reader.read ~out r ~frames:64) ) )
   ; test "seek refuses a negative frame" (fun () ->
         let r = ok ~msg:"open_" (Reader.open_ Nx.float32 (fixture_path ())) in
         Fun.protect

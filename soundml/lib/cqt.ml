@@ -244,7 +244,7 @@ module Config = struct
         ~re:(Nx.create Nx.float64 [|m; n_fft|] re)
         ~im:(Nx.create Nx.float64 [|m; n_fft|] im)
     in
-    Nx.shrink [|(0, m); (0, (n_fft / 2) + 1)|] (Nx.fft ~axis:1 basis)
+    Nx.slice [Nx.R (0, m); Nx.R (0, (n_fft / 2) + 1)] (Nx.fft ~axis:1 basis)
 
   (* [octave_fft_size] is the transform length the octave's filters are padded
      to: the least power of two at or above the longest of them. *)
@@ -621,9 +621,8 @@ let resamples (c : Config.t) =
 
 let slice_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let shrink_last t stop = slice_last t 0 stop

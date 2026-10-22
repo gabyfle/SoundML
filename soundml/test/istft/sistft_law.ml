@@ -48,9 +48,8 @@ let last_dim t = Nx.dim (Nx.ndim t - 1) t
 
 let shrink_last t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 1 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
@@ -418,21 +417,42 @@ let contract_tests =
             Stft.Synthesis.step k (Nx.zeros Nx.complex128 [|0; 5; 3|]) ) )
   ; test "the emitted chunks own their samples" (fun () ->
         (* [step] borrows its frames: overwriting the caller's buffer after the
-           call must not move a sample that has already been emitted *)
-        let k = prepare8 () in
-        let z = frames8 6 in
-        let buffer = Nx.copy z in
-        let out =
-          match Stft.Synthesis.step k buffer with
+           call must not move a sample that has already been emitted, nor what
+           the kernel retains for the next call. The buffer is wrapped once and
+           every step is a fresh value over it, as a lent chunk of soundml-io
+           is *)
+        let emitted k z =
+          match Stft.Synthesis.step k z with
           | Some out ->
               out
           | None ->
               fail "step must emit"
         in
+        let z = frames8 6 in
+        let z' = Nx.mul_s z Complex.{re= -3.; im= 0.} in
+        let buffer =
+          Rig.Buffer.of_bigarray
+            (Bigarray.Array1.create Bigarray.complex64 Bigarray.c_layout
+               (Nx.numel z) )
+        in
+        let lend frames =
+          let values = Nx.to_array frames in
+          Rig.Buffer.write buffer Bigarray.complex64 (fun a ->
+              Array.iteri (fun i v -> a.{i} <- v) values ) ;
+          Nx.of_buffer Nx.complex128 (Nx.shape frames) buffer
+        in
+        let k = prepare8 () in
+        let out = emitted k (lend z) in
         let snapshot = bits out in
-        Nx.blit (Nx.mul_s z Complex.{re= -3.; im= 0.}) buffer ;
+        let next = emitted k (lend z') in
         equal ~msg:"the emitted chunk survives buffer reuse" bit_array snapshot
-          (bits out) ) ]
+          (bits out) ;
+        (* the same two steps on frames that are never lent *)
+        let r = prepare8 () in
+        ignore (emitted r z) ;
+        equal ~msg:"the retained frames survive buffer reuse" bit_array
+          (bits (emitted r z'))
+          (bits next) ) ]
 
 let suite =
   [ group "synthesis-kernel-law" law_tests

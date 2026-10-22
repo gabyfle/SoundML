@@ -9,7 +9,7 @@
     batch of clips is one call.
 
     Functions return fresh tensors unless documented {e view}. Nothing copies
-    defensively; nothing mutates its input unless the function takes [~out].
+    defensively; tensors are immutable, so nothing mutates its input.
 
     Sample rates are explicit [~sample_rate] arguments on the functions whose
     result depends on one; rate-agnostic functions do not take it.

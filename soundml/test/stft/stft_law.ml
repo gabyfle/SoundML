@@ -58,11 +58,7 @@ let chunks_of x sizes =
     | [] ->
         []
     | s :: rest ->
-        let chunk =
-          if s = 0 then Nx.zeros (Nx.dtype x) [|0|]
-          else Nx.shrink [|(off, off + s)|] x
-        in
-        chunk :: go (off + s) rest
+        Nx.slice [Nx.R (off, off + s)] x :: go (off + s) rest
   in
   go 0 sizes
 

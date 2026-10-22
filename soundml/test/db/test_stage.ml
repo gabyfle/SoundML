@@ -34,8 +34,7 @@ let partitions rng n =
   named
   @ List.init 5 (fun i -> (Printf.sprintf "random-%d" i, random_sizes rng n))
 
-let slice t off s =
-  if s = 0 then Nx.zeros (Nx.dtype t) [|0|] else Nx.shrink [|(off, off + s)|] t
+let slice t off s = Nx.slice [Nx.R (off, off + s)] t
 
 let slices t sizes =
   let rec go off = function

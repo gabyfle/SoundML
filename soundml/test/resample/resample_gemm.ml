@@ -189,10 +189,12 @@ let batch_case () =
         for j = 0 to 2 do
           let one =
             Resample.apply_gemm cfg
-              (Nx.shrink [|(i, i + 1); (j, j + 1); (0, 512)|] x)
+              (Nx.slice [Nx.R (i, i + 1); Nx.R (j, j + 1); Nx.R (0, 512)] x)
           in
           let bits t = Array.map Int64.bits_of_float (Nx.to_array t) in
-          let row = Nx.shrink [|(i, i + 1); (j, j + 1); (0, Nx.dim 2 y)|] y in
+          let row =
+            Nx.slice [Nx.R (i, i + 1); Nx.R (j, j + 1); Nx.R (0, Nx.dim 2 y)] y
+          in
           if bits (Nx.cast Nx.float64 row) <> bits (Nx.cast Nx.float64 one) then
             failf "channel (%d, %d) diverges from its standalone run" i j
         done

@@ -143,9 +143,8 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
 
 let shrink_rows t start stop =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 2 then (start, stop) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 2 then Nx.R (start, stop) else Nx.A))
     t
 
 (* [apply fn plan s] is the contrast of the magnitude spectrum [s], [[...; bins;

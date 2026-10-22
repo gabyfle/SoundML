@@ -11,7 +11,7 @@
  (name io_bench_corpus)
  (wrapped false)
  (modules io_corpus)
- (libraries soundml_io nx nx.buffer))
+ (libraries soundml_io nx))
 
 ; Not attached to runtest on purpose: run with `dune build @bench`
 ; (or `dune exec soundml-io/bench/bench_io.exe`).

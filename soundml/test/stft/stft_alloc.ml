@@ -13,9 +13,9 @@
    dtype-first complex [abs] and one square — each allocating a tensor record,
    shape metadata and a custom block on the OCaml heap (the bigarray payloads
    are malloc'd outside it) — plus closures, options and small slice copies.
-   Measured on OCaml 5.5: ~3.1k minor words/push and ~6 promoted words/push,
-   identical across windows; the budget is ~2x the minor figure, absorbing
-   runtime variation across hosts while still failing any O(history)
+   Measured on OCaml 5.5: ~860 minor words/push and ~4 promoted words/push,
+   identical across windows; the budget sits ~7x over the minor figure,
+   absorbing runtime variation across hosts while still failing any O(history)
    regression. *)
 
 open Windtrap

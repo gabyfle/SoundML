@@ -80,14 +80,24 @@ different compiler and fails.
 ### The Raven pin
 
 SoundML tracks a single, pinned revision of [Raven](https://github.com/raven-ml/raven)
-rather than a released version of `nx`. The pin currently points at an integration
-branch of the [gabyfle/raven](https://github.com/gabyfle/raven) fork that carries the
-FFT and framing work SoundML relies on ahead of upstream review. The revision is
-recorded in `dune-project`:
+rather than a released version of `nx`. The pin currently points at the
+`soundml-upstream-main` branch of the [gabyfle/raven](https://github.com/gabyfle/raven)
+fork, which is upstream Raven's `main` at
+[`29de40a`](https://github.com/raven-ml/raven/commit/29de40a3419d6fed006e06d9c74601ffe1e10408)
+plus a single commit that keeps hugin's marks test library out of release builds.
+Without that commit `dune build -p rig` fails from a git pin, and `nx` fails with it.
+The revision is recorded in `dune-project`:
 
 ```
-git+https://github.com/gabyfle/raven.git#cec410b0bbde98fe94c0b1ac3717211659d00910
+git+https://github.com/gabyfle/raven.git#13ea63112e1859a9697c889da41f063763b3704b
 ```
+
+The same pin provides `compress` and `rig`, the two Raven packages `nx` now depends
+on. `rig` is the device and buffer layer under nx tensors, and SoundML also uses it
+directly, to read a tensor's storage without copying it. `dune-project` also pins
+`windtrap` at the root: Raven pins it to a commit, thumper pins it to v0.2.0, and
+dune refuses two assignments of one package, so the root settles it on Raven's
+commit.
 
 Raven is pre-release and its tensor API still moves between revisions, so moving the
 pin is a deliberate change and not something a build picks up on its own. That

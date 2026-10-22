@@ -67,7 +67,8 @@ module Config : sig
   (** The type for validated, immutable chroma-filterbank configurations.
       Creation precomputes the [[n_chroma; bins]] matrix in double precision;
       configurations are cheap to share and compare, and the config-owned
-      matrix is never exposed — {!filterbank} copies. *)
+      matrix is immutable — {!filterbank} hands it out itself at float64 and a
+      cast of it otherwise. *)
   type t
 
   val create :
@@ -152,9 +153,9 @@ val filterbank : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
     octave and a half below bin one, far enough out that its bump vanishes.
 
     The matrix is precomputed once, in double precision, inside
-    {!Config.create}; every call returns a {e fresh} tensor cast from the
-    config-owned matrix, so mutating the result never affects [c] or any other
-    caller. *)
+    {!Config.create}; every call returns the config-owned matrix cast to
+    [dtype] (the matrix itself at float64). Tensors are immutable, so no
+    caller can affect [c] or any other caller through the result. *)
 
 val apply : ?norm:norm -> Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [apply c s] is the power spectrum [s] projected onto the pitch classes of

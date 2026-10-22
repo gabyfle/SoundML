@@ -20,10 +20,11 @@
 (*****************************************************************************)
 
 (* Decode and encode through libsndfile, on the single-copy architecture: the
-   destination is an [Nx_buffer] (off-heap, address-stable), the C stub writes
-   through its bigarray view with the runtime lock released, and the result
-   tensor is a zero-copy [Nx.of_buffer] view. The stubs own every sf_* call;
-   this side owns format mapping, error typing and buffer bookkeeping. *)
+   destination is a fresh bigarray (off-heap, address-stable), the C stub writes
+   it with the runtime lock released, and the result tensor takes it over
+   without a copy ([Nx.of_bigarray]). Encoding reads the tensor's own storage in
+   place ([Rig.Buffer.read]). The stubs own every sf_* call; this side owns
+   format mapping, error typing and buffer bookkeeping. *)
 
 type 'a audio = {data: (float, 'a) Nx.t; sample_rate: int}
 
@@ -388,12 +389,12 @@ let check_quality op quality sample_rate =
   | _ ->
       ()
 
-let kind_of_dtype : type a. (float, a) Nx.dtype -> (float, a) Nx_buffer.kind =
+let kind_of_dtype : type a. (float, a) Nx.dtype -> (float, a) Bigarray.kind =
   function
   | Nx.Float32 ->
-      Nx_buffer.float32
+      Bigarray.float32
   | Nx.Float64 ->
-      Nx_buffer.float64
+      Bigarray.float64
   | _ ->
       assert false (* guarded by [check_dtype] *)
 
@@ -404,6 +405,29 @@ let elt_size : type a. (float, a) Nx.dtype -> int = function
       8
   | _ ->
       assert false
+
+(* {1 Destinations}
+
+   A fresh destination is a plain bigarray the decoder fills and the result
+   tensor then takes over ([tensor_of]): nothing writes it again. A lent
+   destination is owned by one reading face and reused call after call: each
+   chunk is a fresh value over the once-wrapped [buf] ([lent_chunk]), and [ba]
+   is written again only once that chunk is no longer borrowed — the
+   chunk-ownership contract of {!Soundml.Pipeline}. *)
+
+let array1 kind n = Bigarray.Array1.create kind Bigarray.c_layout n
+
+let tensor_of a shape =
+  Nx.of_bigarray (Bigarray.reshape (Bigarray.genarray_of_array1 a) shape)
+
+type 'a lent =
+  {ba: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t; buf: Rig.Buffer.t}
+
+let lent kind n =
+  let ba = array1 kind n in
+  {ba; buf= Rig.Buffer.of_bigarray ba}
+
+let lent_chunk dt l shape = Nx.of_buffer dt shape l.buf
 
 (* {1 Probing} *)
 
@@ -471,9 +495,10 @@ let read_mode ~mono ~channels =
 let read_to_eof kind h ~mode ~channels ~channels_out =
   let block = 65536 in
   let rec grow acc total =
-    let piece = Nx_buffer.create kind (channels_out * block) in
-    let ba = Nx_buffer.to_bigarray1 piece in
-    let delivered, err, details = stub_readf h ba mode 0 block block channels in
+    let piece = array1 kind (channels_out * block) in
+    let delivered, err, details =
+      stub_readf h piece mode 0 block block channels
+    in
     if err = soundml_io_err_staging then Error details
     else
       let acc = if delivered > 0 then (piece, delivered) :: acc else acc in
@@ -484,16 +509,14 @@ let read_to_eof kind h ~mode ~channels ~channels_out =
   | Error details ->
       Error details
   | Ok (pieces, total) ->
-      let dst = Nx_buffer.create kind (channels_out * total) in
-      let dst_ba = Nx_buffer.to_bigarray1 dst in
+      let dst = array1 kind (channels_out * total) in
       let pos = ref 0 in
       List.iter
         (fun (piece, n) ->
-          let piece_ba = Nx_buffer.to_bigarray1 piece in
           for c = 0 to channels_out - 1 do
             Bigarray.Array1.blit
-              (Bigarray.Array1.sub piece_ba (c * block) n)
-              (Bigarray.Array1.sub dst_ba ((c * total) + !pos) n)
+              (Bigarray.Array1.sub piece (c * block) n)
+              (Bigarray.Array1.sub dst ((c * total) + !pos) n)
           done ;
           pos := !pos + n )
         pieces ;
@@ -510,14 +533,6 @@ let read_to_eof kind h ~mode ~channels ~channels_out =
    regardless of the plan. *)
 
 module Resample = Soundml.Resample
-
-(* The flat storage of a C-contiguous tensor, shared (never copied): the
-   bigarray view starts at the tensor's own offset, so fresh buffers and
-   contiguous views into larger storage take the same path. *)
-let planar_array1 t =
-  Bigarray.Array1.sub
-    (Nx_buffer.to_bigarray1 (Nx.data t))
-    (Nx.offset t) (Nx.numel t)
 
 (* The decode block feeding the resampler, in frames. Unlike the native staging
    (stub-local, L2-resident at typical channel counts: the deinterleave is a
@@ -536,27 +551,24 @@ let decode_block_frames ~channels ~elt ~advertised =
   else block
 
 (* A kernel output not yet delivered: [plen] frames, planar with channel stride
-   [plen], the leading [poff] already served. [pt] keeps the storage alive and
-   lets the unknown-length path concatenate tensors directly. *)
-type 'a piece =
-  { pt: (float, 'a) Nx.t
-  ; pba: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-  ; plen: int
-  ; mutable poff: int }
+   [plen], the leading [poff] already served. [pt] is C-contiguous, so serving
+   reads its own storage in place, and the unknown-length path concatenates the
+   tensors directly. *)
+type 'a piece = {pt: (float, 'a) Nx.t; plen: int; mutable poff: int}
 
 type 'a resampler =
   { config: Resample.Config.t
   ; kernel: 'a Resample.Kernel.t
-  ; stage_ba: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
-        (* [channels_out * decode_block] planar staging the decoder fills *)
-  ; stage_t: (float, 'a) Nx.t (* the [channels_out; decode_block] view *)
+  ; stage: 'a lent
+        (* [channels_out * decode_block] planar staging the decoder fills; the
+           kernel borrows each [channels_out; decode_block] chunk over it *)
   ; decode_block: int }
 
 type 'a state =
   { handle: handle
   ; path: string
   ; dt: (float, 'a) Nx.dtype
-  ; kind: (float, 'a) Nx_buffer.kind
+  ; kind: (float, 'a) Bigarray.kind
   ; native: Info.t
   ; mode: int
   ; channels: int (* the file's channels, what the decoder delivers *)
@@ -639,11 +651,9 @@ let make_state (type a) (dt : (float, a) Nx.dtype) path h ~frames ~channels
               Resample.Kernel.prepare config dt ~channels:channels_out
                 ~max_block:decode_block
             in
-            let stage = Nx_buffer.create kind (channels_out * decode_block) in
             { config
             ; kernel
-            ; stage_ba= Nx_buffer.to_bigarray1 stage
-            ; stage_t= Nx.of_buffer stage ~shape:[|channels_out; decode_block|]
+            ; stage= lent kind (channels_out * decode_block)
             ; decode_block }
           with
           | rs ->
@@ -695,7 +705,7 @@ let enqueue_piece st t =
   let t = if Nx.is_c_contiguous t then t else Nx.contiguous t in
   let plen = (Nx.shape t).(Nx.ndim t - 1) in
   if plen > 0 then begin
-    Queue.push {pt= t; pba= planar_array1 t; plen; poff= 0} st.carry ;
+    Queue.push {pt= t; plen; poff= 0} st.carry ;
     st.carry_len <- st.carry_len + plen
   end
 
@@ -708,11 +718,14 @@ let serve_from_carry st ~dst_ba ~dst_total ~dst_off ~n =
   while !written < n do
     let p = Queue.peek st.carry in
     let k = Stdlib.min (p.plen - p.poff) (n - !written) in
-    for c = 0 to st.channels_out - 1 do
-      Bigarray.Array1.blit
-        (Bigarray.Array1.sub p.pba ((c * p.plen) + p.poff) k)
-        (Bigarray.Array1.sub dst_ba ((c * dst_total) + dst_off + !written) k)
-    done ;
+    Rig.Buffer.read (Nx.to_buffer p.pt) st.kind (fun pba ->
+        for c = 0 to st.channels_out - 1 do
+          Bigarray.Array1.blit
+            (Bigarray.Array1.sub pba ((c * p.plen) + p.poff) k)
+            (Bigarray.Array1.sub dst_ba
+               ((c * dst_total) + dst_off + !written)
+               k )
+        done ) ;
     p.poff <- p.poff + k ;
     if p.poff = p.plen then ignore (Queue.pop st.carry) ;
     written := !written + k
@@ -751,7 +764,7 @@ let decode_step st rs =
   end
   else begin
     let got, err, details =
-      stub_readf st.handle rs.stage_ba st.mode 0 rs.decode_block want
+      stub_readf st.handle rs.stage.ba st.mode 0 rs.decode_block want
         st.channels
     in
     if err = soundml_io_err_staging then begin
@@ -762,8 +775,11 @@ let decode_step st rs =
     else begin
       if got > 0 then begin
         let chunk =
-          if got = rs.decode_block then rs.stage_t
-          else Nx.shrink [|(0, st.channels_out); (0, got)|] rs.stage_t
+          let full =
+            lent_chunk st.dt rs.stage [|st.channels_out; rs.decode_block|]
+          in
+          if got = rs.decode_block then full
+          else Nx.slice [Nx.R (0, st.channels_out); Nx.R (0, got)] full
         in
         ( match Resample.Kernel.step rs.kernel chunk with
         | Some piece ->
@@ -807,24 +823,23 @@ let resolve_eof st rs =
 (* {2 Reading one chunk} *)
 
 let shrink_frames t ~channels ~frames ~n =
-  if n = frames then t else Nx.shrink [|(0, channels); (0, n)|] t
+  if n = frames then t else Nx.slice [Nx.R (0, channels); Nx.R (0, n)] t
 
-let validate_out st ~frames out =
-  let shape = Nx.shape out in
-  if shape <> [|st.channels_out; frames|] then
-    invalid_arg
-      (Printf.sprintf
-         "Soundml_io.Reader.read: out is %s; this call needs [%d; %d]"
-         ( "["
-         ^ String.concat "; " (Array.to_list (Array.map string_of_int shape))
-         ^ "]" )
-         st.channels_out frames ) ;
-  if not (Nx.is_c_contiguous out) then
-    invalid_arg "Soundml_io.Reader.read: out is not C-contiguous"
+(* The destination of one [frames]-frame chunk: the reading face's [lent]
+   buffer, sized [channels_out * frames] by its owner, or a fresh one. [chunk
+   ()] is the [[channels_out; frames]] tensor over it, made once the decoder or
+   the carry has filled it. *)
+let chunk_destination (type a) (st : a state) ~frames (lent : a lent option) =
+  match lent with
+  | Some l ->
+      (l.ba, fun () -> lent_chunk st.dt l [|st.channels_out; frames|])
+  | None ->
+      let a = array1 st.kind (st.channels_out * frames) in
+      (a, fun () -> tensor_of a [|st.channels_out; frames|])
 
-(* The native chunk: decode straight into the destination — the caller's [out]
-   (zero copies on mono; one staged pass otherwise) or a fresh chunk buffer. *)
-let read_chunk_native (type a) (st : a state) ~frames out :
+(* The native chunk: decode straight into the destination — zero copies on mono;
+   one staged pass otherwise. *)
+let read_chunk_native (type a) (st : a state) ~frames lent :
     ((float, a) Nx.t option, error) result =
   let advertised = st.native.Info.frames in
   let want =
@@ -839,16 +854,9 @@ let read_chunk_native (type a) (st : a state) ~frames out :
     Ok None
   end
   else begin
-    let dst_ba, view =
-      match out with
-      | Some o ->
-          ( planar_array1 o
-          , fun n -> shrink_frames o ~channels:st.channels_out ~frames ~n )
-      | None ->
-          let buf = Nx_buffer.create st.kind (st.channels_out * frames) in
-          let t = Nx.of_buffer buf ~shape:[|st.channels_out; frames|] in
-          ( Nx_buffer.to_bigarray1 buf
-          , fun n -> shrink_frames t ~channels:st.channels_out ~frames ~n )
+    let dst_ba, chunk = chunk_destination st ~frames lent in
+    let view n =
+      shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n
     in
     let got, err, details =
       stub_readf st.handle dst_ba st.mode 0 frames want st.channels
@@ -882,7 +890,7 @@ let read_chunk_native (type a) (st : a state) ~frames out :
 
 (* The resampled chunk: decode blocks through the kernel until the carry covers
    the request or EOF, then serve exactly [min frames carry]. *)
-let read_chunk_resampled (type a) (st : a state) rs ~frames out :
+let read_chunk_resampled (type a) (st : a state) rs ~frames lent :
     ((float, a) Nx.t option, error) result =
   let rec fill () =
     if st.carry_len >= frames then Ok ()
@@ -898,21 +906,15 @@ let read_chunk_resampled (type a) (st : a state) rs ~frames out :
         st.finished <- true ;
         Ok None
       end
-      else
-        begin match out with
-        | Some o ->
-            serve_from_carry st ~dst_ba:(planar_array1 o) ~dst_total:frames
-              ~dst_off:0 ~n ;
-            Ok (Some (shrink_frames o ~channels:st.channels_out ~frames ~n))
-        | None ->
-            let buf = Nx_buffer.create st.kind (st.channels_out * n) in
-            serve_from_carry st
-              ~dst_ba:(Nx_buffer.to_bigarray1 buf)
-              ~dst_total:n ~dst_off:0 ~n ;
-            Ok (Some (Nx.of_buffer buf ~shape:[|st.channels_out; n|]))
-        end
+      else begin
+        (* a fresh destination is sized to what is served *)
+        let frames = if Option.is_some lent then frames else n in
+        let dst_ba, chunk = chunk_destination st ~frames lent in
+        serve_from_carry st ~dst_ba ~dst_total:frames ~dst_off:0 ~n ;
+        Ok (Some (shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n))
+      end
 
-let read_chunk st ?out ~frames () =
+let read_chunk st ?lent ~frames () =
   ensure_open st "Soundml_io.Reader.read" ;
   if frames < 1 then
     invalid_arg
@@ -920,14 +922,13 @@ let read_chunk st ?out ~frames () =
          "Soundml_io.Reader.read: cannot read %d frames (frames must be \
           positive)"
          frames ) ;
-  Option.iter (validate_out st ~frames) out ;
   if st.finished then Ok None
   else
     match st.resampler with
     | None ->
-        read_chunk_native st ~frames out
+        read_chunk_native st ~frames lent
     | Some rs ->
-        read_chunk_resampled st rs ~frames out
+        read_chunk_resampled st rs ~frames lent
 
 (* {2 Seeking} *)
 
@@ -1065,7 +1066,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
             | Ok (dst, total) ->
                 finish
                   (Ok
-                     { data= Nx.of_buffer dst ~shape:[|st.channels_out; total|]
+                     { data= tensor_of dst [|st.channels_out; total|]
                      ; sample_rate= st.target_rate } )
           else if
             not
@@ -1137,10 +1138,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                 (* the preallocated fused destination: kernel pieces land here
                    as they are emitted; the native-rate signal never exists as a
                    whole buffer *)
-                let dst =
-                  Nx_buffer.create st.kind (st.channels_out * total_out)
-                in
-                let dst_ba = Nx_buffer.to_bigarray1 dst in
+                let dst_ba = array1 st.kind (st.channels_out * total_out) in
                 let rec pump () =
                   if st.carry_len > 0 then begin
                     serve_from_carry st ~dst_ba ~dst_total:total_out
@@ -1169,9 +1167,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                     assert (st.out_served = total_out) ;
                     finish
                       (Ok
-                         { data=
-                             Nx.of_buffer dst
-                               ~shape:[|st.channels_out; total_out|]
+                         { data= tensor_of dst_ba [|st.channels_out; total_out|]
                          ; sample_rate= st.target_rate } )
               end
             end
@@ -1192,13 +1188,9 @@ let fold ?(block = 65536) ?sample_rate ?quality ?(mono = false) dt path ~init ~f
         ~finally:(fun () -> close_state st)
         (fun () ->
           (* the one lent chunk buffer, reused for every block *)
-          let out =
-            Nx.of_buffer
-              (Nx_buffer.create st.kind (st.channels_out * block))
-              ~shape:[|st.channels_out; block|]
-          in
+          let lent = lent st.kind (st.channels_out * block) in
           let rec loop acc =
-            match read_chunk st ~out ~frames:block () with
+            match read_chunk st ~lent ~frames:block () with
             | Ok None ->
                 Ok acc
             | Ok (Some chunk) ->
@@ -1223,7 +1215,7 @@ module Reader = struct
     Soundml.Pipeline.Format.audio st.dt ~sample_rate:st.target_rate
       ~channels:st.channels_out
 
-  let read ?out st ~frames = read_chunk st ?out ~frames ()
+  let read st ~frames = read_chunk st ~frames ()
 
   let seek st ~frame = seek_state st ~frame
 
@@ -1280,11 +1272,11 @@ let write ?format path (a : 'a audio) =
         | Error e ->
             Error (write_open_error path ~unsupported e)
         | Ok h -> (
-            let buf = Nx.to_buffer a.data in
-            let ba = Nx_buffer.to_bigarray1 buf in
             let mode = if channels = 1 then mode_direct else mode_planar in
             let written, _err, details =
-              stub_writef h ba mode 0 frames frames channels
+              Rig.Buffer.read (Nx.to_buffer a.data)
+                (kind_of_dtype (Nx.dtype a.data))
+                (fun ba -> stub_writef h ba mode 0 frames frames channels)
             in
             let close_code, close_details = stub_close h in
             if written < frames then

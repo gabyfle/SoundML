@@ -3,7 +3,7 @@
    Times, on the pinned nx and this machine: the real transforms ([Nx.rfft
    complex128] / [Nx.irfft dtype]) at every block length the planner can emit,
    the complex frequency-domain multiply ([Nx.mul] at complex128, the __muldc3
-   libcall path), and the spectrum-extension ops (shrink + flip + conj +
+   libcall path), and the spectrum-extension ops (slice + flip + conj +
    concatenate). Emits TSV: FFT (per length x direction x dtype x lines), MUL
    (per bin count), EXT (per length). Wall-clock min/median over n reps after
    warmup; run on a quiet host. The frozen constants derived from a run of this
@@ -78,7 +78,7 @@ let ext () =
       let bins = (len / 2) + 1 in
       let f () =
         (* the ÷F extension: mirror the interior bins with conjugation *)
-        let interior = Nx.shrink [|(0, 1); (1, bins - 1)|] x in
+        let interior = Nx.slice [Nx.R (0, 1); Nx.R (1, bins - 1)] x in
         Nx.concatenate ~axis:(-1) [x; Nx.conjugate (Nx.flip ~axes:[-1] interior)]
       in
       let tmin, tmed = time f in

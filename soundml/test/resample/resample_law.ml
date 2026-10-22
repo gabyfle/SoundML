@@ -81,9 +81,8 @@ let chunks_of x sizes =
       Nx.zeros (Nx.dtype x)
         (Array.append (Array.sub (Nx.shape x) 0 (n - 1)) [|0|])
     else
-      Nx.shrink
-        (Array.init n (fun i ->
-             if i = n - 1 then (off, off + s) else (0, Nx.dim i x) ) )
+      Nx.slice
+        (List.init n (fun i -> if i = n - 1 then Nx.R (off, off + s) else Nx.A))
         x
   in
   let rec go off = function
@@ -540,11 +539,13 @@ let tile_seam_tests =
         in
         let y = Resample.apply cfg x in
         for c = 0 to 1 do
-          let one = Resample.apply cfg (Nx.shrink [|(c, c + 1); (0, n)|] x) in
+          let one =
+            Resample.apply cfg (Nx.slice [Nx.R (c, c + 1); Nx.R (0, n)] x)
+          in
           check_bits
             ~msg:(Printf.sprintf "channel %d" c)
             one
-            (Nx.shrink [|(c, c + 1); (0, Nx.dim 1 y)|] y)
+            (Nx.slice [Nx.R (c, c + 1); Nx.R (0, Nx.dim 1 y)] y)
         done ) ]
 
 (* {2 The cost-model boundary}
@@ -598,8 +599,10 @@ let boundary_tests =
                   (Resample.Config.output_frames cfg ~n)
                   (Nx.dim (Nx.ndim expected - 1) expected) ;
                 (* compensated delay: an impulse at j lands at j * L / M *)
-                let imp = Nx.zeros Nx.float64 [|n|] in
-                Nx.set_item [1000] 1. imp ;
+                let imp =
+                  Nx.set [Nx.I 1000] (Nx.scalar Nx.float64 1.)
+                    (Nx.zeros Nx.float64 [|n|])
+                in
                 let y = Nx.to_array (Resample.apply cfg imp) in
                 let best = ref 0 in
                 Array.iteri

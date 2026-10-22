@@ -24,7 +24,7 @@ let stream (type a) c (dtype : (float, a) Nx.dtype) x chunk =
   let i = ref 0 in
   while !i < n do
     let len = min chunk (n - !i) in
-    ( match R.Kernel.step k (Nx.shrink [|(!i, !i + len)|] x) with
+    ( match R.Kernel.step k (Nx.slice [Nx.R (!i, !i + len)] x) with
     | Some o ->
         outs := o :: !outs
     | None ->

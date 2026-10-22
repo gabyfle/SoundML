@@ -42,9 +42,8 @@ let lifter_weights lifter n_mfcc =
 
 let shrink_mel_axis n_mfcc t =
   let nd = Nx.ndim t in
-  Nx.shrink
-    (Array.init nd (fun i ->
-         if i = nd - 2 then (0, n_mfcc) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 2 then Nx.R (0, n_mfcc) else Nx.A))
     t
 
 let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =

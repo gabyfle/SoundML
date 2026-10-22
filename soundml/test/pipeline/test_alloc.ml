@@ -76,11 +76,12 @@ let nx_chunks = Array.map (Nx.create Nx.float32 [|chunk_len|]) float_chunks
 
 let sum_array = Array.fold_left ( +. ) 0.
 
-(* Budgets, in words per push, with chunk_len = 256. Each budget is roughly 2x
-   the value measured on OCaml 5.5 (in parentheses); per-push allocation is
-   deterministic — the same code path allocates the same words every push — so
-   2x absorbs compiler/runtime variation across CI hosts while still catching
-   any O(history) regression, which grows without bound.
+(* Budgets, in words per push, with chunk_len = 256, over the value measured on
+   OCaml 5.5 (in parentheses): roughly 2x for the two array cases, roughly 8x
+   for the nx case. Per-push allocation is deterministic — the same code path
+   allocates the same words every push — so the headroom absorbs
+   compiler/runtime variation across CI hosts while still catching any
+   O(history) regression, which grows without bound.
 
    - gain>>decim4 (measured 2125): gain allocates one 256-float array (257
    words); decim4 builds a 64-element list of boxed floats (~64 x 6 words) and
@@ -88,10 +89,10 @@ let sum_array = Array.fold_left ( +. ) 0.
    leftovers. - lookahead>>block_sum (measured 1944): lookahead appends
    buffer+chunk (~262 words) and takes two subs; block_sum appends its leftover,
    takes one 4-float sub per window (64 x ~7 words) and allocates the 64-float
-   output. - nx gain>>lookahead (measured 1821): three Nx ops per push (mul_s,
-   concatenate, two shrink views), each allocating tensor records, shape
-   metadata and a custom block on the OCaml heap — the bigarray payloads are
-   malloc'd outside the heap. *)
+   output. - nx gain>>lookahead (measured 509): three Nx ops per push (mul_s,
+   concatenate, two slice views), each allocating tensor records, shape metadata
+   and a custom block on the OCaml heap — the bigarray payloads are malloc'd
+   outside the heap. *)
 
 let suite =
   [ group "alloc"
