@@ -189,3 +189,34 @@ val extremes :
     the mean of the [take] greatest, each [take] values added in ascending
     order from [0.] in double precision, NaN ordering after every number.
     Both are [[...; nb; n]] at float64, [nb] the number of bands. *)
+
+(** {1 Decibels} *)
+
+val decibels :
+     scale:float
+  -> offset:float
+  -> amin:float
+  -> magnitude:bool
+  -> range:float option
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t option
+(** [decibels ~scale ~offset ~amin ~magnitude ~range x] is, elementwise,
+    [log (max amin v) *. scale -. offset] with [v] the element ([abs] of it
+    when [magnitude]), the product and the difference each rounded in double
+    precision and the result rounded once into [x]'s dtype; [max] keeps a NaN.
+    When [range] is given, every value of a channel — the whole tensor up to
+    rank two, each index of the leading axes beyond — is then floored at the
+    channel's greatest value less [range], rounded into the dtype; a channel
+    holding a NaN becomes NaN throughout. [Some] at float32 and float64,
+    [None] otherwise. *)
+
+val decibels64 :
+     scale:float
+  -> offset:float
+  -> amin:float
+  -> magnitude:bool
+  -> range:float option
+  -> (float, 'a) Nx.t
+  -> (float, Nx.float64_elt) Nx.t option
+(** [decibels64] is {!decibels} at float64 over a float32 or float64 [x] —
+    the float64 decibels of [Nx.cast Nx.float64 x] — and [None] otherwise. *)

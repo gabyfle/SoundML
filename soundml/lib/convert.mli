@@ -36,6 +36,9 @@ val power_to_db :
     the caller asks for. For the streaming consequences of that reduction,
     see {!Db.clamped_stage}.
 
+    At float32 and float64 every value is computed in double precision and
+    rounded into the dtype once; narrower dtypes round each step.
+
     Raises [Invalid_argument] if [reference] or [amin] is not finite and
     positive, or if [top_db] is not finite and non-negative. *)
 

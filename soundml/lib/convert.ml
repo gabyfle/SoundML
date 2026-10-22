@@ -26,27 +26,33 @@ let decade = 10. /. Float.log 10.
    10 for powers and 20 for amplitudes, [reference] and [amin] live in the
    input's own domain. Powers are floored signed — a negative power sits at the
    floor — while amplitudes are magnitudes first; both orders are fixed by the
-   module's parity contract (see the interface). *)
+   module's parity contract (see the interface). Float32 and float64 run as one
+   fused pass ({!Loops.decibels}) in double precision; the narrower dtypes keep
+   the whole-tensor formulation, which rounds each step into the dtype. *)
 let to_db ~gain ~magnitude ~reference ~amin ~top_db s =
   if Nx.numel s = 0 then Nx.copy s
   else
-    let dtype = Nx.dtype s in
     let scale = gain /. 10. *. decade in
-    let s = if magnitude then Nx.abs s else s in
-    let floored = Nx.maximum s (Nx.scalar dtype amin) in
     let offset = scale *. Float.log (Float.max amin reference) in
-    let db = Nx.sub_s (Nx.mul_s (Nx.log floored) scale) offset in
-    match top_db with
-    | None ->
+    match Loops.decibels ~scale ~offset ~amin ~magnitude ~range:top_db s with
+    | Some db ->
         db
-    | Some range when Nx.ndim db <= 2 ->
-        let maximum = Nx.item [] (Nx.max db) in
-        Nx.maximum db (Nx.scalar dtype (maximum -. range))
-    | Some range ->
-        (* one threshold per channel, under the maximum over the last two
-           axes *)
-        let maximum = Nx.max ~axes:[-2; -1] ~keepdims:true db in
-        Nx.maximum db (Nx.sub_s maximum range)
+    | None -> (
+        let dtype = Nx.dtype s in
+        let s = if magnitude then Nx.abs s else s in
+        let floored = Nx.maximum s (Nx.scalar dtype amin) in
+        let db = Nx.sub_s (Nx.mul_s (Nx.log floored) scale) offset in
+        match top_db with
+        | None ->
+            db
+        | Some range when Nx.ndim db <= 2 ->
+            let maximum = Nx.item [] (Nx.max db) in
+            Nx.maximum db (Nx.scalar dtype (maximum -. range))
+        | Some range ->
+            (* one threshold per channel, under the maximum over the last two
+               axes *)
+            let maximum = Nx.max ~axes:[-2; -1] ~keepdims:true db in
+            Nx.maximum db (Nx.sub_s maximum range) )
 
 let power_to_db ?(reference = 1.) ?(amin = 1e-10) ?top_db s =
   check_reference "power_to_db" reference ;

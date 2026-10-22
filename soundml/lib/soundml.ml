@@ -23,29 +23,6 @@ let mel_spectrogram stft_config mel_config ?(power = 2.) x =
   check_fft_sizes "mel_spectrogram" stft_config mel_config ;
   Mel.apply mel_config (Stft.power_spectrum ~power stft_config x)
 
-(* Orthonormal type-II DCT row scales: the raw transform times [1 / sqrt (4 n)]
-   on row zero and [1 / sqrt (2 n)] elsewhere. *)
-let dct_ortho_scales n_mels n_mfcc =
-  Nx.create Nx.float64 [|n_mfcc; 1|]
-    (Array.init n_mfcc (fun k ->
-         if k = 0 then 1. /. Float.sqrt (4. *. Float.of_int n_mels)
-         else 1. /. Float.sqrt (2. *. Float.of_int n_mels) ) )
-
-(* Sinusoidal liftering weights: coefficient [k], from zero, scales by [1 +
-   (lifter / 2) * sin (pi * (k + 1) / lifter)]. *)
-let lifter_weights lifter n_mfcc =
-  Nx.create Nx.float64 [|n_mfcc; 1|]
-    (Array.init n_mfcc (fun k ->
-         1.
-         +. lifter /. 2.
-            *. Float.sin (Float.pi *. Float.of_int (k + 1) /. lifter) ) )
-
-let shrink_mel_axis n_mfcc t =
-  let nd = Nx.ndim t in
-  Nx.slice
-    (List.init nd (fun i -> if i = nd - 2 then Nx.R (0, n_mfcc) else Nx.A))
-    t
-
 let check_mfcc op ~n_mels ~n_mfcc lifter =
   if n_mfcc < 1 || n_mfcc > n_mels then
     invalid_arg
@@ -63,23 +40,58 @@ let check_mfcc op ~n_mels ~n_mfcc lifter =
              op l ) )
     lifter
 
-(* [cepstrum ~n_mels ~n_mfcc lifter db] is the double-precision log-mel [db]
-   through the raw type-II DCT along its mel axis, the first [n_mfcc] rows kept,
-   the orthonormal row scaling and the optional liftering. The DCT transforms
-   each frame's mel column on its own, so a frame's cepstrum does not depend on
-   how many frames share the call — which {!mfcc_stage} relies on, and its law
-   tests pin. *)
-let cepstrum ~n_mels ~n_mfcc lifter db =
-  let cepstrum =
-    Nx.mul
-      (shrink_mel_axis n_mfcc (Nx.dct ~type_:2 ~axis:(-2) db))
-      (dct_ortho_scales n_mels n_mfcc)
-  in
-  match lifter with
-  | Some l when l > 0. ->
-      Nx.mul cepstrum (lifter_weights l n_mfcc)
-  | Some _ | None ->
-      cepstrum
+(* [cepstral_matrix ~n_mels ~n_mfcc lifter] is the first [n_mfcc] rows of the
+   orthonormal type-II DCT over [n_mels] points, liftered, prepared for
+   {!Ordered.project}: row [k], column [j] is [2 cos (pi k (2j + 1) / (2
+   n_mels))] times the row's orthonormal scale ([1 / sqrt (4 n_mels)] on row
+   zero, [1 / sqrt (2 n_mels)] elsewhere) and, with a positive [lifter], its
+   sinusoidal lifter weight [1 + (lifter / 2) sin (pi (k + 1) / lifter)]. The
+   angle's numerator is reduced modulo a full turn, [4 n_mels], first. *)
+let cepstral_matrix ~n_mels ~n_mfcc lifter =
+  let turn = 4 * n_mels in
+  let w = Array.make (n_mfcc * n_mels) 0. in
+  for k = 0 to n_mfcc - 1 do
+    let scale =
+      if k = 0 then 1. /. Float.sqrt (4. *. Float.of_int n_mels)
+      else 1. /. Float.sqrt (2. *. Float.of_int n_mels)
+    in
+    let lift =
+      match lifter with
+      | Some l when l > 0. ->
+          1. +. (l /. 2. *. Float.sin (Float.pi *. Float.of_int (k + 1) /. l))
+      | Some _ | None ->
+          1.
+    in
+    for j = 0 to n_mels - 1 do
+      let a = k * ((2 * j) + 1) mod turn in
+      w.((k * n_mels) + j) <-
+        2.
+        *. Float.cos (Float.pi *. Float.of_int a /. Float.of_int (2 * n_mels))
+        *. scale *. lift
+    done
+  done ;
+  Ordered.matrix (Nx.create Nx.float64 [|n_mfcc; n_mels|] w)
+
+(* [log_mel ?range mel] is [Convert.power_to_db ?top_db:range] of the mel
+   spectrogram [mel] widened to float64 — reference [1.], floor [1e-10] — read
+   in place when [mel] is float32 or float64. *)
+let log_mel ?range mel =
+  match
+    Loops.decibels64
+      ~scale:(10. /. Float.log 10.)
+      ~offset:0. ~amin:1e-10 ~magnitude:false ~range mel
+  with
+  | Some db ->
+      db
+  | None ->
+      Convert.power_to_db ?top_db:range (Nx.cast Nx.float64 mel)
+
+(* [cepstrum matrix db] is the double-precision log-mel [db] through the
+   cepstral matrix along its mel axis. Each frame's coefficients are folded from
+   its own mel column alone, in a fixed order ({!Ordered.project}), so a frame's
+   cepstrum does not depend on how many frames share the call — which
+   {!mfcc_stage} relies on, and its law tests pin. *)
+let cepstrum matrix db = Ordered.project matrix db
 
 (* [empty_cepstrum dtype ~n_mfcc mel] is the broadcast-consistent result for a
    mel spectrogram with no frames or no signals: nothing to transform. *)
@@ -99,14 +111,15 @@ let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
     (* The interior runs in double: the log-mel spectrogram ([power_to_db] with
        the 80 dB dynamic-range clamp the parity contract fixes), the cepstrum,
        then one rounding at the boundary. *)
-    let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
-    Nx.cast dtype (cepstrum ~n_mels ~n_mfcc lifter db)
+    let db = log_mel ~range:80. mel in
+    Nx.cast dtype (cepstrum (cepstral_matrix ~n_mels ~n_mfcc lifter) db)
 
 (* The stage is [mfcc]'s interior on each mel chunk, without the clamp: the 80
    dB floor sits under the whole signal's maximum, which no chunk can see. *)
 let mfcc_stage mel_config ?(n_mfcc = 20) ?lifter () =
   let n_mels = Mel.Config.n_mels mel_config in
   check_mfcc "mfcc_stage" ~n_mels ~n_mfcc lifter ;
+  let matrix = cepstral_matrix ~n_mels ~n_mfcc lifter in
   Pipeline.stateless (fun mel ->
       let nd = Nx.ndim mel in
       if nd < 2 then
@@ -124,9 +137,7 @@ let mfcc_stage mel_config ?(n_mfcc = 20) ?lifter () =
              bands n_mels ) ;
       let dtype = Nx.dtype mel in
       if Nx.numel mel = 0 then empty_cepstrum dtype ~n_mfcc mel
-      else
-        let db = Convert.power_to_db (Nx.cast Nx.float64 mel) in
-        Nx.cast dtype (cepstrum ~n_mels ~n_mfcc lifter db) )
+      else Nx.cast dtype (cepstrum matrix (log_mel mel)) )
 
 let chroma_stft stft_config chroma_config ?(power = 2.) ?norm x =
   let stft_size = Stft.Config.fft_size stft_config in
