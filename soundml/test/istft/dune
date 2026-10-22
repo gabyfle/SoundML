@@ -9,6 +9,6 @@
   gl_goldens
   gl_law
   test_istft)
- (libraries nx soundml tutils windtrap yojson)
+ (libraries nx rig soundml tutils windtrap yojson)
  (deps
   (glob_files vectors/*.json)))

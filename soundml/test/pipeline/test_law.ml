@@ -193,26 +193,36 @@ let nx_tests =
               x )
           inputs )
   ; test "push borrows: no aliasing of the caller's buffer" (fun () ->
-        (* the caller pushes one block after another — the audio callback
-           pattern; tensors are immutable, so the next block is a fresh tensor,
-           and previously returned chunks must not change *)
+        (* the caller reuses one block buffer across pushes — the audio callback
+           pattern; previously returned chunks must not change. The buffer is
+           wrapped once and every push is a fresh value over it, as a lent chunk
+           of soundml-io is *)
         let s =
           Pipeline.Stream.prepare (Toys.nx_lookahead 4) ~source:(source ())
             ~max_chunk:6
         in
-        let buf = Nx.create Nx.float32 [|6|] [|1.; 2.; 3.; 4.; 5.; 6.|] in
+        let buf =
+          Rig.Buffer.of_bigarray
+            (Bigarray.Array1.create Bigarray.float32 Bigarray.c_layout 6)
+        in
+        let block first =
+          Rig.Buffer.write buf Bigarray.float32 (fun a ->
+              for i = 0 to 5 do
+                a.{i} <- float_of_int (first + i)
+              done ) ;
+          Nx.of_buffer Nx.float32 [|6|] buf
+        in
         let out1 =
-          match Pipeline.Stream.push s buf with
+          match Pipeline.Stream.push s (block 1) with
           | Some out ->
               out
           | None ->
               fail "first push must emit"
         in
         let snap = Nx.to_array out1 in
-        let next = Nx.create Nx.float32 [|6|] [|7.; 8.; 9.; 10.; 11.; 12.|] in
-        let rest = Option.to_list (Pipeline.Stream.push s next) in
+        let rest = Option.to_list (Pipeline.Stream.push s (block 7)) in
         let tail = Pipeline.Stream.flush s in
-        equal ~msg:"returned chunk survives the next push" farray snap
+        equal ~msg:"returned chunk survives buffer reuse" farray snap
           (Nx.to_array out1) ;
         equal ~msg:"stream equals the logical signal" farray
           (Array.init 12 (fun i -> float_of_int (i + 1)))
