@@ -461,52 +461,80 @@ let zcr32 (src : f32) (dst : f32) ~n ~fl ~hop ~count ~threshold o lo hi =
   let sbase = o * n and dbase = o * count in
   let len = Float.of_int fl in
   let below = -.threshold in
-  let first = lo * hop and last = ((hi - 1) * hop) + fl - 1 in
+  let first = lo * hop in
   let starts = Array.make (hi - lo) 0 in
-  let running = ref 0 in
-  let prev = ref (Array1.unsafe_get src (sbase + first) < below) in
+  (* [running] counts the sign changes between consecutive positions of
+     [\[first, q\]]; the frame boundaries are the only events, so the samples
+     between two of them run in one branch-free loop *)
+  let running = ref 0 and q = ref first in
+  let prev =
+    ref (Bool.to_int (Array1.unsafe_get src (sbase + first) < below))
+  in
   let s = ref lo and e = ref lo in
-  for q = first to last do
-    if q > first then begin
-      let neg = Array1.unsafe_get src (sbase + q) < below in
-      if neg <> !prev then incr running ;
-      prev := neg
-    end ;
-    while !s < hi && !s * hop = q do
+  while !e < hi do
+    while !s < hi && !s * hop = !q do
       starts.(!s - lo) <- !running ;
       incr s
     done ;
-    while !e < hi && (!e * hop) + fl - 1 = q do
+    while !e < hi && (!e * hop) + fl - 1 = !q do
       Array1.unsafe_set dst (dbase + !e)
         (Float.of_int (!running - starts.(!e - lo)) /. len) ;
       incr e
-    done
+    done ;
+    if !e < hi then begin
+      let stop =
+        Int.min (if !s < hi then !s * hop else max_int) ((!e * hop) + fl - 1)
+      in
+      let r = ref !running and pv = ref !prev in
+      for i = !q + 1 to stop do
+        let neg = Bool.to_int (Array1.unsafe_get src (sbase + i) < below) in
+        r := !r + (neg lxor !pv) ;
+        pv := neg
+      done ;
+      running := !r ;
+      prev := !pv ;
+      q := stop
+    end
   done
 
 let zcr64 (src : f64) (dst : f64) ~n ~fl ~hop ~count ~threshold o lo hi =
   let sbase = o * n and dbase = o * count in
   let len = Float.of_int fl in
   let below = -.threshold in
-  let first = lo * hop and last = ((hi - 1) * hop) + fl - 1 in
+  let first = lo * hop in
   let starts = Array.make (hi - lo) 0 in
-  let running = ref 0 in
-  let prev = ref (Array1.unsafe_get src (sbase + first) < below) in
+  (* [running] counts the sign changes between consecutive positions of
+     [\[first, q\]]; the frame boundaries are the only events, so the samples
+     between two of them run in one branch-free loop *)
+  let running = ref 0 and q = ref first in
+  let prev =
+    ref (Bool.to_int (Array1.unsafe_get src (sbase + first) < below))
+  in
   let s = ref lo and e = ref lo in
-  for q = first to last do
-    if q > first then begin
-      let neg = Array1.unsafe_get src (sbase + q) < below in
-      if neg <> !prev then incr running ;
-      prev := neg
-    end ;
-    while !s < hi && !s * hop = q do
+  while !e < hi do
+    while !s < hi && !s * hop = !q do
       starts.(!s - lo) <- !running ;
       incr s
     done ;
-    while !e < hi && (!e * hop) + fl - 1 = q do
+    while !e < hi && (!e * hop) + fl - 1 = !q do
       Array1.unsafe_set dst (dbase + !e)
         (Float.of_int (!running - starts.(!e - lo)) /. len) ;
       incr e
-    done
+    done ;
+    if !e < hi then begin
+      let stop =
+        Int.min (if !s < hi then !s * hop else max_int) ((!e * hop) + fl - 1)
+      in
+      let r = ref !running and pv = ref !prev in
+      for i = !q + 1 to stop do
+        let neg = Bool.to_int (Array1.unsafe_get src (sbase + i) < below) in
+        r := !r + (neg lxor !pv) ;
+        pv := neg
+      done ;
+      running := !r ;
+      prev := !pv ;
+      q := stop
+    end
   done
 
 type energy = Rms | Zcr of float
