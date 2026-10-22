@@ -141,16 +141,12 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
   let rec bands k = if k > n_bands then [] else band k :: bands (k + 1) in
   {fft_size; bins; n_bands; linear; clamped; bands= bands 0}
 
-let shrink_rows t start stop =
-  let nd = Nx.ndim t in
-  Nx.slice
-    (List.init nd (fun i -> if i = nd - 2 then Nx.R (start, stop) else Nx.A))
-    t
-
 (* [apply fn plan s] is the contrast of the magnitude spectrum [s], [[...; bins;
-   frames]] to [[...; n_bands + 1; frames]]. One sort, two row means per band,
-   batched over frames and leading axes; the interior runs in double and rounds
-   to the dtype of [s] once, at the boundary. *)
+   frames]] to [[...; n_bands + 1; frames]]. Per band and frame, the means of
+   the [take] least and greatest magnitudes, in the order a sort would list
+   them, come from one fused selection loop ({!Loops.extremes}) rather than a
+   sort of the band; the interior runs in double and rounds to the dtype of [s]
+   once, at the boundary. *)
 let apply fn (p : plan) s =
   let nd = Nx.ndim s in
   if nd < 2 then
@@ -177,23 +173,10 @@ let apply fn (p : plan) s =
     Nx.zeros dtype out
   end
   else
-    let s64 = Nx.cast Nx.float64 s in
-    let valleys, peaks =
-      List.split
-        (List.map
-           (fun b ->
-             let sorted =
-               fst
-                 (Nx.sort ~axis:(-2) (shrink_rows s64 b.lo (b.lo + b.sub_len)))
-             in
-             let mean_rows start stop =
-               Ordered.mean (shrink_rows sorted start stop)
-             in
-             (mean_rows 0 b.take, mean_rows (b.sub_len - b.take) b.sub_len) )
-           p.bands )
+    let bands =
+      Array.concat (List.map (fun b -> [|b.lo; b.sub_len; b.take|]) p.bands)
     in
-    let valley = Nx.concatenate ~axis:(-2) valleys
-    and peak = Nx.concatenate ~axis:(-2) peaks in
+    let valley, peak = Loops.extremes ~bands s in
     let out64 =
       if p.linear then Nx.sub peak valley
       else if p.clamped then

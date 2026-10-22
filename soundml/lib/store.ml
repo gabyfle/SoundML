@@ -39,6 +39,17 @@ let make32 shape fill = make Nx.float32 float32 4 shape fill
 
 let make64 shape fill = make Nx.float64 float64 8 shape fill
 
+let make_c128 shape fill = make Nx.complex128 float64 16 shape fill
+
+let make64_pair shape fill =
+  let n = numel shape in
+  let first = Rig.Buffer.create Rig.host (8 * n)
+  and second = Rig.Buffer.create Rig.host (8 * n) in
+  if n > 0 then
+    Rig.Buffer.write first float64 (fun a ->
+        Rig.Buffer.write second float64 (fun b -> fill a b) ) ;
+  (Nx.of_buffer Nx.float64 shape first, Nx.of_buffer Nx.float64 shape second)
+
 let empty32 = Array1.create float32 c_layout 0
 
 let empty64 = Array1.create float64 c_layout 0

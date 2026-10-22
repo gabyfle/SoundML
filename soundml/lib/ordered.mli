@@ -51,12 +51,6 @@ val mean : (float, Nx.float64_elt) Nx.t -> (float, Nx.float64_elt) Nx.t
 
     Raises [Invalid_argument] if [x] has rank below [2] or [k = 0]. *)
 
-val cumsum : (float, Nx.float64_elt) Nx.t -> (float, Nx.float64_elt) Nx.t
-(** [cumsum x] is the running sums of [x] along its second-to-last axis, in
-    [x]'s shape: entry [j] is the fold of {!sum} stopped after term [j].
-
-    Raises [Invalid_argument] if [x] has rank below [2]. *)
-
 (** {1 Projections} *)
 
 (** The type for [[m; k]] matrices prepared for {!project}: the weights, and

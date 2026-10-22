@@ -119,27 +119,6 @@ let mean x =
     invalid_arg "Ordered.mean: cannot average over an axis of length 0" ;
   Nx.div_s (sum x) (Float.of_int k)
 
-let cumsum_tile (src : f64) (dst : f64) ~k ~n o t0 t1 =
-  let plane = o * k * n in
-  if k > 0 then
-    for t = t0 to t1 - 1 do
-      Array1.unsafe_set dst (plane + t) (0. +. Array1.unsafe_get src (plane + t))
-    done ;
-  for j = 1 to k - 1 do
-    let row = plane + (j * n) in
-    let prev = row - n in
-    for t = t0 to t1 - 1 do
-      Array1.unsafe_set dst (row + t)
-        (Array1.unsafe_get dst (prev + t) +. Array1.unsafe_get src (row + t))
-    done
-  done
-
-let cumsum x =
-  let shape, outer, k, n = geometry "cumsum" x in
-  Store.make64 shape (fun out ->
-      Store.read64 x (fun src ->
-          units ~outer ~n ~cost:k (cumsum_tile src out ~k ~n) ) )
-
 (* {1 Projections} *)
 
 type matrix =

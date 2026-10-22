@@ -40,6 +40,18 @@ val make32 : int array -> (f32 -> unit) -> (float, Nx.float32_elt) Nx.t
 val make64 : int array -> (f64 -> unit) -> (float, Nx.float64_elt) Nx.t
 (** [make64] is {!make32} at float64. *)
 
+val make_c128 : int array -> (f64 -> unit) -> (Complex.t, Nx.complex64_elt) Nx.t
+(** [make_c128 shape fill] is the complex128 tensor of [shape] whose
+    components [fill] wrote: element [2i] of the array is the real part of
+    element [i] in C order, element [2i + 1] its imaginary part. *)
+
+val make64_pair :
+     int array
+  -> (f64 -> f64 -> unit)
+  -> (float, Nx.float64_elt) Nx.t * (float, Nx.float64_elt) Nx.t
+(** [make64_pair shape fill] is two float64 tensors of [shape] that one call
+    of [fill] wrote, in the order given. *)
+
 val read32 : (float, Nx.float32_elt) Nx.t -> (f32 -> 'r) -> 'r
 (** [read32 x f] is [f a] with [a] [x]'s elements in C order — [x]'s own
     storage when it holds them so, a copy otherwise — lent for the duration
