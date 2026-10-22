@@ -1407,3 +1407,82 @@ let decibels64 (type a) ~scale ~offset ~amin ~magnitude ~range
       decibels ~scale ~offset ~amin ~magnitude ~range x
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       None
+
+(* {1 Onset flux}
+
+   A parallel unit is one tile of [tile] output frames of one plane: the bin
+   rows are read one at a time, each frame's positive difference added to its
+   accumulator, so every frame takes its bins in ascending order from [0.] — the
+   association of {!Ordered.sum}. *)
+
+let flux32 (src : f32) (dst : f64) ~k ~n ~lag ~first ~count o t0 w acc =
+  Float.Array.fill acc 0 w 0. ;
+  for j = 0 to k - 1 do
+    let r = (((o * k) + j) * n) + first + t0 in
+    for t = 0 to w - 1 do
+      let d =
+        Array1.unsafe_get src (r + t) -. Array1.unsafe_get src (r + t - lag)
+      in
+      let v = if d < 0. then 0. else d in
+      Float.Array.unsafe_set acc t (Float.Array.unsafe_get acc t +. v)
+    done
+  done ;
+  let bins = Float.of_int k in
+  for t = 0 to w - 1 do
+    Array1.unsafe_set dst
+      ((o * count) + t0 + t)
+      (Float.Array.unsafe_get acc t /. bins)
+  done
+
+let flux64 (src : f64) (dst : f64) ~k ~n ~lag ~first ~count o t0 w acc =
+  Float.Array.fill acc 0 w 0. ;
+  for j = 0 to k - 1 do
+    let r = (((o * k) + j) * n) + first + t0 in
+    for t = 0 to w - 1 do
+      let d =
+        Array1.unsafe_get src (r + t) -. Array1.unsafe_get src (r + t - lag)
+      in
+      let v = if d < 0. then 0. else d in
+      Float.Array.unsafe_set acc t (Float.Array.unsafe_get acc t +. v)
+    done
+  done ;
+  let bins = Float.of_int k in
+  for t = 0 to w - 1 do
+    Array1.unsafe_set dst
+      ((o * count) + t0 + t)
+      (Float.Array.unsafe_get acc t /. bins)
+  done
+
+let flux (type a) ~lag ~first ~count (x : (float, a) Nx.t) :
+    (float, Nx.float64_elt) Nx.t option =
+  let shape = Nx.shape x in
+  let nd = Array.length shape in
+  let k = shape.(nd - 2) and n = shape.(nd - 1) in
+  let lead = Array.sub shape 0 (nd - 2) in
+  let outer = Array.fold_left ( * ) 1 lead in
+  let tiles = (count + tile - 1) / tile in
+  let grain = Stdlib.max 1 (32_768 / Stdlib.max 1 (k * tile)) in
+  let run kernel dst =
+    Par.ranges ~n:(outer * tiles) ~grain (fun lo hi ->
+        let acc = Float.Array.create tile in
+        for u = lo to hi - 1 do
+          let o = u / tiles and t0 = u mod tiles * tile in
+          kernel dst o t0 (Stdlib.min count (t0 + tile) - t0) acc
+        done )
+  in
+  let out = Array.append lead [|count|] in
+  match Nx.dtype x with
+  | Nx.Float32 ->
+      Some
+        (Store.make64 out (fun dst ->
+             Store.read32 x (fun src ->
+                 run (fun dst -> flux32 src dst ~k ~n ~lag ~first ~count) dst ) )
+        )
+  | Nx.Float64 ->
+      Some
+        (Store.make64 out (fun dst ->
+             Store.read64 x (fun src ->
+                 run (fun dst -> flux64 src dst ~k ~n ~lag ~first ~count) dst ) )
+        )
+  | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+      None

@@ -70,7 +70,8 @@ let state_reset s = s.carry <- None
 (* [flux dtype cur prev] is the mean over bins of [max 0 (cur - prev)], in
    double and in {!Ordered}'s fixed association, so a frame's flux is the same
    bits whatever the chunk it arrives in; rounded to [dtype] once at the
-   boundary. *)
+   boundary. Float32 and float64 chunks take {!Loops.flux}, the same values in
+   one pass. *)
 let flux dtype cur prev =
   let mean =
     Ordered.mean
@@ -112,9 +113,13 @@ let state_step fn s chunk =
       if count = 0 then Nx.zeros dtype (collapsed_shape chunk m)
       else
         let values =
-          flux dtype
-            (shrink_last ext (l - count) l)
-            (shrink_last ext (l - count - s.lag) (l - s.lag))
+          match Loops.flux ~lag:s.lag ~first:(l - count) ~count ext with
+          | Some mean ->
+              Nx.cast dtype mean
+          | None ->
+              flux dtype
+                (shrink_last ext (l - count) l)
+                (shrink_last ext (l - count - s.lag) (l - s.lag))
         in
         if count = m then values
         else
@@ -180,7 +185,17 @@ let onset_strength stft_config mel_config ?(lag = 1) x =
     (* The log-power mel: power_to_db with its defaults — reference 1, floor
        1e-10 and the 80 dB clamp under each channel's maximum — in double
        precision. *)
-    let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
+    let db =
+      match
+        Loops.decibels64
+          ~scale:(10. /. Float.log 10.)
+          ~offset:0. ~amin:1e-10 ~magnitude:false ~range:(Some 80.) mel
+      with
+      | Some db ->
+          db
+      | None ->
+          Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel)
+    in
     (* The flat flux is the kernel on one chunk. *)
     let z = state_step fn (state_create lag) db in
     (* Centered analysis reads [fft_size / 2] samples ahead of each grid

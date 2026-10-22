@@ -220,3 +220,19 @@ val decibels64 :
   -> (float, Nx.float64_elt) Nx.t option
 (** [decibels64] is {!decibels} at float64 over a float32 or float64 [x] —
     the float64 decibels of [Nx.cast Nx.float64 x] — and [None] otherwise. *)
+
+(** {1 Onset flux} *)
+
+val flux :
+     lag:int
+  -> first:int
+  -> count:int
+  -> (float, 'a) Nx.t
+  -> (float, Nx.float64_elt) Nx.t option
+(** [flux ~lag ~first ~count x] is the spectral flux of frames [\[first, first
+    + count)] of the spectrogram [x] ([[...; k; n]], [k >= 1], [first >= lag]
+    and [first + count <= n]): [[...; count]] at float64, frame [t] being the
+    mean over bins of [max 0 (x.(j, first + t) -. x.(j, first + t - lag))],
+    computed in double precision, the bins added in ascending order from [0.]
+    and the sum divided by [k]; [max] keeps a NaN. [Some] at float32 and
+    float64, [None] otherwise. *)
