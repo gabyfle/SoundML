@@ -30,7 +30,8 @@ module Config = struct
     ; fft_size: int
     ; weights: (float, Nx.float64_elt) Nx.t
           (* The [[n_mels; bins]] filter matrix, precomputed once in double;
-             config-owned — accessors copy, kernels read without copying. *) }
+             config-owned and immutable — accessors hand it out, cast to their
+             dtype, and kernels read it without copying. *) }
 
   (* [fft_frequencies sample_rate fft_size bins] is the center frequency of each
      bin in hertz, evaluated as one reciprocal and one multiply per bin — the

@@ -39,7 +39,8 @@ module Config : sig
   (** The type for validated, immutable mel-filterbank configurations.
       Creation precomputes the [[n_mels; bins]] weight matrix in double
       precision; configurations are cheap to share and compare, and the
-      config-owned matrix is never exposed — {!filterbank} copies. *)
+      config-owned matrix is immutable — {!filterbank} hands it out itself at
+      float64 and a cast of it otherwise. *)
   type t
 
   val create :

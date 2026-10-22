@@ -103,8 +103,8 @@ module Config = struct
     ; fft_size: int
     ; weights: (float, Nx.float64_elt) Nx.t
           (* The [[n_chroma; bins]] projection matrix, precomputed once in
-             double; config-owned — accessors copy, kernels read without
-             copying. *) }
+             double; config-owned and immutable — accessors hand it out, cast to
+             their dtype, and kernels read it without copying. *) }
 
   (* [pitch_positions] is the position of each FFT bin on the chroma scale:
      [n_chroma * log2 (f / (A440 / 16))] with [A440] shifted by [tuning] bins.
