@@ -247,8 +247,74 @@ let capability_tests =
           (Nx.to_array (concat_or (Nx.zeros Nx.float32 [|1; 0|]) outs)) ;
         ignore shared_offline ) ]
 
+(* {2 Float64 at production size}
+
+   The cases above run at toy sizes, where Nx takes one path for every sum. Past
+   a few hundred thousand terms it re-associates its sums by shape and hands
+   large products to Accelerate, so a reduction left to Nx agreed with its
+   offline form only up to rounding there. These cases run seconds of noise
+   through a production geometry at float64 and demand the same bits. *)
+
+let production_rate = 22050
+
+let production_signal () =
+  let rng = Random.State.make [|0x64f|] in
+  let n = 2 * production_rate in
+  Nx.create Nx.float64 [|n|]
+    (Array.init n (fun _ -> Random.State.float rng 2. -. 1.))
+
+let bits t = Array.map Int64.bits_of_float (Nx.to_array t)
+
+let production_case name mk =
+  test name (fun () ->
+      let x = production_signal () in
+      let n = Nx.dim 0 x in
+      let source =
+        Pipeline.Format.audio Nx.float64 ~sample_rate:production_rate
+          ~channels:1
+      in
+      let expected = bits (Pipeline.run ~source (mk ()) x) in
+      let rng = Random.State.make [|0x650|] in
+      let rec coarse n =
+        if n = 0 then []
+        else
+          let s = 1 + Random.State.int rng (min n 3000) in
+          s :: coarse (n - s)
+      in
+      List.iter
+        (fun (pname, sizes) ->
+          let max_chunk = List.fold_left max 1 sizes in
+          let outs =
+            stream_outputs (mk ()) ~source ~max_chunk (chunks_of x sizes)
+          in
+          equal
+            ~msg:(Printf.sprintf "%s/%s" name pname)
+            (array int64) expected
+            (bits (Nx.concatenate ~axis:(-1) outs)) )
+        [ ("512", List.init ((n + 511) / 512) (fun i -> min 512 (n - (i * 512))))
+        ; ("random", coarse n) ] )
+
+let production_stft () = Stft.Config.create ~hop:512 ~fft_size:2048 ()
+
+let production_tests =
+  [ production_case "rms" (fun () -> rms_stage ())
+  ; production_case "zero-crossing rate" (fun () ->
+        zero_crossing_rate_stage () )
+  ; test "rms_of_spectrogram: a frame alone as among others" (fun () ->
+        let stft = production_stft () in
+        let s = Stft.power_spectrum ~power:1. stft (production_signal ()) in
+        let frames = Nx.dim 1 s in
+        let one t =
+          rms_of_spectrogram ~frame_length:2048
+            (Nx.slice [Nx.A; Nx.R (t, t + 1)] s)
+        in
+        equal ~msg:"whole = frame by frame" (array int64)
+          (bits (rms_of_spectrogram ~frame_length:2048 s))
+          (bits (Nx.concatenate ~axis:1 (List.init frames one))) ) ]
+
 let suite =
   [ group "law" law_tests
+  ; group "production" production_tests
   ; group "flat" flat_tests
   ; group "static" static_tests
   ; group "capability" capability_tests ]

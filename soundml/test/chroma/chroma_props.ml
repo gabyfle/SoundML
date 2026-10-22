@@ -330,6 +330,34 @@ let flat_tests =
           (Nx.dtype (chroma_stft stft chroma x) = Nx.float32) ;
         is_true ~msg:"cqt dtype" (Nx.dtype (chroma_cqt c x) = Nx.float32) ) ]
 
+(* {2 Batch invariance}
+
+   A frame must project to the same bits alone or among others: Nx sums by shape
+   and hands large products to Accelerate, so a projection left to it rounded
+   differently once the batch grew past a few hundred thousand terms. These
+   cases project a production-size batch whole and frame by frame. *)
+
+let bits t = Array.map Int64.bits_of_float (Nx.to_array t)
+
+let frame_by_frame f s =
+  let frames = Nx.dim 1 s in
+  Nx.concatenate ~axis:1
+    (List.init frames (fun t -> f (Nx.slice [Nx.A; Nx.R (t, t + 1)] s)))
+
+let batch_tests =
+  [ test "apply: a frame projects alone as among others" (fun () ->
+        let c = config ~fft_size:2048 () in
+        let s = spectrum 1025 64 in
+        equal ~msg:"whole = frame by frame" (array int64)
+          (bits (Chroma.apply c s))
+          (bits (frame_by_frame (Chroma.apply c) s)) )
+  ; test "of_cqt: a frame projects alone as among others" (fun () ->
+        let c = cqt_config ~n_bins:252 ~bins_per_octave:36 () in
+        let s = spectrum 252 512 in
+        equal ~msg:"whole = frame by frame" (array int64)
+          (bits (Chroma.of_cqt c s))
+          (bits (frame_by_frame (Chroma.of_cqt c) s)) ) ]
+
 let suite =
   [ group "validation" validation_tests
   ; group "accessors" accessor_tests
@@ -337,4 +365,5 @@ let suite =
   ; group "normalisation" normalisation_tests
   ; group "projection" projection_tests
   ; group "shapes" shape_tests
-  ; group "flat" flat_tests ]
+  ; group "flat" flat_tests
+  ; group "batch" batch_tests ]

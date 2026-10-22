@@ -17,8 +17,14 @@
   energy
   contrast
   onset
-  hpss)
+  hpss
+  ordered)
  (foreign_stubs
   (language c)
   (names resample_stubs))
+ (foreign_stubs
+  (language c)
+  (names ordered_stubs)
+  (flags
+   (:standard -O3 -ffp-contract=off)))
  (libraries nx rig))

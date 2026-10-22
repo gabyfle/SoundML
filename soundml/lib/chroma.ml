@@ -59,13 +59,11 @@ let frame_lengths norm x =
   | `Inf ->
       Nx.max ~axes:[-2] ~keepdims:true magnitude
   | `P p when Float.equal p 1. ->
-      Nx.sum ~axes:[-2] ~keepdims:true magnitude
+      Ordered.sum magnitude
   | `P p when Float.equal p 2. ->
-      Nx.sqrt (Nx.sum ~axes:[-2] ~keepdims:true (Nx.square magnitude))
+      Nx.sqrt (Ordered.sum (Nx.square magnitude))
   | `P p ->
-      Nx.pow_s
-        (Nx.sum ~axes:[-2] ~keepdims:true (Nx.pow_s magnitude p))
-        (1. /. p)
+      Nx.pow_s (Ordered.sum (Nx.pow_s magnitude p)) (1. /. p)
 
 let normalise ~norm ~tiny x =
   match norm with
@@ -104,7 +102,10 @@ module Config = struct
     ; weights: (float, Nx.float64_elt) Nx.t
           (* The [[n_chroma; bins]] projection matrix, precomputed once in
              double; config-owned and immutable — accessors hand it out, cast to
-             their dtype, and kernels read it without copying. *) }
+             their dtype. *)
+    ; projection: Ordered.matrix
+          (* [weights] prepared for the fixed-order projection {!apply} runs. *)
+    }
 
   (* [pitch_positions] is the position of each FFT bin on the chroma scale:
      [n_chroma * log2 (f / (A440 / 16))] with [A440] shifted by [tuning] bins.
@@ -230,7 +231,16 @@ module Config = struct
       weights_of ~n_chroma ~tuning ~ctroct ~octwidth ~base_c ~sample_rate
         ~fft_size
     in
-    {n_chroma; tuning; ctroct; octwidth; base_c; sample_rate; fft_size; weights}
+    let projection = Ordered.matrix weights in
+    { n_chroma
+    ; tuning
+    ; ctroct
+    ; octwidth
+    ; base_c
+    ; sample_rate
+    ; fft_size
+    ; weights
+    ; projection }
 
   let n_chroma t = t.n_chroma
 
@@ -281,14 +291,15 @@ end
    returns it itself at float64 — cannot let a caller corrupt the config. *)
 let filterbank dtype (c : Config.t) = Nx.cast dtype c.Config.weights
 
-(* [project op ~mismatch weights bands s] is the batched product of a [[bands;
-   bins]] projection against a [[...; bins; frames]] spectrum, in double
-   precision. It is [Empty shape] when some axis of [s] has size zero: the
-   product has nothing to reduce over, and [shape] is the broadcast-consistent
-   result. *)
+(* [project op ~mismatch weights s] is the product of a [[bands; bins]]
+   projection against a [[...; bins; frames]] spectrum, in double precision and
+   in the fixed association of {!Ordered.project}, so a frame projects to the
+   same bits alone or among others. It is [Empty shape] when some axis of [s]
+   has size zero: the product has nothing to reduce over, and [shape] is the
+   broadcast-consistent result. *)
 type product = Empty of int array | Product of (float, Nx.float64_elt) Nx.t
 
-let project op ~mismatch weights bands s =
+let project op ~mismatch weights s =
   let nd = Nx.ndim s in
   if nd < 2 then
     invalid_arg
@@ -297,14 +308,14 @@ let project op ~mismatch weights bands s =
           bins; frames])"
          op nd ) ;
   let shape = Nx.shape s in
-  let bins = Nx.dim 1 weights in
+  let bins = Ordered.columns weights in
   if shape.(nd - 2) <> bins then invalid_arg (mismatch shape.(nd - 2) bins) ;
   if Array.exists (fun d -> d = 0) shape then begin
     let out = Array.copy shape in
-    out.(nd - 2) <- bands ;
+    out.(nd - 2) <- Ordered.rows weights ;
     Empty out
   end
-  else Product (Nx.matmul weights (Nx.cast Nx.float64 s))
+  else Product (Ordered.project weights (Nx.cast Nx.float64 s))
 
 let apply ?(norm = `Inf) (c : Config.t) s =
   check_norm "apply" norm ;
@@ -315,7 +326,7 @@ let apply ?(norm = `Inf) (c : Config.t) s =
        FFT of size %d (%d bins)"
       got c.Config.fft_size bins
   in
-  match project "apply" ~mismatch c.Config.weights c.Config.n_chroma s with
+  match project "apply" ~mismatch c.Config.projection s with
   | Empty shape ->
       Nx.zeros dtype shape
   | Product raw ->
@@ -371,14 +382,14 @@ let cqt_projection dtype ?n_chroma c =
 let of_cqt ?(n_chroma = 12) ?(norm = `Inf) c s =
   check_norm "of_cqt" norm ;
   let dtype = Nx.dtype s in
-  let weights = cq_matrix "of_cqt" ~n_chroma c in
+  let weights = Ordered.matrix (cq_matrix "of_cqt" ~n_chroma c) in
   let mismatch got bins =
     Printf.sprintf
       "of_cqt: cannot project %d constant-Q bins through a configuration of %d \
        bins"
       got bins
   in
-  match project "of_cqt" ~mismatch weights n_chroma s with
+  match project "of_cqt" ~mismatch weights s with
   | Empty shape ->
       Nx.zeros dtype shape
   | Product raw ->

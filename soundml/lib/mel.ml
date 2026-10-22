@@ -31,7 +31,10 @@ module Config = struct
     ; weights: (float, Nx.float64_elt) Nx.t
           (* The [[n_mels; bins]] filter matrix, precomputed once in double;
              config-owned and immutable — accessors hand it out, cast to their
-             dtype, and kernels read it without copying. *) }
+             dtype. *)
+    ; projection: Ordered.matrix
+          (* [weights] prepared for the fixed-order projection {!apply} runs,
+             each filter reduced to its triangle's support. *) }
 
   (* [fft_frequencies sample_rate fft_size bins] is the center frequency of each
      bin in hertz, evaluated as one reciprocal and one multiply per bin — the
@@ -162,7 +165,16 @@ module Config = struct
     let weights =
       weights_of ~f_min ~f_max ~scale ~norm ~n_mels ~sample_rate ~fft_size
     in
-    {f_min; f_max; scale; norm; n_mels; sample_rate; fft_size; weights}
+    let projection = Ordered.matrix weights in
+    { f_min
+    ; f_max
+    ; scale
+    ; norm
+    ; n_mels
+    ; sample_rate
+    ; fft_size
+    ; weights
+    ; projection }
 
   let n_mels t = t.n_mels
 
@@ -219,16 +231,17 @@ let apply (c : Config.t) s =
          c.Config.fft_size bins ) ;
   let dtype = Nx.dtype s in
   if Array.exists (fun d -> d = 0) shape then begin
-    (* No frames, or no signals at all: the matmul has nothing to reduce over,
-       so produce the broadcast-consistent empty result directly. *)
+    (* No frames, or no signals at all: the projection has nothing to reduce
+       over, so produce the broadcast-consistent empty result directly. *)
     let out = Array.copy shape in
     out.(nd - 2) <- c.Config.n_mels ;
     Nx.zeros dtype out
   end
   else
-    (* One batched matmul against the config-owned double-precision matrix; the
-       cast rounds once, at the boundary, and the result aliases neither the
-       input nor the config. *)
-    Nx.cast dtype (Nx.matmul c.Config.weights (Nx.cast Nx.float64 s))
+    (* The projection runs in double precision in a fixed association — each
+       band adds its bins in ascending order — so a frame projects to the same
+       bits alone or among others, whatever the chunking; the cast rounds once,
+       at the boundary. *)
+    Nx.cast dtype (Ordered.project c.Config.projection (Nx.cast Nx.float64 s))
 
 let stage c = Pipeline.stateless (apply c)

@@ -21,9 +21,12 @@
 
 (* Every feature is one batched pass over the whole spectrogram tensor:
    reductions run along the bin axis (axis -2) with [keepdims], so the result is
-   [[...; 1; frames]] and leading axes broadcast untouched. The interior is
-   double precision, in the operation order the module's parity contract fixes
-   (see the interface); the one cast to the input dtype sits at the boundary. *)
+   [[...; 1; frames]] and leading axes broadcast untouched. The reductions go
+   through {!Ordered}, whose fixed association makes a frame's value the same
+   bits alone or among others, so the stages agree with the offline functions on
+   every chunking. The interior is double precision, in the operation order the
+   module's parity contract fixes (see the interface); the one cast to the input
+   dtype sits at the boundary. *)
 
 let bins_of s = Nx.dim (Nx.ndim s - 2) s
 
@@ -148,7 +151,7 @@ let empty_feature s =
    falls below the smallest positive normal double divide by [1] instead (the
    underflow guard), so an all-zero frame stays all-zero. *)
 let normalised s64 =
-  let length = Nx.sum ~axes:[-2] ~keepdims:true s64 in
+  let length = Ordered.sum s64 in
   let safe =
     Nx.where
       (Nx.less length (Nx.scalar Nx.float64 Float.min_float))
@@ -159,8 +162,7 @@ let normalised s64 =
 (* [centroid_core fq s64] is the double-precision centroid, in the operation
    order the parity contract fixes: normalise, weight by the bin frequencies,
    reduce. *)
-let centroid_core fq s64 =
-  Nx.sum ~axes:[-2] ~keepdims:true (Nx.mul (col fq) (normalised s64))
+let centroid_core fq s64 = Ordered.sum (Nx.mul (col fq) (normalised s64))
 
 let centroid ?freqs ~sample_rate s =
   let op = "spectral_centroid" in
@@ -207,8 +209,7 @@ let bandwidth ?(p = 2.) ?freqs ?centroid ~sample_rate s =
     in
     let deviation = Nx.abs (Nx.sub c64 (col fq)) in
     let weighted = Nx.mul (normalised s64) (Nx.pow_s deviation p) in
-    Nx.cast (Nx.dtype s)
-      (Nx.pow_s (Nx.sum ~axes:[-2] ~keepdims:true weighted) (1. /. p))
+    Nx.cast (Nx.dtype s) (Nx.pow_s (Ordered.sum weighted) (1. /. p))
 
 let rolloff ?(roll_percent = 0.85) ?freqs ~sample_rate s =
   let op = "spectral_rolloff" in
@@ -220,7 +221,7 @@ let rolloff ?(roll_percent = 0.85) ?freqs ~sample_rate s =
   else
     let s64 = Nx.cast Nx.float64 s in
     let nd = Nx.ndim s64 in
-    let cumulative = Nx.cumsum ~axis:(nd - 2) s64 in
+    let cumulative = Ordered.cumsum s64 in
     let bins = bins_of s in
     let total =
       Nx.slice
@@ -243,10 +244,8 @@ let flatness ?(amin = 1e-10) ?(power = 2.) s =
   if is_empty s then empty_feature s
   else
     let floored = Nx.maximum_s (Nx.pow_s (Nx.cast Nx.float64 s) power) amin in
-    let geometric =
-      Nx.exp (Nx.mean ~axes:[-2] ~keepdims:true (Nx.log floored))
-    in
-    let arithmetic = Nx.mean ~axes:[-2] ~keepdims:true floored in
+    let geometric = Nx.exp (Ordered.mean (Nx.log floored)) in
+    let arithmetic = Ordered.mean floored in
     Nx.cast (Nx.dtype s) (Nx.div geometric arithmetic)
 
 (* {1 Pipeline stages}
