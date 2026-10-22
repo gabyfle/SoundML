@@ -83,10 +83,6 @@ let round_half_even =
     else if x >= 0. then x +. magic -. magic
     else x -. magic +. magic
 
-(* [principal x] is [x] reduced to the interval of width [2 pi] centred at zero,
-   ties to even. *)
-let principal x = x -. (two_pi *. round_half_even (x /. two_pi))
-
 (* [advance c] is the phase [2 pi k H / N] a bin centre advances over one hop,
    one entry per bin. *)
 let advance c =
@@ -152,12 +148,6 @@ type doubles =
 let reading (t : (float, Nx.float64_elt) Nx.t) (f : doubles -> 'a) : 'a =
   Rig.Buffer.read (Nx.to_buffer t) Bigarray.float64 f
 
-(* [doubles n] is a fresh zeroed array of [n] elements, written by the traversal
-   and then handed over to the tensor it becomes. *)
-let doubles n : doubles =
-  let a = Bigarray.Array1.create Bigarray.float64 Bigarray.c_layout n in
-  Bigarray.Array1.fill a 0. ; a
-
 (* [peaks_of m base bins into] fills [into] with the bins whose magnitude
    strictly exceeds every one of the four neighbours it has, and is their
    count. *)
@@ -165,12 +155,11 @@ let peaks_of (m : doubles) base bins into =
   let count = ref 0 in
   for k = 0 to bins - 1 do
     let v = Bigarray.Array1.unsafe_get m (base + k) in
-    let above j = v > Bigarray.Array1.unsafe_get m (base + j) in
     if
-      (k < 2 || above (k - 2))
-      && (k < 1 || above (k - 1))
-      && (k + 1 >= bins || above (k + 1))
-      && (k + 2 >= bins || above (k + 2))
+      (k < 2 || v > Bigarray.Array1.unsafe_get m (base + k - 2))
+      && (k < 1 || v > Bigarray.Array1.unsafe_get m (base + k - 1))
+      && (k + 1 >= bins || v > Bigarray.Array1.unsafe_get m (base + k + 1))
+      && (k + 2 >= bins || v > Bigarray.Array1.unsafe_get m (base + k + 2))
     then (
       Array.unsafe_set into !count k ;
       incr count )
@@ -252,15 +241,24 @@ let propagate ~locked ~bins ~frames ~rate ~count ~omega ~(mag : doubles) ~mb
       if i0 < last then begin
         let a1 = a0 + bins in
         for k = 0 to bins - 1 do
-          let deviation =
-            principal
-              ( Bigarray.Array1.unsafe_get ang (a1 + k)
-              -. Bigarray.Array1.unsafe_get ang (a0 + k)
-              -. Array.unsafe_get omega k )
+          let om = Array.unsafe_get omega k in
+          let x =
+            Bigarray.Array1.unsafe_get ang (a1 + k)
+            -. Bigarray.Array1.unsafe_get ang (a0 + k)
+            -. om
           in
+          (* the principal value [x - 2 pi round_half_even (x / 2 pi)], written
+             out so that no float is boxed *)
+          let q = x /. two_pi in
+          let r =
+            if Float.abs q >= 0x1p52 then q
+            else if q >= 0. then q +. 0x1p52 -. 0x1p52
+            else q -. 0x1p52 +. 0x1p52
+          in
+          let t = two_pi *. r in
+          let deviation = x -. t in
           Bigarray.Array1.unsafe_set phi (pn + k)
-            ( Bigarray.Array1.unsafe_get phi (po + k)
-            +. (Array.unsafe_get omega k +. deviation) )
+            (Bigarray.Array1.unsafe_get phi (po + k) +. (om +. deviation))
         done
       end
       else
@@ -407,29 +405,49 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
     vocode_independent c ~rate ~signals ~frames ~count ~out z
   else begin
     let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
-    let magnitudes = Nx.magnitude Nx.float64 framed in
-    let arguments = Nx.angle Nx.float64 framed in
     let span = frames * bins in
     let stride = count * bins in
-    let amp = doubles (signals * stride) in
-    let phi = doubles (signals * stride) in
-    let omega = advance c in
-    reading magnitudes (fun mag ->
-        reading arguments (fun ang ->
-            for s = 0 to signals - 1 do
-              propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
-                ~mb:(s * span) ~ang ~ab:(s * span) ~amp ~qb:(s * stride) ~phi
-                ~pb:(s * stride)
-            done ) ) ;
-    let tensor a =
-      Nx.of_bigarray (Bigarray.reshape (Bigarray.genarray_of_array1 a) out)
+    (* the magnitudes and arguments, [hypot] and [atan2] of every component pair
+       as [Nx.magnitude] and [Nx.angle] take them, in one parallel pass *)
+    let magnitudes, arguments =
+      Store.make64_pair (Nx.shape framed) (fun mag ang ->
+          Store.read_parts64 framed (fun src ->
+              Par.ranges ~n:(signals * span) ~grain:8192 (fun lo hi ->
+                  for i = lo to hi - 1 do
+                    let re = Bigarray.Array1.unsafe_get src (2 * i)
+                    and im = Bigarray.Array1.unsafe_get src ((2 * i) + 1) in
+                    Bigarray.Array1.unsafe_set mag i (Float.hypot re im) ;
+                    Bigarray.Array1.unsafe_set ang i (Float.atan2 im re)
+                  done ) ) )
     in
-    let amplitudes = tensor amp in
-    let phases = tensor phi in
+    let omega = advance c in
+    (* every element of both is written by the traversal *)
+    let amplitudes, phases =
+      Store.make64_pair out (fun amp phi ->
+          reading magnitudes (fun mag ->
+              reading arguments (fun ang ->
+                  for s = 0 to signals - 1 do
+                    propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
+                      ~mb:(s * span) ~ang ~ab:(s * span) ~amp ~qb:(s * stride)
+                      ~phi ~pb:(s * stride)
+                  done ) ) )
+    in
+    (* the phasor, as the whole-matrix [mul amp (cos phi)] and [mul amp (sin
+       phi)] compute it, written straight into the complex result *)
     Nx.swapaxes (-1) (-2)
-      (Nx.complex Nx.complex128
-         ~re:(Nx.mul amplitudes (Nx.cos phases))
-         ~im:(Nx.mul amplitudes (Nx.sin phases)) )
+      (Store.make_c128 out (fun dst ->
+           reading amplitudes (fun amp ->
+               reading phases (fun phi ->
+                   Par.ranges ~n:(signals * stride) ~grain:8192 (fun lo hi ->
+                       for i = lo to hi - 1 do
+                         let a = Bigarray.Array1.unsafe_get amp i
+                         and ph = Bigarray.Array1.unsafe_get phi i in
+                         Bigarray.Array1.unsafe_set dst (2 * i)
+                           (a *. Float.cos ph) ;
+                         Bigarray.Array1.unsafe_set dst
+                           ((2 * i) + 1)
+                           (a *. Float.sin ph)
+                       done ) ) ) ) )
   end
 
 let to_complex128 : type c.
