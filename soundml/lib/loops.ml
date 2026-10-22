@@ -328,8 +328,8 @@ let frame64 (src : f64) (dst : f64) (w : Float.Array.t) ~ext ~n ~fft ~hop ~left
     done
   done
 
-let frames (type a) ~window ~hop ~left ~ext ~first ~count (x : (float, a) Nx.t)
-    =
+let frames (type a) ?into ~window ~hop ~left ~ext ~first ~count
+    (x : (float, a) Nx.t) =
   let fft = Float.Array.length window in
   let shape = Nx.shape x in
   let nd = Array.length shape in
@@ -349,7 +349,7 @@ let frames (type a) ~window ~hop ~left ~ext ~first ~count (x : (float, a) Nx.t)
           u := stop
         done )
   in
-  Store.make64
+  Store.make64 ?into
     (Array.append lead [|count; fft|])
     (fun dst ->
       match Nx.dtype x with
@@ -960,8 +960,8 @@ let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
     end
   done
 
-let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
-    frames =
+let overlap_add ?into ~window ~hop ~period ~partial ~head ~stop ~left ~out_len
+    ~valid frames =
   let fft = Float.Array.length window in
   let shape = Nx.shape frames in
   let nd = Array.length shape in
@@ -971,7 +971,7 @@ let overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len ~valid
   let blocks = (fft + hop - 1) / hop in
   (* a position costs [blocks] taps; about 64 Ktaps per chunk *)
   let grain = Int.max 1 (65_536 / Int.max 1 blocks) in
-  Store.make64 (Array.append lead [|out_len|]) (fun dst ->
+  Store.make64 ?into (Array.append lead [|out_len|]) (fun dst ->
       Store.read64 frames (fun src ->
           Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
               let u = ref lo in
@@ -1014,9 +1014,9 @@ let update64 (r : f64) (prev : f64 option) (mag : f64) (dst : f64) ~beta lo hi =
         Array1.unsafe_set dst ((2 * i) + 1) (m *. (ei /. d))
       done
 
-let gl_update ~beta ~magnitudes ?previous rebuilt =
+let gl_update ?into ~beta ~magnitudes ?previous rebuilt =
   let n = Nx.numel rebuilt in
-  Store.make_c128 (Nx.shape rebuilt) (fun dst ->
+  Store.make_c128 ?into (Nx.shape rebuilt) (fun dst ->
       Store.read64 magnitudes (fun mag ->
           Store.read_parts64 rebuilt (fun r ->
               let run prev =

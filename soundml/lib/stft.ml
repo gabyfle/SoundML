@@ -385,9 +385,9 @@ let extension (c : Config.t) x =
 (* [analyse_signal c cdtype x ~first ~count] is frames [first, first + count) of
    the whole signal [x], frames-major, its boundary extension read in place
    rather than materialized. *)
-let analyse_signal (c : Config.t) cdtype x ~first ~count =
+let analyse_signal ?into (c : Config.t) cdtype x ~first ~count =
   Nx.rfft cdtype
-    (Loops.frames ~window:c.window_values ~hop:c.hop ~left:(left_width c)
+    (Loops.frames ?into ~window:c.window_values ~hop:c.hop ~left:(left_width c)
        ~ext:(extension c x) ~first ~count x )
 
 (* [bins_major rows] is the frames-major [rows] viewed [[...; bins; frames]]. *)
@@ -869,7 +869,7 @@ let to_complex128 : type c.
    ({!Loops.overlap_add}) then windows them, overlap-adds them and divides by
    the envelope in padded coordinates, keeping only the positions past the left
    extension, and zero-extends the result to the requested length. *)
-let synthesise_rows (c : Config.t) ?length rows =
+let synthesise_rows ?into (c : Config.t) ?length rows =
   let fft = Config.fft_size c and hop = Config.hop c in
   let left = left_width c in
   let nd = Nx.ndim rows in
@@ -901,7 +901,7 @@ let synthesise_rows (c : Config.t) ?length rows =
     let head = Int.min span (fft - hop) in
     let stop = Int.max head (Int.min span (count * hop)) in
     let period = Float.Array.init hop (fun r -> guard complete.(r)) in
-    Loops.overlap_add ~window:c.window_values ~hop ~period
+    Loops.overlap_add ?into ~window:c.window_values ~hop ~period
       ~partial:(partial_envelope c w ~last:(count - 1))
       ~head ~stop ~left ~out_len
       ~valid:(Int.min span (left + out_len) - left)
@@ -987,18 +987,33 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
     && frames > 0
     && not (Array.exists (fun d -> d = 0) (batch_shape s))
   in
-  let rec run k spectrum previous =
-    if k = 0 || not iterate then spectrum
-    else
-      let signal = synthesise_rows c spectrum in
-      let rebuilt =
-        analyse_signal c Nx.complex128 signal ~first:0 ~count:frames
+  (* Each iteration's signal, frames and spectrum are dead once the next stage
+     has read them, so the three live in buffers the iterations share rather
+     than in fresh memory every time: three fewer large allocations per
+     iteration, each of which paces the collector. *)
+  let spectrum =
+    if not iterate then spectrum
+    else begin
+      let outer = Nx.numel magnitudes / (frames * Config.bins c) in
+      let buffer elements bytes = Store.buffer (outer * elements * bytes) in
+      let signals = buffer (output_length c ~frames) 8
+      and windowed = buffer (frames * Config.fft_size c) 8
+      and spectra = buffer (frames * Config.bins c) 16 in
+      let rec run k spectrum previous =
+        if k = 0 then spectrum
+        else
+          let signal = synthesise_rows ~into:signals c spectrum in
+          let rebuilt =
+            analyse_signal ~into:windowed c Nx.complex128 signal ~first:0
+              ~count:frames
+          in
+          run (k - 1)
+            (Loops.gl_update ~into:spectra ~beta ~magnitudes ?previous rebuilt)
+            (Some rebuilt)
       in
-      run (k - 1)
-        (Loops.gl_update ~beta ~magnitudes ?previous rebuilt)
-        (Some rebuilt)
+      run n_iter spectrum None
+    end
   in
-  let spectrum = run n_iter spectrum None in
   Nx.cast dtype (synthesise_rows c ?length spectrum)
 
 (* {1 Incremental synthesis}
