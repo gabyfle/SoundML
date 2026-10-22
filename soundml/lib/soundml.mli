@@ -126,7 +126,9 @@ val mfcc :
     elsewhere. [lifter], when positive, applies sinusoidal liftering —
     coefficient [k], counted from zero, is multiplied by
     [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)] — and [0.]
-    or absent applies none. The log-mel scaling, the DCT and the liftering
+    or absent applies none. The DCT, its scaling and the liftering are one
+    matrix, each coefficient folded from its own frame's mel column in a
+    fixed order. The log-mel scaling, the DCT and the liftering
     are computed in double precision and rounded to the dtype of [x] once,
     at the boundary; the mel spectrogram beneath carries its own boundary
     roundings, one per operation, exactly as {!mel_spectrogram}.

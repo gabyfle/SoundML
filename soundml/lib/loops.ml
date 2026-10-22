@@ -1249,3 +1249,161 @@ let extremes (type a) ~bands (x : (float, a) Nx.t) =
       | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
           Store.read64 (Nx.cast Nx.float64 x) (fun src ->
               units (extremes64 src valley peak ~k ~n ~bands) ) )
+
+(* {1 Decibels}
+
+   A parallel unit is a block of [db_block] consecutive elements of one channel.
+   The first pass writes every value and records each block's greatest (NaN when
+   the block holds one); the clamp, when asked for, reads each channel's
+   greatest from its blocks and floors the channel in a second pass. The scale's
+   product is bound to a name before the offset is taken from it, which keeps
+   the multiply and the subtraction apart on every platform: two roundings, as
+   the whole-tensor formulation rounds. *)
+
+let db_block = 8192
+
+let db32 (src : f32) (dst : f32) ~scale ~offset ~amin ~magnitude peaks b lo hi =
+  let top = ref Float.neg_infinity and nan = ref false in
+  for i = lo to hi - 1 do
+    let v = Array1.unsafe_get src i in
+    let v = if magnitude then Float.abs v else v in
+    let v = if v < amin then amin else v in
+    let p = Float.log v *. scale in
+    let d = p -. offset in
+    Array1.unsafe_set dst i d ;
+    if d > !top then top := d else if d <> d then nan := true
+  done ;
+  Float.Array.unsafe_set peaks b (if !nan then Float.nan else !top)
+
+let db64 (src : f64) (dst : f64) ~scale ~offset ~amin ~magnitude peaks b lo hi =
+  let top = ref Float.neg_infinity and nan = ref false in
+  for i = lo to hi - 1 do
+    let v = Array1.unsafe_get src i in
+    let v = if magnitude then Float.abs v else v in
+    let v = if v < amin then amin else v in
+    let p = Float.log v *. scale in
+    let d = p -. offset in
+    Array1.unsafe_set dst i d ;
+    if d > !top then top := d else if d <> d then nan := true
+  done ;
+  Float.Array.unsafe_set peaks b (if !nan then Float.nan else !top)
+
+let db32_64 (src : f32) (dst : f64) ~scale ~offset ~amin ~magnitude peaks b lo
+    hi =
+  let top = ref Float.neg_infinity and nan = ref false in
+  for i = lo to hi - 1 do
+    let v = Array1.unsafe_get src i in
+    let v = if magnitude then Float.abs v else v in
+    let v = if v < amin then amin else v in
+    let p = Float.log v *. scale in
+    let d = p -. offset in
+    Array1.unsafe_set dst i d ;
+    if d > !top then top := d else if d <> d then nan := true
+  done ;
+  Float.Array.unsafe_set peaks b (if !nan then Float.nan else !top)
+
+(* [floor32 dst ~threshold lo hi] and [floor64] raise every element below
+   [threshold] to it, and set every element to NaN when [threshold] is NaN. *)
+let floor32 (dst : f32) ~threshold lo hi =
+  if Float.is_nan threshold then
+    for i = lo to hi - 1 do
+      Array1.unsafe_set dst i Float.nan
+    done
+  else
+    for i = lo to hi - 1 do
+      if Array1.unsafe_get dst i < threshold then
+        Array1.unsafe_set dst i threshold
+    done
+
+let floor64 (dst : f64) ~threshold lo hi =
+  if Float.is_nan threshold then
+    for i = lo to hi - 1 do
+      Array1.unsafe_set dst i Float.nan
+    done
+  else
+    for i = lo to hi - 1 do
+      if Array1.unsafe_get dst i < threshold then
+        Array1.unsafe_set dst i threshold
+    done
+
+(* [db_run ~shape ~range ~round fill floor] runs [fill peaks b lo hi] over every
+   block, then, when [range] is given, [floor ~threshold lo hi] over every block
+   with its channel's threshold: [round] of the channel's greatest value less
+   [range], where [round] rounds into the result's dtype. A channel is the whole
+   tensor up to rank two, one index of the leading axes beyond. *)
+let db_run ~shape ~range ~round fill floor =
+  let nd = Array.length shape in
+  let total = Array.fold_left ( * ) 1 shape in
+  let len = if nd <= 2 then total else shape.(nd - 2) * shape.(nd - 1) in
+  let channels = if len = 0 then 0 else total / len in
+  let per = (len + db_block - 1) / db_block in
+  let blocks = channels * per in
+  let span b =
+    let c = b / per and q = b mod per in
+    ((c * len) + (q * db_block), (c * len) + Stdlib.min len ((q + 1) * db_block))
+  in
+  let peaks = Float.Array.make blocks Float.neg_infinity in
+  Par.ranges ~n:blocks ~grain:1 (fun b0 b1 ->
+      for b = b0 to b1 - 1 do
+        let lo, hi = span b in
+        fill peaks b lo hi
+      done ) ;
+  match range with
+  | None ->
+      ()
+  | Some range ->
+      let thresholds =
+        Float.Array.init channels (fun c ->
+            let top = ref Float.neg_infinity and nan = ref false in
+            for q = 0 to per - 1 do
+              let p = Float.Array.get peaks ((c * per) + q) in
+              if p > !top then top := p else if Float.is_nan p then nan := true
+            done ;
+            if !nan then Float.nan else round (round !top -. range) )
+      in
+      Par.ranges ~n:blocks ~grain:1 (fun b0 b1 ->
+          for b = b0 to b1 - 1 do
+            let lo, hi = span b in
+            floor ~threshold:(Float.Array.get thresholds (b / per)) lo hi
+          done )
+
+let round32 x =
+  let a = Array1.create float32 c_layout 1 in
+  Array1.unsafe_set a 0 x ; Array1.unsafe_get a 0
+
+let decibels (type a) ~scale ~offset ~amin ~magnitude ~range
+    (x : (float, a) Nx.t) : (float, a) Nx.t option =
+  let shape = Nx.shape x in
+  match Nx.dtype x with
+  | Nx.Float32 ->
+      Some
+        (Store.make32 shape (fun dst ->
+             Store.read32 x (fun src ->
+                 db_run ~shape ~range ~round:round32
+                   (db32 src dst ~scale ~offset ~amin ~magnitude)
+                   (floor32 dst) ) ) )
+  | Nx.Float64 ->
+      Some
+        (Store.make64 shape (fun dst ->
+             Store.read64 x (fun src ->
+                 db_run ~shape ~range ~round:Fun.id
+                   (db64 src dst ~scale ~offset ~amin ~magnitude)
+                   (floor64 dst) ) ) )
+  | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+      None
+
+let decibels64 (type a) ~scale ~offset ~amin ~magnitude ~range
+    (x : (float, a) Nx.t) : (float, Nx.float64_elt) Nx.t option =
+  let shape = Nx.shape x in
+  match Nx.dtype x with
+  | Nx.Float32 ->
+      Some
+        (Store.make64 shape (fun dst ->
+             Store.read32 x (fun src ->
+                 db_run ~shape ~range ~round:Fun.id
+                   (db32_64 src dst ~scale ~offset ~amin ~magnitude)
+                   (floor64 dst) ) ) )
+  | Nx.Float64 ->
+      decibels ~scale ~offset ~amin ~magnitude ~range x
+  | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+      None

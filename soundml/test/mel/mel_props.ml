@@ -147,7 +147,9 @@ let apply_tests =
   [ test "apply is the filterbank product, folded in ascending bins" (fun () ->
         (* The reference adds every bin, zero weights included: a zero weight
            times a finite value is a signed zero, which leaves a running sum
-           unchanged, so it equals the support-only fold bit for bit. *)
+           unchanged, so it equals the support-only fold bit for bit. It spells
+           each multiply-add as the library does, operands bound first, so the
+           platforms that contract it (arm64) fuse both alike. *)
         let c = mel_config () in
         let bins = Mel.Config.bins c and n_mels = Mel.Config.n_mels c in
         let frames = 7 in
@@ -162,7 +164,8 @@ let apply_tests =
               let m = o / frames and t = o mod frames in
               let acc = ref 0. in
               for j = 0 to bins - 1 do
-                acc := !acc +. (w.((m * bins) + j) *. v.((j * frames) + t))
+                let w = w.((m * bins) + j) and x = v.((j * frames) + t) in
+                acc := !acc +. (w *. x)
               done ;
               Int64.bits_of_float !acc )
         in

@@ -27,10 +27,10 @@
    of parallel work. Tiling and the split across domains change which outputs
    are computed together, never the order of any output's terms.
 
-   The row loops are unrolled by four, so an accumulator is loaded and stored
-   once per four terms: [(((d +. a) +. b) +. c) +. e] is evaluated left to
-   right, the same additions as four separate steps. OCaml never contracts a
-   multiply into an add, so the bits do not depend on the machine.
+   The row loops of the sums are unrolled by four, so an accumulator is loaded
+   and stored once per four terms: [(((d +. a) +. b) +. c) +. e] is evaluated
+   left to right, the same additions as four separate steps. Projections
+   multiply-add (see below).
 
    The loops are written once per storage kind, float32 and float64, so that
    every element access compiles to a plain load; other dtypes are widened to
@@ -119,7 +119,33 @@ let mean x =
     invalid_arg "Ordered.mean: cannot average over an axis of length 0" ;
   Nx.div_s (sum x) (Float.of_int k)
 
-(* {1 Projections} *)
+(* {1 Projections}
+
+   Output [(i, t)] of a projection starts from [0.] and takes one multiply-add
+   [acc +. w *. x] per column of row [i]'s span, in ascending order. Every loop
+   below spells that multiply-add the same way, both operands bound to names
+   first: the shape OCaml's arm64 backend contracts into one fused instruction,
+   rounded once (x86_64 keeps the multiply and the add apart). An output's bits
+   therefore depend on its terms and the platform, never on the path that
+   computed it.
+
+   The outputs are computed in register groups, each group's accumulators held
+   in registers for the whole span, so that every weight and sample loaded feeds
+   several multiply-adds: eight columns of one row, or, where four consecutive
+   rows share a long stretch of their spans (a block), four columns of all four
+   rows over that stretch. A block's rows add their terms before the shared
+   stretch alone, then the stretch together, then their terms after it alone, so
+   each output still takes its terms in ascending order. *)
+
+type block =
+  { row: int (* the block's first row *)
+  ; lo: int
+  ; hi: int (* the stretch every row of the block spans *)
+  ; packed: f64
+        (* [(hi - lo) * 4] weights, column-major: [w.(row + r).(j)] at [4 * (j -
+           lo) + r] *) }
+
+type step = Row of int | Block of block
 
 type matrix =
   { m: int
@@ -128,7 +154,40 @@ type matrix =
   ; bounds: int array
         (* per row [i], at [2i] and [2i + 1]: the first nonzero column and one
            past the last, an empty range for an all-zero row *)
-  ; terms: int (* the multiply-adds of one column: the ranges' total *) }
+  ; terms: int (* the multiply-adds of one column: the ranges' total *)
+  ; steps: step array (* every row once, in ascending order *) }
+
+(* The shortest shared stretch worth a block. *)
+let min_stretch = 16
+
+let plan ~k weights bounds m =
+  let steps = ref [] and i = ref 0 in
+  while !i < m do
+    let lo = ref 0 and hi = ref max_int in
+    if !i + 4 <= m then
+      for r = !i to !i + 3 do
+        lo := Stdlib.max !lo bounds.(2 * r) ;
+        hi := Stdlib.min !hi bounds.((2 * r) + 1)
+      done ;
+    if !i + 4 <= m && !hi - !lo >= min_stretch then begin
+      let lo = !lo and hi = !hi and row = !i in
+      let packed = Array1.create float64 c_layout ((hi - lo) * 4) in
+      for j = lo to hi - 1 do
+        for r = 0 to 3 do
+          Array1.unsafe_set packed
+            ((4 * (j - lo)) + r)
+            (Array1.unsafe_get weights (((row + r) * k) + j))
+        done
+      done ;
+      steps := Block {row; lo; hi; packed} :: !steps ;
+      i := row + 4
+    end
+    else begin
+      steps := Row !i :: !steps ;
+      incr i
+    end
+  done ;
+  Array.of_list (List.rev !steps)
 
 let matrix w =
   if Nx.ndim w <> 2 then
@@ -156,106 +215,364 @@ let matrix w =
     bounds.((2 * i) + 1) <- !last ;
     terms := !terms + (!last - !first)
   done ;
-  {m; k; weights; bounds; terms= !terms}
+  {m; k; weights; bounds; terms= !terms; steps= plan ~k weights bounds m}
 
 let rows w = w.m
 
 let columns w = w.k
 
-(* [fold64 mx src ~n acc ~plane ~i ~t0 ~width] and [fold32] add row [i]'s terms
-   over one tile into the scratch [acc] (whose slot [t] is column [t0 + t]), in
-   ascending column order, four terms per load and store of a slot. *)
-let fold64 (mx : matrix) (src : f64) ~n acc ~plane ~i ~t0 ~width =
-  let first = mx.bounds.(2 * i) and last = mx.bounds.((2 * i) + 1) in
+(* The accumulators of a unit: four rows of a tile, row [r] at [r * tile]. *)
+let scratch () = Float.Array.make (4 * tile) 0.
+
+(* [span64 mx src ~n acc ~a ~width ~i ~j0 ~j1 ~x] and [span32] add row [i]'s
+   terms for columns [\[j0, j1)] to the accumulators [acc.(a + c)], [c < width],
+   of the samples at [x + c]: column [j]'s sample [c] is [src.(x + j * n +
+   c)]. *)
+let span64 (mx : matrix) (src : f64) ~n acc ~a ~width ~i ~j0 ~j1 ~x =
   let wbase = i * mx.k in
-  let j = ref first in
-  while !j + 3 < last do
-    let j0 = !j in
-    let w0 = Array1.unsafe_get mx.weights (wbase + j0)
-    and w1 = Array1.unsafe_get mx.weights (wbase + j0 + 1)
-    and w2 = Array1.unsafe_get mx.weights (wbase + j0 + 2)
-    and w3 = Array1.unsafe_get mx.weights (wbase + j0 + 3) in
-    let r0 = plane + (j0 * n) + t0 in
-    let r1 = r0 + n in
-    let r2 = r1 + n in
-    let r3 = r2 + n in
-    for t = 0 to width - 1 do
-      Float.Array.unsafe_set acc t
-        ( Float.Array.unsafe_get acc t
-        +. (w0 *. Array1.unsafe_get src (r0 + t))
-        +. (w1 *. Array1.unsafe_get src (r1 + t))
-        +. (w2 *. Array1.unsafe_get src (r2 + t))
-        +. (w3 *. Array1.unsafe_get src (r3 + t)) )
+  let c = ref 0 in
+  while !c + 7 < width do
+    let a = a + !c and x = x + !c in
+    let s0 = ref (Float.Array.unsafe_get acc a)
+    and s1 = ref (Float.Array.unsafe_get acc (a + 1))
+    and s2 = ref (Float.Array.unsafe_get acc (a + 2))
+    and s3 = ref (Float.Array.unsafe_get acc (a + 3))
+    and s4 = ref (Float.Array.unsafe_get acc (a + 4))
+    and s5 = ref (Float.Array.unsafe_get acc (a + 5))
+    and s6 = ref (Float.Array.unsafe_get acc (a + 6))
+    and s7 = ref (Float.Array.unsafe_get acc (a + 7)) in
+    for j = j0 to j1 - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j) and r = x + (j * n) in
+      let x0 = Array1.unsafe_get src r
+      and x1 = Array1.unsafe_get src (r + 1)
+      and x2 = Array1.unsafe_get src (r + 2)
+      and x3 = Array1.unsafe_get src (r + 3)
+      and x4 = Array1.unsafe_get src (r + 4)
+      and x5 = Array1.unsafe_get src (r + 5)
+      and x6 = Array1.unsafe_get src (r + 6)
+      and x7 = Array1.unsafe_get src (r + 7) in
+      s0 := !s0 +. (w *. x0) ;
+      s1 := !s1 +. (w *. x1) ;
+      s2 := !s2 +. (w *. x2) ;
+      s3 := !s3 +. (w *. x3) ;
+      s4 := !s4 +. (w *. x4) ;
+      s5 := !s5 +. (w *. x5) ;
+      s6 := !s6 +. (w *. x6) ;
+      s7 := !s7 +. (w *. x7)
     done ;
-    j := j0 + 4
+    Float.Array.unsafe_set acc a !s0 ;
+    Float.Array.unsafe_set acc (a + 1) !s1 ;
+    Float.Array.unsafe_set acc (a + 2) !s2 ;
+    Float.Array.unsafe_set acc (a + 3) !s3 ;
+    Float.Array.unsafe_set acc (a + 4) !s4 ;
+    Float.Array.unsafe_set acc (a + 5) !s5 ;
+    Float.Array.unsafe_set acc (a + 6) !s6 ;
+    Float.Array.unsafe_set acc (a + 7) !s7 ;
+    c := !c + 8
   done ;
-  while !j < last do
-    let wj = Array1.unsafe_get mx.weights (wbase + !j) in
-    let r = plane + (!j * n) + t0 in
-    for t = 0 to width - 1 do
-      Float.Array.unsafe_set acc t
-        (Float.Array.unsafe_get acc t +. (wj *. Array1.unsafe_get src (r + t)))
+  while !c < width do
+    let a = a + !c and x = x + !c in
+    let s = ref (Float.Array.unsafe_get acc a) in
+    for j = j0 to j1 - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s := !s +. (w *. v)
     done ;
-    incr j
+    Float.Array.unsafe_set acc a !s ;
+    incr c
   done
 
-let fold32 (mx : matrix) (src : f32) ~n acc ~plane ~i ~t0 ~width =
-  let first = mx.bounds.(2 * i) and last = mx.bounds.((2 * i) + 1) in
+let span32 (mx : matrix) (src : f32) ~n acc ~a ~width ~i ~j0 ~j1 ~x =
   let wbase = i * mx.k in
-  let j = ref first in
-  while !j + 3 < last do
-    let j0 = !j in
-    let w0 = Array1.unsafe_get mx.weights (wbase + j0)
-    and w1 = Array1.unsafe_get mx.weights (wbase + j0 + 1)
-    and w2 = Array1.unsafe_get mx.weights (wbase + j0 + 2)
-    and w3 = Array1.unsafe_get mx.weights (wbase + j0 + 3) in
-    let r0 = plane + (j0 * n) + t0 in
-    let r1 = r0 + n in
-    let r2 = r1 + n in
-    let r3 = r2 + n in
-    for t = 0 to width - 1 do
-      Float.Array.unsafe_set acc t
-        ( Float.Array.unsafe_get acc t
-        +. (w0 *. Array1.unsafe_get src (r0 + t))
-        +. (w1 *. Array1.unsafe_get src (r1 + t))
-        +. (w2 *. Array1.unsafe_get src (r2 + t))
-        +. (w3 *. Array1.unsafe_get src (r3 + t)) )
+  let c = ref 0 in
+  while !c + 7 < width do
+    let a = a + !c and x = x + !c in
+    let s0 = ref (Float.Array.unsafe_get acc a)
+    and s1 = ref (Float.Array.unsafe_get acc (a + 1))
+    and s2 = ref (Float.Array.unsafe_get acc (a + 2))
+    and s3 = ref (Float.Array.unsafe_get acc (a + 3))
+    and s4 = ref (Float.Array.unsafe_get acc (a + 4))
+    and s5 = ref (Float.Array.unsafe_get acc (a + 5))
+    and s6 = ref (Float.Array.unsafe_get acc (a + 6))
+    and s7 = ref (Float.Array.unsafe_get acc (a + 7)) in
+    for j = j0 to j1 - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j) and r = x + (j * n) in
+      let x0 = Array1.unsafe_get src r
+      and x1 = Array1.unsafe_get src (r + 1)
+      and x2 = Array1.unsafe_get src (r + 2)
+      and x3 = Array1.unsafe_get src (r + 3)
+      and x4 = Array1.unsafe_get src (r + 4)
+      and x5 = Array1.unsafe_get src (r + 5)
+      and x6 = Array1.unsafe_get src (r + 6)
+      and x7 = Array1.unsafe_get src (r + 7) in
+      s0 := !s0 +. (w *. x0) ;
+      s1 := !s1 +. (w *. x1) ;
+      s2 := !s2 +. (w *. x2) ;
+      s3 := !s3 +. (w *. x3) ;
+      s4 := !s4 +. (w *. x4) ;
+      s5 := !s5 +. (w *. x5) ;
+      s6 := !s6 +. (w *. x6) ;
+      s7 := !s7 +. (w *. x7)
     done ;
-    j := j0 + 4
+    Float.Array.unsafe_set acc a !s0 ;
+    Float.Array.unsafe_set acc (a + 1) !s1 ;
+    Float.Array.unsafe_set acc (a + 2) !s2 ;
+    Float.Array.unsafe_set acc (a + 3) !s3 ;
+    Float.Array.unsafe_set acc (a + 4) !s4 ;
+    Float.Array.unsafe_set acc (a + 5) !s5 ;
+    Float.Array.unsafe_set acc (a + 6) !s6 ;
+    Float.Array.unsafe_set acc (a + 7) !s7 ;
+    c := !c + 8
   done ;
-  while !j < last do
-    let wj = Array1.unsafe_get mx.weights (wbase + !j) in
-    let r = plane + (!j * n) + t0 in
-    for t = 0 to width - 1 do
-      Float.Array.unsafe_set acc t
-        (Float.Array.unsafe_get acc t +. (wj *. Array1.unsafe_get src (r + t)))
+  while !c < width do
+    let a = a + !c and x = x + !c in
+    let s = ref (Float.Array.unsafe_get acc a) in
+    for j = j0 to j1 - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s := !s +. (w *. v)
     done ;
-    incr j
+    Float.Array.unsafe_set acc a !s ;
+    incr c
   done
 
-(* [project_units mx ~outer ~n fold store] runs every (plane, tile) unit: for
-   each output row, [fold acc ~plane ~i ~t0 ~width] fills the zeroed scratch and
-   [store acc ~row ~width] writes it out at output offset [row]. *)
-let project_units mx ~outer ~n fold store =
+(* [stretch64 src ~n b acc ~width ~x] and [stretch32] add block [b]'s shared
+   stretch to the accumulators of its four rows, [acc.(r * tile + c)], over the
+   samples at [x + c] as {!span64} reads them. *)
+let stretch64 (src : f64) ~n b acc ~width ~x =
+  let c = ref 0 in
+  while !c + 3 < width do
+    let a = !c and x = x + !c in
+    let s00 = ref (Float.Array.unsafe_get acc a)
+    and s01 = ref (Float.Array.unsafe_get acc (a + 1))
+    and s02 = ref (Float.Array.unsafe_get acc (a + 2))
+    and s03 = ref (Float.Array.unsafe_get acc (a + 3))
+    and s10 = ref (Float.Array.unsafe_get acc (tile + a))
+    and s11 = ref (Float.Array.unsafe_get acc (tile + a + 1))
+    and s12 = ref (Float.Array.unsafe_get acc (tile + a + 2))
+    and s13 = ref (Float.Array.unsafe_get acc (tile + a + 3))
+    and s20 = ref (Float.Array.unsafe_get acc ((2 * tile) + a))
+    and s21 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 1))
+    and s22 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 2))
+    and s23 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 3))
+    and s30 = ref (Float.Array.unsafe_get acc ((3 * tile) + a))
+    and s31 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 1))
+    and s32 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 2))
+    and s33 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 3)) in
+    for j = b.lo to b.hi - 1 do
+      let r = x + (j * n) and p = 4 * (j - b.lo) in
+      let x0 = Array1.unsafe_get src r
+      and x1 = Array1.unsafe_get src (r + 1)
+      and x2 = Array1.unsafe_get src (r + 2)
+      and x3 = Array1.unsafe_get src (r + 3)
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s00 := !s00 +. (w0 *. x0) ;
+      s01 := !s01 +. (w0 *. x1) ;
+      s02 := !s02 +. (w0 *. x2) ;
+      s03 := !s03 +. (w0 *. x3) ;
+      s10 := !s10 +. (w1 *. x0) ;
+      s11 := !s11 +. (w1 *. x1) ;
+      s12 := !s12 +. (w1 *. x2) ;
+      s13 := !s13 +. (w1 *. x3) ;
+      s20 := !s20 +. (w2 *. x0) ;
+      s21 := !s21 +. (w2 *. x1) ;
+      s22 := !s22 +. (w2 *. x2) ;
+      s23 := !s23 +. (w2 *. x3) ;
+      s30 := !s30 +. (w3 *. x0) ;
+      s31 := !s31 +. (w3 *. x1) ;
+      s32 := !s32 +. (w3 *. x2) ;
+      s33 := !s33 +. (w3 *. x3)
+    done ;
+    Float.Array.unsafe_set acc a !s00 ;
+    Float.Array.unsafe_set acc (a + 1) !s01 ;
+    Float.Array.unsafe_set acc (a + 2) !s02 ;
+    Float.Array.unsafe_set acc (a + 3) !s03 ;
+    Float.Array.unsafe_set acc (tile + a) !s10 ;
+    Float.Array.unsafe_set acc (tile + a + 1) !s11 ;
+    Float.Array.unsafe_set acc (tile + a + 2) !s12 ;
+    Float.Array.unsafe_set acc (tile + a + 3) !s13 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a) !s20 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 1) !s21 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 2) !s22 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 3) !s23 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a) !s30 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 1) !s31 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 2) !s32 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 3) !s33 ;
+    c := !c + 4
+  done ;
+  while !c < width do
+    let a = !c and x = x + !c in
+    let s0 = ref (Float.Array.unsafe_get acc a)
+    and s1 = ref (Float.Array.unsafe_get acc (tile + a))
+    and s2 = ref (Float.Array.unsafe_get acc ((2 * tile) + a))
+    and s3 = ref (Float.Array.unsafe_get acc ((3 * tile) + a)) in
+    for j = b.lo to b.hi - 1 do
+      let p = 4 * (j - b.lo) in
+      let v = Array1.unsafe_get src (x + (j * n))
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s0 := !s0 +. (w0 *. v) ;
+      s1 := !s1 +. (w1 *. v) ;
+      s2 := !s2 +. (w2 *. v) ;
+      s3 := !s3 +. (w3 *. v)
+    done ;
+    Float.Array.unsafe_set acc a !s0 ;
+    Float.Array.unsafe_set acc (tile + a) !s1 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a) !s2 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a) !s3 ;
+    incr c
+  done
+
+let stretch32 (src : f32) ~n b acc ~width ~x =
+  let c = ref 0 in
+  while !c + 3 < width do
+    let a = !c and x = x + !c in
+    let s00 = ref (Float.Array.unsafe_get acc a)
+    and s01 = ref (Float.Array.unsafe_get acc (a + 1))
+    and s02 = ref (Float.Array.unsafe_get acc (a + 2))
+    and s03 = ref (Float.Array.unsafe_get acc (a + 3))
+    and s10 = ref (Float.Array.unsafe_get acc (tile + a))
+    and s11 = ref (Float.Array.unsafe_get acc (tile + a + 1))
+    and s12 = ref (Float.Array.unsafe_get acc (tile + a + 2))
+    and s13 = ref (Float.Array.unsafe_get acc (tile + a + 3))
+    and s20 = ref (Float.Array.unsafe_get acc ((2 * tile) + a))
+    and s21 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 1))
+    and s22 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 2))
+    and s23 = ref (Float.Array.unsafe_get acc ((2 * tile) + a + 3))
+    and s30 = ref (Float.Array.unsafe_get acc ((3 * tile) + a))
+    and s31 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 1))
+    and s32 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 2))
+    and s33 = ref (Float.Array.unsafe_get acc ((3 * tile) + a + 3)) in
+    for j = b.lo to b.hi - 1 do
+      let r = x + (j * n) and p = 4 * (j - b.lo) in
+      let x0 = Array1.unsafe_get src r
+      and x1 = Array1.unsafe_get src (r + 1)
+      and x2 = Array1.unsafe_get src (r + 2)
+      and x3 = Array1.unsafe_get src (r + 3)
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s00 := !s00 +. (w0 *. x0) ;
+      s01 := !s01 +. (w0 *. x1) ;
+      s02 := !s02 +. (w0 *. x2) ;
+      s03 := !s03 +. (w0 *. x3) ;
+      s10 := !s10 +. (w1 *. x0) ;
+      s11 := !s11 +. (w1 *. x1) ;
+      s12 := !s12 +. (w1 *. x2) ;
+      s13 := !s13 +. (w1 *. x3) ;
+      s20 := !s20 +. (w2 *. x0) ;
+      s21 := !s21 +. (w2 *. x1) ;
+      s22 := !s22 +. (w2 *. x2) ;
+      s23 := !s23 +. (w2 *. x3) ;
+      s30 := !s30 +. (w3 *. x0) ;
+      s31 := !s31 +. (w3 *. x1) ;
+      s32 := !s32 +. (w3 *. x2) ;
+      s33 := !s33 +. (w3 *. x3)
+    done ;
+    Float.Array.unsafe_set acc a !s00 ;
+    Float.Array.unsafe_set acc (a + 1) !s01 ;
+    Float.Array.unsafe_set acc (a + 2) !s02 ;
+    Float.Array.unsafe_set acc (a + 3) !s03 ;
+    Float.Array.unsafe_set acc (tile + a) !s10 ;
+    Float.Array.unsafe_set acc (tile + a + 1) !s11 ;
+    Float.Array.unsafe_set acc (tile + a + 2) !s12 ;
+    Float.Array.unsafe_set acc (tile + a + 3) !s13 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a) !s20 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 1) !s21 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 2) !s22 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a + 3) !s23 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a) !s30 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 1) !s31 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 2) !s32 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a + 3) !s33 ;
+    c := !c + 4
+  done ;
+  while !c < width do
+    let a = !c and x = x + !c in
+    let s0 = ref (Float.Array.unsafe_get acc a)
+    and s1 = ref (Float.Array.unsafe_get acc (tile + a))
+    and s2 = ref (Float.Array.unsafe_get acc ((2 * tile) + a))
+    and s3 = ref (Float.Array.unsafe_get acc ((3 * tile) + a)) in
+    for j = b.lo to b.hi - 1 do
+      let p = 4 * (j - b.lo) in
+      let v = Array1.unsafe_get src (x + (j * n))
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s0 := !s0 +. (w0 *. v) ;
+      s1 := !s1 +. (w1 *. v) ;
+      s2 := !s2 +. (w2 *. v) ;
+      s3 := !s3 +. (w3 *. v)
+    done ;
+    Float.Array.unsafe_set acc a !s0 ;
+    Float.Array.unsafe_set acc (tile + a) !s1 ;
+    Float.Array.unsafe_set acc ((2 * tile) + a) !s2 ;
+    Float.Array.unsafe_set acc ((3 * tile) + a) !s3 ;
+    incr c
+  done
+
+(* [project_units mx ~outer ~n span stretch store] runs every (plane, tile)
+   unit, step by step: a row's span, or a block's rows alone before and after
+   their shared stretch, accumulate from zero in the scratch, and [store acc ~a
+   ~row ~width] writes [acc.(a + c)], [c < width], out at output offset [row].
+   [span] and [stretch] take the unit's scratch and the offset of its
+   samples. *)
+let project_units mx ~outer ~n span stretch store =
   let k = mx.k and m = mx.m in
-  units ~outer ~n ~cost:(Stdlib.max 1 mx.terms) (fun o t0 t1 ->
-      let width = t1 - t0 in
-      let acc = Float.Array.create tile in
-      let plane = o * k * n in
-      for i = 0 to m - 1 do
-        Float.Array.fill acc 0 width 0. ;
-        fold acc ~plane ~i ~t0 ~width ;
-        store acc ~row:((((o * m) + i) * n) + t0) ~width
+  let per_plane = tiles n in
+  let grain =
+    Stdlib.max 1 (grain_terms / Stdlib.max 1 (Stdlib.max 1 mx.terms * tile))
+  in
+  Par.ranges ~n:(outer * per_plane) ~grain (fun lo hi ->
+      let acc = scratch () in
+      for u = lo to hi - 1 do
+        let o = u / per_plane and t0 = u mod per_plane * tile in
+        let width = Stdlib.min n (t0 + tile) - t0 in
+        let x = (o * k * n) + t0 in
+        let out i = (((o * m) + i) * n) + t0 in
+        Array.iter
+          (function
+            | Row i ->
+                Float.Array.fill acc 0 width 0. ;
+                span acc ~a:0 ~width ~i
+                  ~j0:mx.bounds.(2 * i)
+                  ~j1:mx.bounds.((2 * i) + 1)
+                  ~x ;
+                store acc ~a:0 ~row:(out i) ~width
+            | Block b ->
+                Float.Array.fill acc 0 (4 * tile) 0. ;
+                for r = 0 to 3 do
+                  span acc ~a:(r * tile) ~width ~i:(b.row + r)
+                    ~j0:mx.bounds.(2 * (b.row + r))
+                    ~j1:b.lo ~x
+                done ;
+                stretch b acc ~width ~x ;
+                for r = 0 to 3 do
+                  let i = b.row + r in
+                  span acc ~a:(r * tile) ~width ~i ~j0:b.hi
+                    ~j1:mx.bounds.((2 * i) + 1)
+                    ~x ;
+                  store acc ~a:(r * tile) ~row:(out i) ~width
+                done )
+          mx.steps
       done )
 
-let store64 (out : f64) acc ~row ~width =
+let store64 (out : f64) acc ~a ~row ~width =
   for t = 0 to width - 1 do
-    Array1.unsafe_set out (row + t) (Float.Array.unsafe_get acc t)
+    Array1.unsafe_set out (row + t) (Float.Array.unsafe_get acc (a + t))
   done
 
-let store32 (out : f32) acc ~row ~width =
+let store32 (out : f32) acc ~a ~row ~width =
   for t = 0 to width - 1 do
-    Array1.unsafe_set out (row + t) (Float.Array.unsafe_get acc t)
+    Array1.unsafe_set out (row + t) (Float.Array.unsafe_get acc (a + t))
   done
 
 let check_project mx x =
@@ -277,13 +594,13 @@ let project_into (type a) mx (x : (float, a) Nx.t) ~outer ~n store =
   match Nx.dtype x with
   | Nx.Float32 ->
       Store.read32 x (fun src ->
-          project_units mx ~outer ~n (fold32 mx src ~n) store )
+          project_units mx ~outer ~n (span32 mx src ~n) (stretch32 src ~n) store )
   | Nx.Float64 ->
       Store.read64 x (fun src ->
-          project_units mx ~outer ~n (fold64 mx src ~n) store )
+          project_units mx ~outer ~n (span64 mx src ~n) (stretch64 src ~n) store )
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       Store.read64 (Nx.cast Nx.float64 x) (fun src ->
-          project_units mx ~outer ~n (fold64 mx src ~n) store )
+          project_units mx ~outer ~n (span64 mx src ~n) (stretch64 src ~n) store )
 
 let project mx x =
   let out_shape, outer, n = check_project mx x in
