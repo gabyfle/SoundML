@@ -187,7 +187,7 @@ let apply fn (p : plan) s =
                  (Nx.sort ~axis:(-2) (shrink_rows s64 b.lo (b.lo + b.sub_len)))
              in
              let mean_rows start stop =
-               Nx.mean ~axes:[-2] ~keepdims:true (shrink_rows sorted start stop)
+               Ordered.mean (shrink_rows sorted start stop)
              in
              (mean_rows 0 b.take, mean_rows (b.sub_len - b.take) b.sub_len) )
            p.bands )

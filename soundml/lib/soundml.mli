@@ -21,7 +21,11 @@
     Incremental processing: every stateful algorithm is a Mealy kernel
     ([prepare]/[step]/[flush]/[reset]) composable as a {!Pipeline} stage.
     Offline functions are the one-chunk instance of the same kernels; the two
-    cannot disagree. See {!Pipeline}.
+    cannot disagree. The per-frame reductions of the features (the mel and
+    chroma projections, the spectral, energy, contrast and onset sums) add
+    their terms in a fixed order rather than in the shape-dependent order of
+    Nx, so a frame's value is the same bits alone or among others, at every
+    dtype; {!Cqt} states its own agreement. See {!Pipeline}.
 
     Audio-file I/O ships separately as [soundml-io]. *)
 
@@ -91,7 +95,7 @@ val mel_spectrogram :
 (** [mel_spectrogram stft mel x] is the mel spectrogram of [x], shaped
     [[...; n_mels; frames]]: {!Stft.power_spectrum} on the analysis geometry
     [stft], projected through the filterbank [mel] by {!Mel.apply} — one
-    framing pass, one batched FFT, one magnitude power, one matrix product.
+    framing pass, one batched FFT, one magnitude power, one projection.
     The time axis is the last axis of [x]; leading axes broadcast, so a batch
     of clips is one call. [power] defaults to [2.] (the power spectrum; [1.]
     projects magnitudes).

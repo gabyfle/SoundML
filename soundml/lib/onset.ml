@@ -68,13 +68,17 @@ let state_create lag = {lag; carry= None}
 let state_reset s = s.carry <- None
 
 (* [flux dtype cur prev] is the mean over bins of [max 0 (cur - prev)], in
-   double, rounded to [dtype] once at the boundary. *)
+   double and in {!Ordered}'s fixed association, so a frame's flux is the same
+   bits whatever the chunk it arrives in; rounded to [dtype] once at the
+   boundary. *)
 let flux dtype cur prev =
-  Nx.cast dtype
-    (Nx.mean ~axes:[-2]
-       (Nx.maximum_s
-          (Nx.sub (Nx.cast Nx.float64 cur) (Nx.cast Nx.float64 prev))
-          0. ) )
+  let mean =
+    Ordered.mean
+      (Nx.maximum_s
+         (Nx.sub (Nx.cast Nx.float64 cur) (Nx.cast Nx.float64 prev))
+         0. )
+  in
+  Nx.cast dtype (Nx.squeeze ~axes:[Nx.ndim mean - 2] mean)
 
 (* [state_step fn s chunk] feeds [chunk] ([[...; bins; frames]], borrowed) and
    is the envelope of exactly its frames. The differences run batched over the

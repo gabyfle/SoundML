@@ -159,11 +159,14 @@ val filterbank : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
 
 val apply : ?norm:norm -> Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [apply c s] is the power spectrum [s] projected onto the pitch classes of
-    [c] — the batched matrix product [filterbank ⋅ s], normalised per frame —
-    mapping [[...; bins; frames]] to [[...; n_chroma; frames]]. Leading axes
+    [c] — the product [filterbank ⋅ s], normalised per frame — mapping
+    [[...; bins; frames]] to [[...; n_chroma; frames]]. Leading axes
     broadcast, so a batch of spectrograms is one call. [norm] defaults to
-    [`Inf]. The product is computed in double precision against the
-    config-owned matrix and rounded to the dtype of [s] once, at the boundary.
+    [`Inf]. The product and the norm are computed in double precision and
+    rounded to the dtype of [s] once, at the boundary. Both add their terms
+    in a fixed ascending order, so a frame's chroma is the same bits alone or
+    among others; columns outside a row's nonzero range contribute nothing,
+    even where [s] is not finite.
 
     Raises [Invalid_argument] if [s] has rank below two, if its
     second-to-last axis does not hold [Config.bins c] bins, or if [norm] is
@@ -198,7 +201,8 @@ val of_cqt :
     {!Cqt.power_spectrum}[ ~power:1.] — folded onto pitch classes and
     normalised per frame, mapping [[...; n_bins; frames]] to
     [[...; n_chroma; frames]]. [n_chroma] defaults to [12] and [norm] to
-    [`Inf].
+    [`Inf]. As in {!apply}, the fold and the norm add their terms in a fixed
+    order, so a frame's chroma does not depend on its batch.
 
     Raises [Invalid_argument] if [m] has rank below two, if its
     second-to-last axis does not hold [Cqt.Config.n_bins c] bins, if

@@ -117,13 +117,13 @@ let count_frames ~frame_length ~hop n =
 (* {1 The per-frame reductions}
 
    Each reduction maps a framed block [[...; frame_length; count]], already cast
-   to double, to its per-frame values [[...; 1; count]] — one batched Nx
-   expression, no frame loop. *)
+   to double, to its per-frame values [[...; 1; count]] — one batched
+   expression, no frame loop. Sums run in {!Ordered}'s fixed association, so a
+   frame's value is the same bits whatever the number of frames in its block. *)
 
 (* [reduce_rms patches] is the root of the mean square over the frame axis: the
    mean of the squared samples first, then the root. *)
-let reduce_rms patches =
-  Nx.sqrt (Nx.mean ~axes:[-2] ~keepdims:true (Nx.square patches))
+let reduce_rms patches = Nx.sqrt (Ordered.mean (Nx.square patches))
 
 (* [reduce_zcr ~frame_length ~threshold patches] is the fraction of
    consecutive-sample sign changes per frame. Values in [-threshold, threshold]
@@ -407,10 +407,7 @@ let rms_of_spectrogram ?(frame_length = 2048) s =
   weights.(0) <- 0.5 ;
   if frame_length mod 2 = 0 then weights.(bins - 1) <- 0.5 ;
   let weights = Nx.create Nx.float64 [|bins; 1|] weights in
-  let power =
-    Nx.sum ~axes:[-2] ~keepdims:true
-      (Nx.mul (Nx.square (Nx.cast Nx.float64 s)) weights)
-  in
+  let power = Ordered.sum (Nx.mul (Nx.square (Nx.cast Nx.float64 s)) weights) in
   let power =
     Nx.div_s (Nx.mul_s power 2.)
       (Float.of_int frame_length *. Float.of_int frame_length)

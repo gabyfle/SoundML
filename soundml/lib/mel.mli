@@ -23,9 +23,9 @@
 
     A {!Config.t} fixes the filterbank geometry once and precomputes the
     triangular weight matrix at creation, in double precision; {!apply}
-    projects a power spectrum onto the mel bands as one batched matrix
-    product, and {!stage} is the same projection as a memoryless {!Pipeline}
-    stage consuming {!Stft.power_stage} output.
+    projects a power spectrum onto the mel bands, each band adding its bins in
+    a fixed order, and {!stage} is the same projection as a memoryless
+    {!Pipeline} stage consuming {!Stft.power_stage} output.
 
     The weights follow librosa 1.0 ([librosa.filters.mel]): [n_mels]
     triangular filters with breakpoints equally spaced on the mel scale
@@ -118,16 +118,20 @@ val filterbank : (float, 'a) Nx.dtype -> Config.t -> (float, 'a) Nx.t
     The matrix is precomputed once, in double precision, inside
     {!Config.create}; every call returns the config-owned matrix cast to
     [dtype] (the matrix itself at float64). Tensors are immutable, so no
-    caller can affect [c] or any other caller through the result. Kernels use
-    the config-owned matrix internally without copying. *)
+    caller can affect [c] or any other caller through the result. *)
 
 val apply : Config.t -> (float, 'a) Nx.t -> (float, 'a) Nx.t
 (** [apply c s] is the power spectrum [s] projected onto the mel bands of
-    [c] — the batched matrix product [filterbank ⋅ s] — mapping
-    [[...; bins; frames]] to [[...; n_mels; frames]]. Leading axes
-    broadcast, so a batch of spectrograms is one call. The product is
-    computed in double precision against the config-owned matrix and
-    rounded to the dtype of [s] once, at the boundary.
+    [c] — the product [filterbank ⋅ s] — mapping [[...; bins; frames]] to
+    [[...; n_mels; frames]]. Leading axes broadcast, so a batch of
+    spectrograms is one call. The product is computed in double precision
+    and rounded to the dtype of [s] once, at the boundary.
+
+    Each output adds its filter's bins one at a time in ascending order, so a
+    frame projects to the same bits alone or among any number of others:
+    {!stage} agrees with [apply] on every chunking, at every dtype. Bins
+    outside a filter's support contribute nothing, even where [s] is not
+    finite — the one way the result departs from a dense product.
 
     Raises [Invalid_argument] if [s] has rank below two or if its
     second-to-last axis does not hold [Config.bins c] bins. *)

@@ -143,16 +143,30 @@ let isolation_tests =
 (* {2 apply: shapes, broadcast, preconditions} *)
 
 let apply_tests =
-  [ test "apply is the filterbank matmul" (fun () ->
+  [ test "apply is the filterbank product, folded in ascending bins" (fun () ->
+        (* The reference adds every bin, zero weights included: a zero weight
+           times a finite value is a signed zero, which leaves a running sum
+           unchanged, so it equals the support-only fold bit for bit. *)
         let c = mel_config () in
-        let bins = Mel.Config.bins c in
+        let bins = Mel.Config.bins c and n_mels = Mel.Config.n_mels c in
+        let frames = 7 in
         let s =
-          Nx.init Nx.float64 [|bins; 7|] (fun i ->
-              Float.sin (0.31 *. Float.of_int ((i.(0) * 7) + i.(1))) )
+          Nx.init Nx.float64 [|bins; frames|] (fun i ->
+              Float.sin (0.31 *. Float.of_int ((i.(0) * frames) + i.(1))) )
         in
-        equal ~msg:"one batched matmul" farray
-          (Nx.to_array (Nx.matmul (Mel.filterbank Nx.float64 c) s))
-          (Nx.to_array (Mel.apply c s)) )
+        let w = Nx.to_array (Mel.filterbank Nx.float64 c)
+        and v = Nx.to_array s in
+        let expected =
+          Array.init (n_mels * frames) (fun o ->
+              let m = o / frames and t = o mod frames in
+              let acc = ref 0. in
+              for j = 0 to bins - 1 do
+                acc := !acc +. (w.((m * bins) + j) *. v.((j * frames) + t))
+              done ;
+              Int64.bits_of_float !acc )
+        in
+        equal ~msg:"the ascending fold" (array int64) expected
+          (Array.map Int64.bits_of_float (Nx.to_array (Mel.apply c s))) )
   ; test "leading axes broadcast" (fun () ->
         let c = mel_config () in
         let bins = Mel.Config.bins c in
