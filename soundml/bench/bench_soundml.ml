@@ -136,7 +136,7 @@ let istft_stream_benchmarks () =
         if off >= frames then []
         else
           let stop = min frames (off + cadence) in
-          Nx.shrink [|(0, Nx.dim 0 z32); (off, stop)|] z32 :: cut stop
+          Nx.slice [Nx.R (0, Nx.dim 0 z32); Nx.R (off, stop)] z32 :: cut stop
       in
       cut 0
     in
@@ -272,7 +272,7 @@ let cqt_stream_benchmarks () =
         if off >= n_audio then []
         else
           let stop = min n_audio (off + max_chunk) in
-          Nx.shrink [|(off, stop)|] clip :: cut stop
+          Nx.slice [Nx.R (off, stop)] clip :: cut stop
       in
       cut 0
     in
@@ -378,7 +378,7 @@ let resample_stream_benchmarks () =
             if off >= sample_rate then []
             else
               let stop = min sample_rate (off + max_chunk) in
-              Nx.shrink [|(off, stop)|] clip :: cut stop
+              Nx.slice [Nx.R (off, stop)] clip :: cut stop
           in
           cut 0
         in

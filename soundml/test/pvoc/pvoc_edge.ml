@@ -162,7 +162,7 @@ let batch_tests =
               ~msg:(Printf.sprintf "row %d" i)
               float_exact 0.
               (deviation
-                 ( Nx.shrink [|(i, i + 1); (0, Nx.dim 1 stretched)|] stretched
+                 ( Nx.slice [Nx.R (i, i + 1); Nx.R (0, Nx.dim 1 stretched)] stretched
                  |> Nx.reshape [|Nx.dim 1 stretched|] )
                  alone ) )
           rows ) ]
@@ -218,7 +218,7 @@ let semitone_tests =
         let x = Pvoc_signals.tone ~f0:440. (2 * sample_rate) in
         let y = Effects.pitch_shift c ~ratio:(Effects.semitones 12.) x in
         let n = Nx.dim 0 y in
-        let trimmed = Nx.shrink [|(4096, n - 4096)|] y in
+        let trimmed = Nx.slice [Nx.R (4096, n - 4096)] y in
         let magnitudes =
           Nx.magnitude Nx.float64 (Nx.rfft Nx.complex128 trimmed)
         in

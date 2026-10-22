@@ -207,7 +207,7 @@ let channel_tests =
         let yb = Resample.apply cfg (Nx.create Nx.float64 [|n|] b) in
         let out = Nx.dim 1 y in
         equal ~msg:"stereo shape" (array int) [|2; out|] (Nx.shape y) ;
-        let row i = Nx.shrink [|(i, i + 1); (0, out)|] y in
+        let row i = Nx.slice [Nx.R (i, i + 1); Nx.R (0, out)] y in
         if bits ya <> bits (row 0) then fail "channel 0 diverges" ;
         if bits yb <> bits (row 1) then fail "channel 1 diverges" )
   ; test "leading axes broadcast: a batch is one call" (fun () ->
@@ -229,8 +229,8 @@ let channel_tests =
           let expected = bits (Resample.apply cfg clip) in
           let got =
             bits
-              (Nx.shrink
-                 [|(c / 2, (c / 2) + 1); (c mod 2, (c mod 2) + 1); (0, out)|]
+              (Nx.slice
+                 [Nx.R (c / 2, (c / 2) + 1); Nx.R (c mod 2, (c mod 2) + 1); Nx.R (0, out)]
                  y )
           in
           if expected <> got then failf "clip %d diverges" c
@@ -250,9 +250,9 @@ let channel_tests =
           Resample.Kernel.prepare cfg Nx.float64 ~channels:2 ~max_block:100
         in
         let chunks =
-          [ Nx.shrink [|(0, 2); (0, 100)|] stereo
-          ; Nx.shrink [|(0, 2); (100, 177)|] stereo
-          ; Nx.shrink [|(0, 2); (177, 256)|] stereo ]
+          [ Nx.slice [Nx.R (0, 2); Nx.R (0, 100)] stereo
+          ; Nx.slice [Nx.R (0, 2); Nx.R (100, 177)] stereo
+          ; Nx.slice [Nx.R (0, 2); Nx.R (177, 256)] stereo ]
         in
         let stepped = List.filter_map (Resample.Kernel.step k) chunks in
         let outs = stepped @ Option.to_list (Resample.Kernel.flush k) in

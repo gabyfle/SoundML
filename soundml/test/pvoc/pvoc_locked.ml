@@ -86,15 +86,14 @@ let frobenius z =
 
 let leading_frames t frames =
   let rank = Nx.ndim t in
-  Nx.shrink
-    (Array.init rank (fun i ->
-         if i = rank - 1 then (0, frames) else (0, Nx.dim i t) ) )
+  Nx.slice
+    (List.init rank (fun i -> if i = rank - 1 then Nx.R (0, frames) else Nx.A))
     t
 
 (* [measure c ~rate ~phase x] is the consistency of the stretched spectrum in
    decibels and the energy its synthesis retains, as a fraction of the input's.
    The default synthesis length re-analyses to the frame count of [Y], so the
-   two spectra line up frame for frame; the shrink guards the geometries where
+   two spectra line up frame for frame; the slice guards the geometries where
    the last frame is a boundary frame. *)
 let measure c ~rate ~phase x =
   let spectrum = Stft.transform Nx.complex128 c x in
@@ -214,7 +213,7 @@ let tone_tests =
               let evaluate phase =
                 let y = Effects.time_stretch ~phase c ~rate x in
                 let n = Nx.dim 0 y in
-                partial (Nx.shrink [|(4096, n - 4096)|] y) ~f0
+                partial (Nx.slice [Nx.R (4096, n - 4096)] y) ~f0
               in
               let naive_cents, naive_floor = evaluate `Independent in
               let locked_cents, locked_floor = evaluate `Locked in
