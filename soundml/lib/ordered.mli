@@ -34,7 +34,9 @@
     Every function reduces the second-to-last axis of a [[...; k; n]] tensor,
     the bin axis of the library's spectral layout, and maps the leading axes
     independently. Operands are read in place when they lie in C order (a
-    contiguous copy otherwise); results are fresh. *)
+    contiguous copy otherwise); results are fresh. The work is spread over
+    domains by {!Par}, by planes and column tiles, which never changes an
+    output's terms or their order. *)
 
 val sum : (float, Nx.float64_elt) Nx.t -> (float, Nx.float64_elt) Nx.t
 (** [sum x] is [x] summed along its second-to-last axis, kept with size [1]:
@@ -72,8 +74,7 @@ val rows : matrix -> int
 val columns : matrix -> int
 (** [columns w] is [k], the number of columns of [w]. *)
 
-val project :
-  matrix -> (float, Nx.float64_elt) Nx.t -> (float, Nx.float64_elt) Nx.t
+val project : matrix -> (float, 'a) Nx.t -> (float, Nx.float64_elt) Nx.t
 (** [project w x] is the product of [w] with [x], [[...; k; n]] to
     [[...; m; n]]: output [(i, t)] of a plane is [0.] plus
     [w.(i, j) *. x.(j, t)] added in ascending [j] over the columns between row
@@ -81,5 +82,15 @@ val project :
     nothing, even where [x] is not finite: that is the only way the result
     departs from the dense product.
 
+    [x] may have any float dtype: float32 and float64 are read in place,
+    other dtypes are widened to float64 first.
+
     Raises [Invalid_argument] if [x] has rank below [2] or its second-to-last
     axis is not [k] long. *)
+
+val project_cast : matrix -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [project_cast w x] is [Nx.cast (Nx.dtype x) (project w x)], each output
+    rounded once from its double-precision fold, without the float64
+    intermediate when [x] is float32 or float64.
+
+    Raises [Invalid_argument] as {!project} does. *)

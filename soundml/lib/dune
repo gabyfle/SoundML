@@ -18,13 +18,11 @@
   contrast
   onset
   hpss
-  ordered)
+  ordered
+  par
+  loops
+  store)
  (foreign_stubs
   (language c)
   (names resample_stubs))
- (foreign_stubs
-  (language c)
-  (names ordered_stubs)
-  (flags
-   (:standard -O3 -ffp-contract=off)))
  (libraries nx rig))

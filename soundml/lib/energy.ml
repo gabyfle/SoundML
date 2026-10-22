@@ -26,11 +26,11 @@
    The framing geometry centers the signal by [frame_length / 2] positions of
    boundary extension on each side — constant zeros for [rms], edge copies for
    [zero_crossing_rate], the fixed choices of the module's parity contract (see
-   the interface) — and frames advance by [hop] over the padded stream. Framing
-   goes through [Nx.extract_patches] in bounded blocks, exactly as [Stft] (see
-   the header note there): the framed signal is never materialized whole, and
-   per-frame work never routes through per-frame Nx calls. The interior is
-   double precision with one cast at the boundary.
+   the interface) — and frames advance by [hop] over the padded stream. The
+   frames are read in place by one fused loop per feature ({!Loops.energy}): the
+   framed signal is never materialized, and per-frame work never routes through
+   per-frame Nx calls. The interior is double precision with one rounding at the
+   boundary.
 
    The streaming state below is the [Stft] framing carry re-instantiated for the
    boundary modes these features need. Both are computable from one sample — a
@@ -54,12 +54,6 @@ let shrink_last t start stop =
   let nd = Nx.ndim t in
   Nx.slice
     (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
-    t
-
-let shrink_frame_axis t start stop =
-  let nd = Nx.ndim t in
-  Nx.slice
-    (List.init nd (fun i -> if i = nd - 2 then Nx.R (start, stop) else Nx.A))
     t
 
 let concat_last parts = Nx.concatenate ~axis:(-1) parts
@@ -114,70 +108,16 @@ let count_frames ~frame_length ~hop n =
     let padded = n + (2 * (frame_length / 2)) in
     if padded < frame_length then 0 else 1 + ((padded - frame_length) / hop)
 
-(* {1 The per-frame reductions}
+(* {1 The batched frame computation}
 
-   Each reduction maps a framed block [[...; frame_length; count]], already cast
-   to double, to its per-frame values [[...; 1; count]] — one batched
-   expression, no frame loop. Sums run in {!Ordered}'s fixed association, so a
-   frame's value is the same bits whatever the number of frames in its block. *)
-
-(* [reduce_rms patches] is the root of the mean square over the frame axis: the
-   mean of the squared samples first, then the root. *)
-let reduce_rms patches = Nx.sqrt (Ordered.mean (Nx.square patches))
-
-(* [reduce_zcr ~frame_length ~threshold patches] is the fraction of
-   consecutive-sample sign changes per frame. Values in [-threshold, threshold]
-   clamp to positive zero before signs are compared, so a sample is negative iff
-   it lies strictly below [-threshold]; the first frame position carries no
-   crossing, and the count is averaged over [frame_length]. *)
-let reduce_zcr ~frame_length ~threshold patches =
-  if frame_length = 1 then Nx.zeros Nx.float64 (Nx.shape patches)
-  else
-    let negative = Nx.less_s patches (-.threshold) in
-    let crossings =
-      Nx.cast Nx.float64
-        (Nx.not_equal
-           (shrink_frame_axis negative 1 frame_length)
-           (shrink_frame_axis negative 0 (frame_length - 1)) )
-    in
-    Nx.div_s
-      (Nx.sum ~axes:[-2] ~keepdims:true crossings)
-      (Float.of_int frame_length)
-
-(* {1 The batched frame computation} *)
-
-(* Upper bound on the framed scratch materialized per reduction call, in
-   scalars; framing is blocked to this budget because each block is gathered
-   rather than viewed, so the budget caps the transient. *)
-let block_elements = 65536
-
-(* [analyse ~frame_length ~hop ~reduce samples count] is frames [0, count) of
-   the padded-stream segment [samples], shaped [[...; 1; count]] in the dtype of
+   [analyse ~frame_length ~hop ~kind samples count] is frames [0, count) of the
+   padded-stream segment [samples], shaped [[...; 1; count]] in the dtype of
    [samples]; [samples] must span at least [(count - 1) * hop + frame_length]
-   positions. Each block is one gather ([extract_patches]), one cast to double,
-   one batched reduction and one cast back; frames depend only on their own
-   samples, so blocking is exact. *)
-let analyse ~frame_length ~hop ~reduce samples count =
-  let block = Stdlib.max 1 (block_elements / frame_length) in
-  let rec go p acc =
-    if p >= count then List.rev acc
-    else
-      let nb = Stdlib.min block (count - p) in
-      let seg =
-        shrink_last samples (p * hop) (((p + nb - 1) * hop) + frame_length)
-      in
-      let patches =
-        Nx.extract_patches ~kernel_size:[|frame_length|] ~stride:[|hop|]
-          ~dilation:[|1|]
-          ~padding:[|(0, 0)|]
-          seg
-      in
-      let values =
-        Nx.cast (Nx.dtype samples) (reduce (Nx.cast Nx.float64 patches))
-      in
-      go (p + nb) (values :: acc)
-  in
-  match go 0 [] with [one] -> one | many -> concat_last many
+   positions. The frames are read in place by one fused loop ({!Loops.energy}):
+   each frame's value depends on its own samples alone, in a fixed order, so any
+   partitioning of the stream gives the same bits. *)
+let analyse ~frame_length ~hop ~kind samples count =
+  Loops.energy kind ~frame_length ~hop ~count samples
 
 (* {1 The streaming carry} *)
 
@@ -193,7 +133,7 @@ type 'a state =
   ; hop: int
   ; border: int (* [frame_length / 2] positions on each side *)
   ; pad: [`Zeros | `Edge]
-  ; reduce: (float, Nx.float64_elt) Nx.t -> (float, Nx.float64_elt) Nx.t
+  ; kind: Loops.energy
   ; mutable started: bool
   ; mutable drained: bool
   ; mutable pending_rev: (float, 'a) Nx.t list
@@ -201,12 +141,12 @@ type 'a state =
   ; mutable tail: (float, 'a) Nx.t option
   ; mutable skip: int }
 
-let state_create ~frame_length ~hop pad reduce =
+let state_create ~frame_length ~hop pad kind =
   { frame_length
   ; hop
   ; border= frame_length / 2
   ; pad
-  ; reduce
+  ; kind
   ; started= false
   ; drained= false
   ; pending_rev= []
@@ -241,7 +181,7 @@ let process s extra extra_len =
   else begin
     let parts = List.rev_append s.pending_rev extra in
     let samples = match parts with [one] -> one | many -> concat_last many in
-    let out = analyse ~frame_length:fl ~hop ~reduce:s.reduce samples count in
+    let out = analyse ~frame_length:fl ~hop ~kind:s.kind samples count in
     let next_start = count * hop in
     if next_start >= total then begin
       s.skip <- s.skip + next_start - total ;
@@ -351,38 +291,41 @@ let state_flush s =
 let frameless x count =
   Nx.zeros (Nx.dtype x) (Array.append (leading_shape x) [|1; count|])
 
-(* [run_offline op ~frame_length ~hop pad reduce x] is the one-chunk instance of
-   the streaming carry: step on the whole signal, then flush — the flat function
-   and the stage cannot disagree. *)
-let run_offline op ~frame_length ~hop pad reduce x =
+(* [run_offline op ~frame_length ~hop pad kind x] pads the whole signal once,
+   with the borders the streaming carry installs, and analyses every frame in
+   one call: the frames are those the carry emits on any partitioning, read by
+   the same loop, so the flat function and the stage cannot disagree. *)
+let run_offline op ~frame_length ~hop pad kind x =
   check_frame_length op frame_length ;
   check_hop op hop ;
   check_rank op x ;
   let n = last_dim x in
-  if zero_leading x || n = 0 then
-    frameless x (count_frames ~frame_length ~hop n)
+  let count = count_frames ~frame_length ~hop n in
+  if zero_leading x || count = 0 then frameless x count
   else
-    let s = state_create ~frame_length ~hop pad reduce in
-    (* [@] evaluates its right operand first: sequence step before flush *)
-    let stepped = state_step s x in
-    let drained = state_flush s in
-    match Option.to_list stepped @ Option.to_list drained with
-    | [] ->
-        frameless x 0
-    | [one] ->
-        one
-    | many ->
-        concat_last many
+    let border = frame_length / 2 in
+    let padded =
+      if border = 0 then x
+      else
+        let side at =
+          match pad with
+          | `Zeros ->
+              Nx.zeros (Nx.dtype x) (Array.append (leading_shape x) [|border|])
+          | `Edge ->
+              take_last x (Array.make border at)
+        in
+        concat_last [side 0; x; side (n - 1)]
+    in
+    analyse ~frame_length ~hop ~kind padded count
 
 let rms ?(frame_length = 2048) ?(hop = 512) x =
-  run_offline "rms" ~frame_length ~hop `Zeros reduce_rms x
+  run_offline "rms" ~frame_length ~hop `Zeros Loops.Rms x
 
 let zero_crossing_rate ?(frame_length = 2048) ?(hop = 512) ?(threshold = 1e-10)
     x =
   check_threshold "zero_crossing_rate" threshold ;
   run_offline "zero_crossing_rate" ~frame_length ~hop `Edge
-    (reduce_zcr ~frame_length ~threshold)
-    x
+    (Loops.Zcr threshold) x
 
 (* [rms_of_spectrogram] is the spectrogram-input companion of [rms]: the frame
    power recovered from a magnitude spectrogram by Parseval's identity for the
@@ -471,7 +414,7 @@ type 'a stage_state = {state: 'a state; bound: int option}
    with the stream's own leading axes — offline [frameless] does the same, so
    the two faces agree on an all-empty stream. One stage value is monomorphic in
    its element type, so the shared cell is coherent across prepares. *)
-let feature_stage op ~frame_length ~hop pad reduce =
+let feature_stage op ~frame_length ~hop pad kind =
   let witness = ref None in
   Pipeline.kernel
     ~latency:(stage_latency ~frame_length)
@@ -498,7 +441,7 @@ let feature_stage op ~frame_length ~hop pad reduce =
       | parts ->
           concat_last parts )
     ~prepare:(fun fmt ->
-      { state= state_create ~frame_length ~hop pad reduce
+      { state= state_create ~frame_length ~hop pad kind
       ; bound= threaded_bound ~frame_length ~hop fmt } )
     ~step:(fun s chunk ->
       witness := Some (Nx.dtype chunk, leading_shape chunk) ;
@@ -508,7 +451,7 @@ let feature_stage op ~frame_length ~hop pad reduce =
 let rms_stage ?(frame_length = 2048) ?(hop = 512) () =
   check_frame_length "rms_stage" frame_length ;
   check_hop "rms_stage" hop ;
-  feature_stage "rms_stage" ~frame_length ~hop `Zeros reduce_rms
+  feature_stage "rms_stage" ~frame_length ~hop `Zeros Loops.Rms
 
 let zero_crossing_rate_stage ?(frame_length = 2048) ?(hop = 512)
     ?(threshold = 1e-10) () =
@@ -516,4 +459,4 @@ let zero_crossing_rate_stage ?(frame_length = 2048) ?(hop = 512)
   check_hop "zero_crossing_rate_stage" hop ;
   check_threshold "zero_crossing_rate_stage" threshold ;
   feature_stage "zero_crossing_rate_stage" ~frame_length ~hop `Edge
-    (reduce_zcr ~frame_length ~threshold)
+    (Loops.Zcr threshold)

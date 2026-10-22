@@ -315,7 +315,7 @@ let project op ~mismatch weights s =
     out.(nd - 2) <- Ordered.rows weights ;
     Empty out
   end
-  else Product (Ordered.project weights (Nx.cast Nx.float64 s))
+  else Product (Ordered.project weights s)
 
 let apply ?(norm = `Inf) (c : Config.t) s =
   check_norm "apply" norm ;
