@@ -335,23 +335,23 @@ module Config = struct
             frequency %g)"
            n_bins fmin sample_rate limit freqs.(limit) cutoff nyquist ) ;
     let n_octaves = ceil_div n_bins bins_per_octave in
-    let n_filters = Stdlib.min bins_per_octave n_bins in
+    let n_filters = Int.min bins_per_octave n_bins in
     (* Early decimation drops the rate to just above what the filters need,
        while the hop keeps a factor of two for every remaining octave. *)
     let early =
       let head =
-        Stdlib.max 0
+        Int.max 0
           (Float.to_int (Float.ceil (Float.log2 (nyquist /. cutoff))) - 2)
       in
-      let tail = Stdlib.max 0 (two_factors hop - n_octaves + 1) in
-      Stdlib.min head tail
+      let tail = Int.max 0 (two_factors hop - n_octaves + 1) in
+      Int.min head tail
     in
     let base_rate = sr /. Float.of_int (1 lsl early) in
     let base_hop = hop / (1 lsl early) in
     let rate = ref base_rate and octave_hop = ref base_hop and halved = ref 0 in
     let plan = ref [] in
     for i = 0 to n_octaves - 1 do
-      let first = Stdlib.max 0 (n_bins - (n_filters * (i + 1))) in
+      let first = Int.max 0 (n_bins - (n_filters * (i + 1))) in
       let count = n_bins - (n_filters * i) - first in
       (* the highest centre of the next octave down, which sits just below this
          octave's lowest bin *)
@@ -492,7 +492,7 @@ module Config = struct
 
   let latency t =
     Array.fold_left
-      (fun acc o -> Stdlib.max acc (octave_lookahead t o))
+      (fun acc o -> Int.max acc (octave_lookahead t o))
       0 t.octaves
 
   let pp_gamma fmt = function
@@ -569,7 +569,7 @@ let frames (c : Config.t) ~n =
          n ) ;
   Array.fold_left
     (fun acc (o : Config.octave) ->
-      Stdlib.min acc (Stft.frames o.Config.stft ~n:(octave_length c o ~n)) )
+      Int.min acc (Stft.frames o.Config.stft ~n:(octave_length c o ~n)) )
     max_int c.Config.octaves
 
 (* {1 The transform} *)
@@ -646,7 +646,7 @@ let transform : type c a.
   let count = frames c ~n in
   if Array.exists (fun d -> d = 0) (leading_shape x) || count = 0 then
     Nx.zeros cdtype
-      (Array.append (leading_shape x) [|c.Config.n_bins; Stdlib.max 0 count|])
+      (Array.append (leading_shape x) [|c.Config.n_bins; Int.max 0 count|])
   else begin
     if resamples c then check_resampling_dtype "transform" (Nx.dtype x) ;
     let y = ref x in
@@ -923,9 +923,7 @@ module Kernel = struct
 
   let emit t =
     let gate =
-      Array.fold_left
-        (fun acc os -> Stdlib.min acc os.produced)
-        max_int t.octaves
+      Array.fold_left (fun acc os -> Int.min acc os.produced) max_int t.octaves
     in
     if gate <= t.emitted then None
     else begin

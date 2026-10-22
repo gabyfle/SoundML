@@ -75,7 +75,7 @@ module Config = struct
            "create: cannot use a %d-point window with an FFT of size %d \
             (win_length must lie in [1, fft_size])"
            win_length fft_size ) ;
-    let hop = Option.value hop ~default:(Stdlib.max 1 (fft_size / 4)) in
+    let hop = Option.value hop ~default:(Int.max 1 (fft_size / 4)) in
     if hop < 1 then
       invalid_arg
         (Printf.sprintf
@@ -164,7 +164,7 @@ module Config = struct
      trim wait for the next frame to move it. Both holdbacks are output
      samples. *)
   let synthesis_latency t =
-    left_width t + Stdlib.max 0 (t.hop + right_width t - t.fft_size)
+    left_width t + Int.max 0 (t.hop + right_width t - t.fft_size)
 
   let pp fmt t =
     let alignment =
@@ -246,7 +246,7 @@ let last_complete c ~n =
   if n = 0 then 0
   else
     let reach = n + left_width c - Config.fft_size c in
-    if reach < 0 then 0 else Stdlib.min total ((reach / Config.hop c) + 1)
+    if reach < 0 then 0 else Int.min total ((reach / Config.hop c) + 1)
 
 let check_sample_rate op sample_rate =
   if sample_rate < 1 then
@@ -341,7 +341,7 @@ let pad_signal (c : Config.t) x =
           | `Reflect ->
               reflect_index n q
           | `Edge ->
-              Stdlib.min (n - 1) (Stdlib.max 0 q)
+              Int.min (n - 1) (Int.max 0 q)
         in
         let border width offset =
           if width = 0 then []
@@ -506,7 +506,7 @@ let left_pad s x =
 let install s cdtype x =
   let n = last_dim x in
   if s.right > 0 then begin
-    let keep = Stdlib.min (s.right + 1) n in
+    let keep = Int.min (s.right + 1) n in
     s.tail <- Some (Nx.copy (shrink_last x (n - keep) n))
   end ;
   s.started <- true ;
@@ -528,7 +528,7 @@ let update_tail s chunk =
       match s.tail with None -> chunk | Some t -> concat_last [t; chunk]
     in
     let cm = last_dim combined in
-    let start = Stdlib.max 0 (cm - keep) in
+    let start = Int.max 0 (cm - keep) in
     s.tail <- Some (Nx.copy (shrink_last combined start cm))
 
 (* [right_pad s] is the [right]-position right extension computed from the raw
@@ -842,8 +842,8 @@ let guard v = if v = 0. then 1. else v
    analysis window of [c] as an array. *)
 let partial_envelope (c : Config.t) w ~last q =
   let fft = Config.fft_size c and hop = Config.hop c in
-  let first = Stdlib.max 0 (ceil_div (q - fft + 1) hop) in
-  let last = Stdlib.min last (q / hop) in
+  let first = Int.max 0 (ceil_div (q - fft + 1) hop) in
+  let last = Int.min last (q / hop) in
   let total = ref 0. in
   for p = first to last do
     let j = q - (p * hop) in
@@ -883,7 +883,7 @@ let synthesise_rows (c : Config.t) ?length rows =
     | None ->
         frames
     | Some n ->
-        Stdlib.min frames (ceil_div (n + left) hop)
+        Int.min frames (ceil_div (n + left) hop)
   in
   if count = 0 || out_len = 0 || Array.exists (fun d -> d = 0) lead then
     Nx.zeros Nx.float64 (Array.append lead [|out_len|])
@@ -898,13 +898,13 @@ let synthesise_rows (c : Config.t) ?length rows =
     let span = ((count - 1) * hop) + fft in
     let w = Nx.to_array c.analysis_window in
     let complete = folded_square_window c in
-    let head = Stdlib.min span (fft - hop) in
-    let stop = Stdlib.max head (Stdlib.min span (count * hop)) in
+    let head = Int.min span (fft - hop) in
+    let stop = Int.max head (Int.min span (count * hop)) in
     let period = Float.Array.init hop (fun r -> guard complete.(r)) in
     Loops.overlap_add ~window:c.window_values ~hop ~period
       ~partial:(partial_envelope c w ~last:(count - 1))
       ~head ~stop ~left ~out_len
-      ~valid:(Stdlib.min span (left + out_len) - left)
+      ~valid:(Int.min span (left + out_len) - left)
       (Nx.irfft Nx.float64 ~axis:(-1) ~n:fft rows)
 
 (* [synthesise c ?length z] is {!synthesise_rows} on a spectrum [z] shaped
@@ -1049,11 +1049,11 @@ let synthesis_state_create (c : Config.t) =
   let period = Array.map guard (folded_square_window c) in
   { scfg= c
   ; sleft= left_width c
-  ; shold= Stdlib.max 0 (hop + right_width c - fft)
+  ; shold= Int.max 0 (hop + right_width c - fft)
   ; sblocks= ceil_div fft hop
   ; swindow= w
   ; shead=
-      Array.init (Stdlib.max 0 (fft - hop)) (partial_envelope c w ~last:max_int)
+      Array.init (Int.max 0 (fft - hop)) (partial_envelope c w ~last:max_int)
   ; speriod= period
   ; speriod_t= Nx.create Nx.float64 [|hop|] period
   ; shist= None
@@ -1115,7 +1115,7 @@ let step_envelope s ~start ~count =
   let head = Array.length s.shead in
   let aligned = ceil_div head hop * hop in
   let stop = start + count in
-  let border_stop = Stdlib.min stop aligned in
+  let border_stop = Int.min stop aligned in
   let border =
     if border_stop <= start then []
     else
@@ -1125,7 +1125,7 @@ let step_envelope s ~start ~count =
                let q = start + t in
                if q < head then s.shead.(q) else s.speriod.(q mod hop) ) ) ]
   in
-  let body_start = Stdlib.max start aligned in
+  let body_start = Int.max start aligned in
   let body =
     if stop <= body_start then []
     else
@@ -1138,7 +1138,7 @@ let step_envelope s ~start ~count =
    from the first [release] positions of [stream], and is what the caller
    emits. *)
 let synthesis_release s stream release =
-  let drop = Stdlib.min s.sdrop release in
+  let drop = Int.min s.sdrop release in
   s.sdrop <- s.sdrop - drop ;
   if release - drop = 0 then None else Some (shrink_last stream drop release)
 
@@ -1217,7 +1217,7 @@ let synthesis_flush s =
        that the trailing trim keeps. The holdback is exactly the overshoot of
        one hop past that trim, so at most one of the two is ever nonzero and a
        held tail is a tail the trim discards. *)
-    let cut = Stdlib.max 0 (fft - hop - right_width c) in
+    let cut = Int.max 0 (fft - hop - right_width c) in
     s.scarry <- None ;
     if s.sfed = 0 || cut = 0 then None
     else begin
@@ -1281,7 +1281,7 @@ end
    padding reads the first [fft_size - 1] samples before frame 0 can be
    produced). *)
 let stage_latency (c : Config.t) =
-  Stdlib.max (Config.latency c) (install_threshold c - 1)
+  Int.max (Config.latency c) (install_threshold c - 1)
 
 (* [frame_bound c latency b] is the most frames one [step] or drained tail can
    emit for chunks of at most [b] samples: the withheld [latency] samples plus
@@ -1306,7 +1306,7 @@ let split_frames bound t =
         let rec go start acc =
           if start >= total then List.rev acc
           else
-            let stop = Stdlib.min total (start + bound) in
+            let stop = Int.min total (start + bound) in
             go stop (shrink_last t start stop :: acc)
         in
         go 0 []
@@ -1399,7 +1399,7 @@ let synthesis_stage dtype c =
     let ips = Pipeline.Rate.(Pipeline.Format.items_per_second fmt * rate) in
     let bound =
       Option.map
-        (fun b -> Stdlib.max (b * hop) (fft - hop))
+        (fun b -> Int.max (b * hop) (fft - hop))
         (Pipeline.Format.max_items fmt)
     in
     fmt

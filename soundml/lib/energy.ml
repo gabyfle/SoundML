@@ -400,7 +400,7 @@ let split_frames bound t =
         let rec go start acc =
           if start >= total then List.rev acc
           else
-            let stop = Stdlib.min total (start + bound) in
+            let stop = Int.min total (start + bound) in
             go stop (shrink_last t start stop :: acc)
         in
         go 0 []

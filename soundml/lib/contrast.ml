@@ -126,7 +126,7 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
     let hi = if k = n_bands then bins - 1 else !hi0 in
     let count = hi - lo + 1 in
     let take =
-      Stdlib.max 1 (Float.to_int (rint (quantile *. Float.of_int count)))
+      Int.max 1 (Float.to_int (rint (quantile *. Float.of_int count)))
     in
     let sub_len = (if k = n_bands then hi else hi - 1) - lo + 1 in
     if sub_len < 1 then
@@ -136,7 +136,7 @@ let plan ~fn ~clamped ~n_bands ~f_min ~quantile ~linear ~sample_rate ~fft_size =
             %d at a sample rate of %d Hz (the band spans no FFT bin below its \
             top edge; raise fft_size or lower n_bands)"
            fn f_low f_high fft_size sample_rate ) ;
-    {lo; sub_len; take= Stdlib.min take sub_len}
+    {lo; sub_len; take= Int.min take sub_len}
   in
   let rec bands k = if k > n_bands then [] else band k :: bands (k + 1) in
   {fft_size; bins; n_bands; linear; clamped; bands= bands 0}

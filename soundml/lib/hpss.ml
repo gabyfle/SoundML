@@ -254,7 +254,7 @@ let median_cols_f32
    the medians are those one domain computes. *)
 
 (* About 64 Ksteps of window update per chunk. *)
-let grain_lanes ~length = Stdlib.max 1 (65_536 / Stdlib.max 1 length)
+let grain_lanes ~length = Int.max 1 (65_536 / Int.max 1 length)
 
 let median_time : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
  fun s ~k ->
@@ -291,7 +291,7 @@ let median_freq : type a. (float, a) Nx.t -> k:int -> (float, a) Nx.t =
           let u = ref lo in
           while !u < hi do
             let plane = !u / cols in
-            let stop = Stdlib.min hi ((plane + 1) * cols) in
+            let stop = Int.min hi ((plane + 1) * cols) in
             run plane (!u - (plane * cols)) (stop - (plane * cols)) ;
             u := stop
           done )
