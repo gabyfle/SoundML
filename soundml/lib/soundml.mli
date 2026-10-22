@@ -68,8 +68,9 @@ module Cqt = Cqt
 
 (** Chroma (pitch-class) projections: the Gaussian-bump matrix precomputed by
     {!Chroma.Config} for linear-frequency spectra, the exact 0/1
-    {!Chroma.cqt_projection} for constant-Q bins, and the per-frame
-    normalisation both share. *)
+    {!Chroma.cqt_projection} for constant-Q bins, the per-frame
+    normalisation both share, and the memoryless {!Chroma.stage} and
+    {!Chroma.of_cqt_stage} streaming each projection. *)
 module Chroma = Chroma
 
 (** Sample-rate conversion: one exact-rational polyphase resampler behind the
@@ -133,6 +134,34 @@ val mfcc :
     Raises [Invalid_argument] if the configurations disagree on [fft_size],
     if [n_mfcc] does not lie in [\[1, n_mels\]], if [lifter] is not finite
     and non-negative, or if [x] has rank zero. *)
+
+val mfcc_stage :
+     Mel.Config.t
+  -> ?n_mfcc:int
+  -> ?lifter:float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [mfcc_stage mel ()] is {!mfcc}'s cepstrum as a memoryless pipeline
+    stage: rate 1:1 in frames, latency zero and format-preserving. It consumes
+    mel power-spectrum chunks — compose
+    [Stft.power_stage s >> Mel.stage mel >> mfcc_stage mel ()] for the
+    streaming form of [mfcc s mel] — mapping [[...; n_mels; frames]] to
+    [[...; n_mfcc; frames]]; an empty chunk maps to an empty chunk.
+    [n_mfcc] and [lifter] are those of {!mfcc}, validated when the stage is
+    built, and every partitioning of a mel spectrogram yields the same bits.
+
+    The stage computes {!mfcc}'s interior exactly — the log-mel with
+    reference [1.] and floor [1e-10], the orthonormal DCT, the liftering, all
+    in double precision and rounded once — with one documented deviation: it
+    omits the 80 dB dynamic-range clamp, which sits under the whole signal's
+    maximum and is a reduction no per-frame stage can compute. The chain is
+    therefore bit-identical to {!mfcc} wherever the clamp does not bind.
+
+    Raises [Invalid_argument] if [n_mfcc] does not lie in
+    [\[1, Mel.Config.n_mels mel\]] or if [lifter] is not finite and
+    non-negative. The stream {!Pipeline.Format} does not carry a band count,
+    so a chunk whose mel axis is not [n_mels] long is reported at that chunk,
+    not at prepare time. *)
 
 val chroma_stft :
      Stft.Config.t

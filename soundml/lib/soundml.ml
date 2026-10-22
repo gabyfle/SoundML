@@ -46,52 +46,87 @@ let shrink_mel_axis n_mfcc t =
     (List.init nd (fun i -> if i = nd - 2 then Nx.R (0, n_mfcc) else Nx.A))
     t
 
-let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
-  check_fft_sizes "mfcc" stft_config mel_config ;
-  let n_mels = Mel.Config.n_mels mel_config in
+let check_mfcc op ~n_mels ~n_mfcc lifter =
   if n_mfcc < 1 || n_mfcc > n_mels then
     invalid_arg
       (Printf.sprintf
-         "mfcc: cannot keep %d cepstral coefficients of %d mel bands (n_mfcc \
+         "%s: cannot keep %d cepstral coefficients of %d mel bands (n_mfcc \
           must lie in [1, n_mels])"
-         n_mfcc n_mels ) ;
+         op n_mfcc n_mels ) ;
   Option.iter
     (fun l ->
       if not (Float.is_finite l && l >= 0.) then
         invalid_arg
           (Printf.sprintf
-             "mfcc: cannot lifter with a coefficient of %g (lifter must be \
+             "%s: cannot lifter with a coefficient of %g (lifter must be \
               finite and non-negative)"
-             l ) )
-    lifter ;
+             op l ) )
+    lifter
+
+(* [cepstrum ~n_mels ~n_mfcc lifter db] is the double-precision log-mel [db]
+   through the raw type-II DCT along its mel axis, the first [n_mfcc] rows kept,
+   the orthonormal row scaling and the optional liftering. The DCT transforms
+   each frame's mel column on its own, so a frame's cepstrum does not depend on
+   how many frames share the call — which {!mfcc_stage} relies on, and its law
+   tests pin. *)
+let cepstrum ~n_mels ~n_mfcc lifter db =
+  let cepstrum =
+    Nx.mul
+      (shrink_mel_axis n_mfcc (Nx.dct ~type_:2 ~axis:(-2) db))
+      (dct_ortho_scales n_mels n_mfcc)
+  in
+  match lifter with
+  | Some l when l > 0. ->
+      Nx.mul cepstrum (lifter_weights l n_mfcc)
+  | Some _ | None ->
+      cepstrum
+
+(* [empty_cepstrum dtype ~n_mfcc mel] is the broadcast-consistent result for a
+   mel spectrogram with no frames or no signals: nothing to transform. *)
+let empty_cepstrum dtype ~n_mfcc mel =
+  let out = Array.copy (Nx.shape mel) in
+  out.(Array.length out - 2) <- n_mfcc ;
+  Nx.zeros dtype out
+
+let mfcc stft_config mel_config ?(n_mfcc = 20) ?lifter x =
+  check_fft_sizes "mfcc" stft_config mel_config ;
+  let n_mels = Mel.Config.n_mels mel_config in
+  check_mfcc "mfcc" ~n_mels ~n_mfcc lifter ;
   let mel = mel_spectrogram stft_config mel_config x in
   let dtype = Nx.dtype x in
-  if Nx.numel mel = 0 then begin
-    (* No frames, or no signals at all: nothing to transform — produce the
-       broadcast-consistent empty cepstrum directly. *)
-    let out = Array.copy (Nx.shape mel) in
-    out.(Array.length out - 2) <- n_mfcc ;
-    Nx.zeros dtype out
-  end
+  if Nx.numel mel = 0 then empty_cepstrum dtype ~n_mfcc mel
   else
     (* The interior runs in double: the log-mel spectrogram ([power_to_db] with
-       the 80 dB dynamic-range clamp the parity contract fixes), the raw type-II
-       DCT along the mel axis, the orthonormal row scaling, then one rounding at
-       the boundary. *)
+       the 80 dB dynamic-range clamp the parity contract fixes), the cepstrum,
+       then one rounding at the boundary. *)
     let db = Convert.power_to_db ~top_db:80. (Nx.cast Nx.float64 mel) in
-    let cepstrum =
-      Nx.mul
-        (shrink_mel_axis n_mfcc (Nx.dct ~type_:2 ~axis:(-2) db))
-        (dct_ortho_scales n_mels n_mfcc)
-    in
-    let cepstrum =
-      match lifter with
-      | Some l when l > 0. ->
-          Nx.mul cepstrum (lifter_weights l n_mfcc)
-      | Some _ | None ->
-          cepstrum
-    in
-    Nx.cast dtype cepstrum
+    Nx.cast dtype (cepstrum ~n_mels ~n_mfcc lifter db)
+
+(* The stage is [mfcc]'s interior on each mel chunk, without the clamp: the 80
+   dB floor sits under the whole signal's maximum, which no chunk can see. *)
+let mfcc_stage mel_config ?(n_mfcc = 20) ?lifter () =
+  let n_mels = Mel.Config.n_mels mel_config in
+  check_mfcc "mfcc_stage" ~n_mels ~n_mfcc lifter ;
+  Pipeline.stateless (fun mel ->
+      let nd = Nx.ndim mel in
+      if nd < 2 then
+        invalid_arg
+          (Printf.sprintf
+             "mfcc_stage: cannot transform a rank-%d chunk (the stage needs \
+              [...; n_mels; frames])"
+             nd ) ;
+      let bands = Nx.dim (nd - 2) mel in
+      if bands <> n_mels then
+        invalid_arg
+          (Printf.sprintf
+             "mfcc_stage: cannot transform %d mel bands with a stage built for \
+              %d"
+             bands n_mels ) ;
+      let dtype = Nx.dtype mel in
+      if Nx.numel mel = 0 then empty_cepstrum dtype ~n_mfcc mel
+      else
+        let db = Convert.power_to_db (Nx.cast Nx.float64 mel) in
+        Nx.cast dtype (cepstrum ~n_mels ~n_mfcc lifter db) )
 
 let chroma_stft stft_config chroma_config ?(power = 2.) ?norm x =
   let stft_size = Stft.Config.fft_size stft_config in

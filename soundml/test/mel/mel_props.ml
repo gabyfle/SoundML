@@ -3,7 +3,8 @@
    pp/equal, the isolation of the config behind [filterbank], the shape and
    broadcast behavior of [apply], and the flat features' own preconditions — the
    fft_size agreement naming both sizes, the [n_mfcc] range, the lifter domain,
-   and the zero-lifter equivalence. *)
+   and the zero-lifter equivalence — and [mfcc_stage]'s, at construction and at
+   the chunk. *)
 
 open Windtrap
 open Soundml
@@ -262,6 +263,37 @@ let feature_tests =
             ignore
               (mfcc (stft8 ()) (mel8 ()) ~n_mfcc:3 ~lifter:(-1.)
                  (Nx.zeros Nx.float64 [|32|]) ) ) )
+  ; test "mfcc_stage validates n_mfcc and the lifter when built" (fun () ->
+        raises ~msg:"too many coefficients"
+          (Invalid_argument
+             "mfcc_stage: cannot keep 4 cepstral coefficients of 3 mel bands \
+              (n_mfcc must lie in [1, n_mels])" ) (fun () ->
+            ignore (mfcc_stage (mel8 ()) ~n_mfcc:4 ()) ) ;
+        raises ~msg:"negative lifter"
+          (Invalid_argument
+             "mfcc_stage: cannot lifter with a coefficient of -1 (lifter must \
+              be finite and non-negative)" ) (fun () ->
+            ignore (mfcc_stage (mel8 ()) ~n_mfcc:3 ~lifter:(-1.) ()) ) )
+  ; test "mfcc_stage reports a malformed chunk when it arrives" (fun () ->
+        let push chunk =
+          let s =
+            Pipeline.Stream.prepare
+              (mfcc_stage (mel8 ()) ~n_mfcc:3 ())
+              ~source:
+                (Pipeline.Format.audio Nx.float64 ~sample_rate:1000 ~channels:1)
+              ~max_chunk:4
+          in
+          ignore (Pipeline.Stream.push s chunk)
+        in
+        raises ~msg:"four bands"
+          (Invalid_argument
+             "mfcc_stage: cannot transform 4 mel bands with a stage built for 3"
+          ) (fun () -> push (Nx.ones Nx.float64 [|4; 2|]) ) ;
+        raises ~msg:"rank one"
+          (Invalid_argument
+             "mfcc_stage: cannot transform a rank-1 chunk (the stage needs \
+              [...; n_mels; frames])" ) (fun () ->
+            push (Nx.ones Nx.float64 [|3|]) ) )
   ; test "a zero lifter is no liftering" (fun () ->
         let x = Nx.create Nx.float64 [|41|] (signal 41) in
         equal ~msg:"lifter 0 = absent" farray
