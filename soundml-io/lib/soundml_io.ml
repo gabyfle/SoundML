@@ -552,8 +552,8 @@ let decode_block_frames ~channels ~elt ~advertised =
 
 (* A kernel output not yet delivered: [plen] frames, planar with channel stride
    [plen], the leading [poff] already served. [pt] is C-contiguous, so serving
-   reads its own storage in place, and the unknown-length path concatenates
-   the tensors directly. *)
+   reads its own storage in place, and the unknown-length path concatenates the
+   tensors directly. *)
 type 'a piece = {pt: (float, 'a) Nx.t; plen: int; mutable poff: int}
 
 type 'a resampler =
@@ -722,7 +722,9 @@ let serve_from_carry st ~dst_ba ~dst_total ~dst_off ~n =
         for c = 0 to st.channels_out - 1 do
           Bigarray.Array1.blit
             (Bigarray.Array1.sub pba ((c * p.plen) + p.poff) k)
-            (Bigarray.Array1.sub dst_ba ((c * dst_total) + dst_off + !written) k)
+            (Bigarray.Array1.sub dst_ba
+               ((c * dst_total) + dst_off + !written)
+               k )
         done ) ;
     p.poff <- p.poff + k ;
     if p.poff = p.plen then ignore (Queue.pop st.carry) ;
@@ -835,8 +837,8 @@ let chunk_destination (type a) (st : a state) ~frames (lent : a lent option) =
       let a = array1 st.kind (st.channels_out * frames) in
       (a, fun () -> tensor_of a [|st.channels_out; frames|])
 
-(* The native chunk: decode straight into the destination — zero copies on
-   mono; one staged pass otherwise. *)
+(* The native chunk: decode straight into the destination — zero copies on mono;
+   one staged pass otherwise. *)
 let read_chunk_native (type a) (st : a state) ~frames lent :
     ((float, a) Nx.t option, error) result =
   let advertised = st.native.Info.frames in
@@ -853,7 +855,9 @@ let read_chunk_native (type a) (st : a state) ~frames lent :
   end
   else begin
     let dst_ba, chunk = chunk_destination st ~frames lent in
-    let view n = shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n in
+    let view n =
+      shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n
+    in
     let got, err, details =
       stub_readf st.handle dst_ba st.mode 0 frames want st.channels
     in
@@ -907,8 +911,7 @@ let read_chunk_resampled (type a) (st : a state) rs ~frames lent :
         let frames = if Option.is_some lent then frames else n in
         let dst_ba, chunk = chunk_destination st ~frames lent in
         serve_from_carry st ~dst_ba ~dst_total:frames ~dst_off:0 ~n ;
-        Ok
-          (Some (shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n))
+        Ok (Some (shrink_frames (chunk ()) ~channels:st.channels_out ~frames ~n))
       end
 
 let read_chunk st ?lent ~frames () =
@@ -1164,8 +1167,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                     assert (st.out_served = total_out) ;
                     finish
                       (Ok
-                         { data=
-                             tensor_of dst_ba [|st.channels_out; total_out|]
+                         { data= tensor_of dst_ba [|st.channels_out; total_out|]
                          ; sample_rate= st.target_rate } )
               end
             end

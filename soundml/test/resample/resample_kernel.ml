@@ -230,7 +230,9 @@ let channel_tests =
           let got =
             bits
               (Nx.slice
-                 [Nx.R (c / 2, (c / 2) + 1); Nx.R (c mod 2, (c mod 2) + 1); Nx.R (0, out)]
+                 [ Nx.R (c / 2, (c / 2) + 1)
+                 ; Nx.R (c mod 2, (c mod 2) + 1)
+                 ; Nx.R (0, out) ]
                  y )
           in
           if expected <> got then failf "clip %d diverges" c

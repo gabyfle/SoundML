@@ -192,7 +192,9 @@ let batch_case () =
               (Nx.slice [Nx.R (i, i + 1); Nx.R (j, j + 1); Nx.R (0, 512)] x)
           in
           let bits t = Array.map Int64.bits_of_float (Nx.to_array t) in
-          let row = Nx.slice [Nx.R (i, i + 1); Nx.R (j, j + 1); Nx.R (0, Nx.dim 2 y)] y in
+          let row =
+            Nx.slice [Nx.R (i, i + 1); Nx.R (j, j + 1); Nx.R (0, Nx.dim 2 y)] y
+          in
           if bits (Nx.cast Nx.float64 row) <> bits (Nx.cast Nx.float64 one) then
             failf "channel (%d, %d) diverges from its standalone run" i j
         done

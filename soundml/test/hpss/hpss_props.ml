@@ -138,8 +138,8 @@ let validation_tests =
         equal (array float_exact) ~msg:"leading axes map independently"
           (to_array h)
           (to_array
-             (Nx.reshape [|12; 9|] (Nx.slice [Nx.R (0, 1); Nx.R (0, 12); Nx.R (0, 9)] hb)) ) )
-  ]
+             (Nx.reshape [|12; 9|]
+                (Nx.slice [Nx.R (0, 1); Nx.R (0, 12); Nx.R (0, 9)] hb) ) ) ) ]
 
 (* {1 Mask algebra} *)
 

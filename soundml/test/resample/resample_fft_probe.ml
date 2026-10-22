@@ -61,8 +61,7 @@ let signal rng dtype shape =
     (Nx.create dtype [|count|]
        (Array.init count (fun _ -> (2. *. Random.State.float rng 1.) -. 1.)) )
 
-let rows lines t =
-  List.init lines (fun i -> Nx.slice [Nx.R (i, i + 1)] t)
+let rows lines t = List.init lines (fun i -> Nx.slice [Nx.R (i, i + 1)] t)
 
 let concat_rows parts = Nx.concatenate ~axis:0 parts
 
@@ -126,10 +125,13 @@ let stacked_case () =
           for c = 0 to 1 do
             for b = 0 to 2 do
               let one =
-                block (Nx.slice [Nx.R (c, c + 1); Nx.R (b, b + 1); Nx.R (0, len)] x)
+                block
+                  (Nx.slice [Nx.R (c, c + 1); Nx.R (b, b + 1); Nx.R (0, len)] x)
               in
               let got =
-                Nx.slice [Nx.R (c, c + 1); Nx.R (b, b + 1); Nx.R (0, len)] batched
+                Nx.slice
+                  [Nx.R (c, c + 1); Nx.R (b, b + 1); Nx.R (0, len)]
+                  batched
               in
               check_bits
                 ~msg:(Printf.sprintf "stacked/len=%d/c=%d/b=%d" len c b)

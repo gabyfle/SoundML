@@ -220,7 +220,8 @@ let tone_tests =
             let column =
               Nx.to_array
                 (Nx.slice
-                   [Nx.R (0, Nx.dim 0 power); Nx.R (frames / 2, (frames / 2) + 1)]
+                   [ Nx.R (0, Nx.dim 0 power)
+                   ; Nx.R (frames / 2, (frames / 2) + 1) ]
                    power )
             in
             let best = ref 0 in

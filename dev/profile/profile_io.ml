@@ -63,6 +63,8 @@ let () =
       in
       let t =
         Nx.of_bigarray
-          (Bigarray.reshape (Bigarray.genarray_of_array1 a) [|channels; frames|])
+          (Bigarray.reshape
+             (Bigarray.genarray_of_array1 a)
+             [|channels; frames|] )
       in
       (Nx.shape t).(1) )

@@ -255,7 +255,9 @@ let shape_tests =
             let alone = Chroma.apply c s in
             let slice =
               Nx.reshape (Nx.shape alone)
-                (Nx.slice [Nx.R (row, row + 1); Nx.R (0, 12); Nx.R (0, 5)] stacked)
+                (Nx.slice
+                   [Nx.R (row, row + 1); Nx.R (0, 12); Nx.R (0, 5)]
+                   stacked )
             in
             Tutils.check_close
               ~msg:(Printf.sprintf "row %d" row)

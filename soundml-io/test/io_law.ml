@@ -287,8 +287,8 @@ let reader_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~mono
             let shape = Nx.shape chunk in
             if shape.(1) > frames then
               failf "a %d-frame chunk exceeds the request" shape.(1) ;
-            (* chunks are caller-owned: a retained one must survive every
-               later read untouched *)
+            (* chunks are caller-owned: a retained one must survive every later
+               read untouched *)
             drain ((if retain then chunk else Nx.copy chunk) :: acc)
       in
       let pieces = drain [] in
@@ -349,7 +349,9 @@ let seek_case (type a) file ?sample_rate (dt : (float, a) Nx.dtype) ~frames
           | Ok (Some chunk) ->
               check_bits
                 ~msg:(Printf.sprintf "span [%d; %d)" frame (frame + n))
-                (Nx.slice [Nx.R (0, channels); Nx.R (frame, frame + n)] whole.data)
+                (Nx.slice
+                   [Nx.R (0, channels); Nx.R (frame, frame + n)]
+                   whole.data )
                 chunk )
         positions ;
       (* seeking to the very end reads EOF; past it is a typed refusal *)

@@ -1,9 +1,9 @@
 (* Contracts of the Mel configuration and projection: creation validation (every
    precondition raises its documented message), accessors and defaults,
    pp/equal, the isolation of the config behind [filterbank], the shape and
-   broadcast behavior of [apply], and the flat features' own preconditions —
-   the fft_size agreement naming both sizes, the [n_mfcc] range, the lifter
-   domain, and the zero-lifter equivalence. *)
+   broadcast behavior of [apply], and the flat features' own preconditions — the
+   fft_size agreement naming both sizes, the [n_mfcc] range, the lifter domain,
+   and the zero-lifter equivalence. *)
 
 open Windtrap
 open Soundml

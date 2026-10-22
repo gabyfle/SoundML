@@ -162,7 +162,9 @@ let batch_tests =
               ~msg:(Printf.sprintf "row %d" i)
               float_exact 0.
               (deviation
-                 ( Nx.slice [Nx.R (i, i + 1); Nx.R (0, Nx.dim 1 stretched)] stretched
+                 ( Nx.slice
+                     [Nx.R (i, i + 1); Nx.R (0, Nx.dim 1 stretched)]
+                     stretched
                  |> Nx.reshape [|Nx.dim 1 stretched|] )
                  alone ) )
           rows ) ]

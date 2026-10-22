@@ -539,7 +539,9 @@ let tile_seam_tests =
         in
         let y = Resample.apply cfg x in
         for c = 0 to 1 do
-          let one = Resample.apply cfg (Nx.slice [Nx.R (c, c + 1); Nx.R (0, n)] x) in
+          let one =
+            Resample.apply cfg (Nx.slice [Nx.R (c, c + 1); Nx.R (0, n)] x)
+          in
           check_bits
             ~msg:(Printf.sprintf "channel %d" c)
             one
