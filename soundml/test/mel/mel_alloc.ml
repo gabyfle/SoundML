@@ -8,17 +8,17 @@
    a per-push cost growing with history fails the gate.
 
    Budget rationale, chunk_len = 512, fft_size = 64, hop = 16, n_mels = 8 (32
-   frames per push): on top of the stft power stage's own path (~3.1k minor
+   frames per push): on top of the stft power stage's own path (~860 minor
    words/push, budgeted at 6000 in its gate), [Mel.stage] adds exactly three Nx
    calls per push — one cast of the [33; 32] power chunk to double, one [8; 33]
    x [33; 32] matmul against the config-owned matrix, one cast back — each
    allocating a tensor record, shape metadata and a custom block on the OCaml
    heap (the bigarray payloads are malloc'd outside it), plus the
-   stateless-stage closures and options. Measured on OCaml 5.5: ~3.4k minor
-   words/push and ~6 promoted words/push, identical across windows; the minor
-   budget is ~2x the measured figure, absorbing runtime variation across hosts
-   while still failing any O(history) regression. The promoted budget is its
-   own, an order of magnitude over the measured ~6 words/push: comparing
+   stateless-stage closures and options. Measured on OCaml 5.5: ~1.0k minor
+   words/push and ~5 promoted words/push, identical across windows; the minor
+   budget sits ~7x over the measured figure, absorbing runtime variation across
+   hosts while still failing any O(history) regression. The promoted budget is
+   its own, an order of magnitude over the measured ~5 words/push: comparing
    promotions against the minor budget would let a steady promoted-heap leak of
    thousands of words per push pass unnoticed. *)
 
