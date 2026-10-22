@@ -37,14 +37,13 @@ let () =
     | Error _ ->
         failwith "info"
   in
-  let out = Nx.zeros Nx.float32 [|channels; frames|] in
-  time "reader ?out (open+read+close)" (fun () ->
+  time "reader (open+read+close)" (fun () ->
       match Io.Reader.open_ Nx.float32 path with
       | Error _ ->
           0
       | Ok r ->
           let n =
-            match Io.Reader.read ~out r ~frames with
+            match Io.Reader.read r ~frames with
             | Ok (Some c) ->
                 (Nx.shape c).(1)
             | _ ->
@@ -57,7 +56,13 @@ let () =
           0
       | Ok r ->
           Io.Reader.close r ; 1 ) ;
-  time "buffer create+of_buffer" (fun () ->
-      let buf = Nx_buffer.create Nx_buffer.float32 (channels * frames) in
-      let t = Nx.of_buffer buf ~shape:[|channels; frames|] in
+  time "bigarray create+of_bigarray" (fun () ->
+      let a =
+        Bigarray.Array1.create Bigarray.float32 Bigarray.c_layout
+          (channels * frames)
+      in
+      let t =
+        Nx.of_bigarray
+          (Bigarray.reshape (Bigarray.genarray_of_array1 a) [|channels; frames|])
+      in
       (Nx.shape t).(1) )

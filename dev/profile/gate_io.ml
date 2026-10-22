@@ -33,7 +33,7 @@ let families =
 
 let () =
   let (_ : string) = Io_corpus.ensure () in
-  (* reads: allocating and ?out, small / bulk stereo / bulk mono *)
+  (* reads: small / bulk stereo / bulk mono *)
   List.iter
     (fun fam ->
       let cells =
@@ -44,41 +44,18 @@ let () =
       List.iter
         (fun (tag, path, n) ->
           measure (Printf.sprintf "read %s %s" fam tag) n (fun () ->
-              (ok ~what:fam (Io.read Nx.float32 path)).Io.data ) ;
-          let i = ok ~what:fam (Io.info path) in
-          let out =
-            Nx.zeros Nx.float32 [|i.Io.Info.channels; i.Io.Info.frames|]
-          in
-          measure (Printf.sprintf "reader_out %s %s" fam tag) n (fun () ->
-              let r = ok ~what:fam (Io.Reader.open_ Nx.float32 path) in
-              let c =
-                ok ~what:fam (Io.Reader.read ~out r ~frames:i.Io.Info.frames)
-              in
-              Io.Reader.close r ;
-              match c with Some _ -> () | None -> failwith "empty" ) )
+              (ok ~what:fam (Io.read Nx.float32 path)).Io.data ) )
         cells ;
       measure (Printf.sprintf "info %s" fam) 300 (fun () ->
           ok ~what:fam (Io.info (Io_corpus.bulk fam)) ) )
     families ;
-  (* the many-small-files ingest loops *)
+  (* the many-small-files ingest loop *)
   List.iter
     (fun cls ->
       let paths = Io_corpus.many cls in
       measure (Printf.sprintf "many %s" cls) 12 (fun () ->
           List.iter
             (fun p -> ignore (ok ~what:cls (Io.read Nx.float32 p) : _ Io.audio))
-            paths ) ;
-      let out = Nx.zeros Nx.float32 [|1; 22050|] in
-      measure (Printf.sprintf "many_out %s" cls) 12 (fun () ->
-          List.iter
-            (fun p ->
-              let r = ok ~what:cls (Io.Reader.open_ Nx.float32 p) in
-              ( match Io.Reader.read ~out r ~frames:22050 with
-              | Ok (Some _) ->
-                  ()
-              | _ ->
-                  failwith "empty" ) ;
-              Io.Reader.close r )
             paths ) )
     Io_corpus.many_classes ;
   (* writes: the 30 s stereo float32 payload, close-to-close *)

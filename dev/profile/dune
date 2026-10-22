@@ -16,7 +16,7 @@
 (executable
  (name profile_io)
  (modules profile_io)
- (libraries soundml_io nx nx.buffer unix))
+ (libraries soundml_io nx unix))
 
 (executable
  (name gate_io)

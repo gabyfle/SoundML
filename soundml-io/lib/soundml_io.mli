@@ -234,11 +234,7 @@ module Reader : sig
       latency is zero: the reader's output is already delay-compensated
       (the resampler's group delay is compensated by contract). *)
 
-  val read :
-       ?out:(float, 'a) Nx.t
-    -> 'a t
-    -> frames:int
-    -> ((float, 'a) Nx.t option, error) result
+  val read : 'a t -> frames:int -> ((float, 'a) Nx.t option, error) result
   (** [read r ~frames] is the next chunk: [Ok (Some c)] with [c] shaped
       [[channels; n]], [n = frames] except for the short final chunk;
       [Ok None] at EOF, and at EOF forever after. For resampled readers,
@@ -247,20 +243,15 @@ module Reader : sig
       FFT-executed resampler plans), so chunk sizes are exact regardless of
       the plan.
 
-      [?out] lends a destination: a C-contiguous [[channels; frames]] tensor
-      of the reader's dtype. The call writes into it and returns a view of
-      its first [n] frames; [out] is borrowed for the duration of the call
-      only — the reader retains no reference — and the natively-rated mono
-      path decodes {e directly} into it (zero copies). [?out] precedes the
-      positional argument so it is erasable. Without [out] each call
-      allocates a fresh chunk.
+      Each call allocates a fresh chunk, caller-owned: the reader retains no
+      reference to it, and the natively-rated mono path decodes {e directly}
+      into it (zero copies).
 
       Decode failures are typed: a truncated file yields
       [Error (Truncated _)] at the failing chunk, after which the reader is
       positioned at EOF.
 
-      Raises [Invalid_argument] if [frames < 1], if [out] has the wrong
-      shape or is not C-contiguous, or if [r] is closed. *)
+      Raises [Invalid_argument] if [frames < 1] or if [r] is closed. *)
 
   val seek : 'a t -> frame:int -> (unit, error) result
   (** [seek r ~frame] positions [r] so the next {!read} delivers frame

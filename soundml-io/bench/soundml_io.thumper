@@ -11,12 +11,6 @@ io/many-1000x1s-wav-float32-f32	alloc_words	exact	279004
 io/many-1000x1s-wav-float32-f32	wall_time	batch=1	n=20	4.785e-02	4.520e-02 4.525e-02 4.542e-02 4.547e-02 4.555e-02 4.625e-02 4.719e-02 4.720e-02 4.778e-02 4.782e-02 4.788e-02 4.789e-02 4.814e-02 4.820e-02 4.830e-02 4.836e-02 4.848e-02 4.877e-02 4.879e-02 4.926e-02
 io/many-1000x1s-wav-pcm16-f32	alloc_words	exact	280004
 io/many-1000x1s-wav-pcm16-f32	wall_time	batch=1	n=20	4.696e-02	4.567e-02 4.624e-02 4.635e-02 4.638e-02 4.671e-02 4.672e-02 4.678e-02 4.683e-02 4.683e-02 4.694e-02 4.699e-02 4.714e-02 4.749e-02 4.787e-02 4.809e-02 4.835e-02 4.908e-02 4.934e-02 4.967e-02 5.004e-02
-io/many_out-1000x1s-flac-f32	alloc_words	exact	252005
-io/many_out-1000x1s-flac-f32	wall_time	batch=1	n=20	1.456e-01	1.422e-01 1.439e-01 1.439e-01 1.446e-01 1.446e-01 1.450e-01 1.452e-01 1.453e-01 1.454e-01 1.454e-01 1.457e-01 1.459e-01 1.460e-01 1.461e-01 1.466e-01 1.469e-01 1.477e-01 1.484e-01 1.503e-01 1.530e-01
-io/many_out-1000x1s-wav-float32-f32	alloc_words	exact	249005
-io/many_out-1000x1s-wav-float32-f32	wall_time	batch=1	n=20	3.137e-02	3.066e-02 3.076e-02 3.089e-02 3.104e-02 3.106e-02 3.109e-02 3.113e-02 3.115e-02 3.124e-02 3.135e-02 3.138e-02 3.140e-02 3.147e-02 3.163e-02 3.168e-02 3.185e-02 3.194e-02 3.198e-02 3.246e-02 3.282e-02
-io/many_out-1000x1s-wav-pcm16-f32	alloc_words	exact	250005
-io/many_out-1000x1s-wav-pcm16-f32	wall_time	batch=1	n=20	3.185e-02	3.008e-02 3.039e-02 3.042e-02 3.066e-02 3.071e-02 3.080e-02 3.119e-02 3.141e-02 3.172e-02 3.183e-02 3.188e-02 3.195e-02 3.226e-02 3.265e-02 3.281e-02 3.327e-02 3.356e-02 3.361e-02 3.384e-02 3.396e-02
 io/open_info-flac	alloc_words	exact	38
 io/open_info-flac	wall_time	batch=512	n=20	1.533e-05	1.503e-05 1.519e-05 1.525e-05 1.526e-05 1.527e-05 1.529e-05 1.529e-05 1.531e-05 1.533e-05 1.533e-05 1.533e-05 1.535e-05 1.535e-05 1.537e-05 1.541e-05 1.543e-05 1.550e-05 1.551e-05 1.567e-05 1.671e-05
 io/open_info-ogg	alloc_words	exact	36
@@ -67,30 +61,6 @@ io/read_resample-44k1-16k-30s-f32	alloc_words	exact	6163887
 io/read_resample-44k1-16k-30s-f32	wall_time	batch=1	n=20	1.049e-02	1.006e-02 1.022e-02 1.028e-02 1.033e-02 1.040e-02 1.041e-02 1.043e-02 1.044e-02 1.047e-02 1.047e-02 1.050e-02 1.050e-02 1.051e-02 1.057e-02 1.060e-02 1.061e-02 1.072e-02 1.073e-02 1.074e-02 1.140e-02
 io/read_resample-44k1-48k-30s-f32	alloc_words	exact	2493999
 io/read_resample-44k1-48k-30s-f32	wall_time	batch=1	n=20	8.791e-03	8.133e-03 8.483e-03 8.662e-03 8.666e-03 8.678e-03 8.700e-03 8.723e-03 8.734e-03 8.737e-03 8.783e-03 8.799e-03 8.804e-03 8.817e-03 8.920e-03 8.987e-03 9.047e-03 9.064e-03 9.070e-03 9.170e-03 9.177e-03
-io/reader_out-flac-30s-f32	alloc_words	exact	255
-io/reader_out-flac-30s-f32	wall_time	batch=1	n=20	1.444e-02	1.405e-02 1.419e-02 1.422e-02 1.429e-02 1.430e-02 1.435e-02 1.438e-02 1.441e-02 1.442e-02 1.444e-02 1.445e-02 1.453e-02 1.453e-02 1.455e-02 1.456e-02 1.457e-02 1.459e-02 1.461e-02 1.461e-02 1.506e-02
-io/reader_out-flac-30s-mo-f32	alloc_words	exact	252
-io/reader_out-flac-30s-mo-f32	wall_time	batch=1	n=20	7.477e-03	7.048e-03 7.147e-03 7.286e-03 7.400e-03 7.450e-03 7.452e-03 7.469e-03 7.471e-03 7.474e-03 7.475e-03 7.478e-03 7.482e-03 7.484e-03 7.486e-03 7.497e-03 7.526e-03 7.667e-03 7.673e-03 7.753e-03 7.817e-03
-io/reader_out-ogg-30s-f32	alloc_words	exact	253
-io/reader_out-ogg-30s-f32	wall_time	batch=1	n=20	2.561e-02	2.498e-02 2.519e-02 2.522e-02 2.534e-02 2.542e-02 2.547e-02 2.548e-02 2.549e-02 2.559e-02 2.560e-02 2.563e-02 2.570e-02 2.571e-02 2.571e-02 2.572e-02 2.573e-02 2.574e-02 2.575e-02 2.575e-02 2.579e-02
-io/reader_out-ogg-30s-mo-f32	alloc_words	exact	250
-io/reader_out-ogg-30s-mo-f32	wall_time	batch=1	n=20	1.209e-02	1.171e-02 1.174e-02 1.175e-02 1.178e-02 1.182e-02 1.185e-02 1.185e-02 1.192e-02 1.200e-02 1.209e-02 1.209e-02 1.210e-02 1.210e-02 1.210e-02 1.222e-02 1.238e-02 1.287e-02 1.287e-02 1.288e-02 1.293e-02
-io/reader_out-wav-float32-30s-f32	alloc_words	exact	252
-io/reader_out-wav-float32-30s-f32	wall_time	batch=32	n=20	2.441e-04	2.342e-04 2.375e-04 2.402e-04 2.403e-04 2.405e-04 2.415e-04 2.424e-04 2.428e-04 2.436e-04 2.440e-04 2.442e-04 2.444e-04 2.445e-04 2.451e-04 2.468e-04 2.476e-04 2.490e-04 2.504e-04 2.524e-04 2.528e-04
-io/reader_out-wav-float32-30s-mo-f32	alloc_words	exact	249
-io/reader_out-wav-float32-30s-mo-f32	wall_time	batch=64	n=20	1.317e-04	1.284e-04 1.290e-04 1.302e-04 1.310e-04 1.311e-04 1.311e-04 1.313e-04 1.314e-04 1.314e-04 1.316e-04 1.317e-04 1.320e-04 1.320e-04 1.321e-04 1.324e-04 1.324e-04 1.331e-04 1.333e-04 1.344e-04 1.423e-04
-io/reader_out-wav-pcm16-30s-f32	alloc_words	exact	253
-io/reader_out-wav-pcm16-30s-f32	wall_time	batch=16	n=20	4.906e-04	4.758e-04 4.771e-04 4.773e-04 4.775e-04 4.817e-04 4.832e-04 4.852e-04 4.865e-04 4.890e-04 4.903e-04 4.909e-04 4.929e-04 4.936e-04 4.938e-04 4.945e-04 5.031e-04 5.086e-04 5.093e-04 5.160e-04 5.226e-04
-io/reader_out-wav-pcm16-30s-mo-f32	alloc_words	exact	250
-io/reader_out-wav-pcm16-30s-mo-f32	wall_time	batch=32	n=20	2.704e-04	2.620e-04 2.623e-04 2.628e-04 2.656e-04 2.662e-04 2.664e-04 2.673e-04 2.680e-04 2.691e-04 2.692e-04 2.716e-04 2.723e-04 2.728e-04 2.735e-04 2.743e-04 2.748e-04 2.786e-04 2.801e-04 2.826e-04 2.879e-04
-io/reader_out-wav-pcm24-30s-f32	alloc_words	exact	253
-io/reader_out-wav-pcm24-30s-f32	wall_time	batch=8	n=20	6.594e-04	6.316e-04 6.317e-04 6.383e-04 6.402e-04 6.454e-04 6.461e-04 6.465e-04 6.499e-04 6.521e-04 6.547e-04 6.641e-04 6.689e-04 6.765e-04 6.789e-04 6.790e-04 6.843e-04 6.872e-04 6.896e-04 8.940e-04 1.038e-03
-io/reader_out-wav-pcm24-30s-mo-f32	alloc_words	exact	250
-io/reader_out-wav-pcm24-30s-mo-f32	wall_time	batch=16	n=20	3.554e-04	3.388e-04 3.399e-04 3.401e-04 3.405e-04 3.407e-04 3.418e-04 3.424e-04 3.424e-04 3.429e-04 3.552e-04 3.557e-04 3.585e-04 3.591e-04 3.596e-04 3.606e-04 3.746e-04 3.772e-04 3.787e-04 3.912e-04 3.939e-04
-io/reader_out-wav-pcm32-30s-f32	alloc_words	exact	253
-io/reader_out-wav-pcm32-30s-f32	wall_time	batch=8	n=20	7.153e-04	6.952e-04 6.965e-04 6.978e-04 6.995e-04 7.001e-04 7.052e-04 7.065e-04 7.067e-04 7.113e-04 7.148e-04 7.158e-04 7.630e-04 7.714e-04 7.716e-04 7.757e-04 7.792e-04 7.798e-04 7.907e-04 7.930e-04 8.512e-04
-io/reader_out-wav-pcm32-30s-mo-f32	alloc_words	exact	250
-io/reader_out-wav-pcm32-30s-mo-f32	wall_time	batch=16	n=20	3.956e-04	3.689e-04 3.699e-04 3.771e-04 3.796e-04 3.901e-04 3.916e-04 3.920e-04 3.937e-04 3.952e-04 3.955e-04 3.956e-04 3.993e-04 4.038e-04 4.054e-04 4.121e-04 4.190e-04 4.358e-04 4.675e-04 4.740e-04 4.794e-04
 io/write-flac-30s	alloc_words	exact	668
 io/write-flac-30s	wall_time	batch=1	n=20	4.686e-02	3.916e-02 3.982e-02 4.115e-02 4.208e-02 4.226e-02 4.235e-02 4.420e-02 4.558e-02 4.570e-02 4.647e-02 4.725e-02 4.727e-02 4.794e-02 4.795e-02 5.011e-02 5.343e-02 5.426e-02 5.523e-02 5.702e-02 5.725e-02
 io/write-float32-30s	alloc_words	exact	668

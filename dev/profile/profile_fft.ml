@@ -78,7 +78,7 @@ let ext () =
       let bins = (len / 2) + 1 in
       let f () =
         (* the ÷F extension: mirror the interior bins with conjugation *)
-        let interior = Nx.shrink [|(0, 1); (1, bins - 1)|] x in
+        let interior = Nx.slice [Nx.R (0, 1); Nx.R (1, bins - 1)] x in
         Nx.concatenate ~axis:(-1) [x; Nx.conjugate (Nx.flip ~axes:[-1] interior)]
       in
       let tmin, tmed = time f in
