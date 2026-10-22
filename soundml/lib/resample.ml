@@ -1283,6 +1283,12 @@ module Kernel = struct
     ; gp: int (* P: the stage inputs one block-row reads *)
     ; gb: int (* B = gr * M: the stage inputs one call advances *)
     ; gspan: int (* B + 2K: the stage inputs one call reads *)
+    ; gaa: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
+          (* the [gr; P] gather, the product's left operand; one call's worth,
+             reused by every call *)
+    ; gbuf: Rig.Buffer.t
+          (* [gaa], wrapped once: each call lends it to its product as a fresh
+             value over this buffer *)
     ; gcarry: (float, 'a, Bigarray.c_layout) Bigarray.Array1.t
           (* [channels; B + 2K], the window tail: stage inputs [next call window
              start .. fed), planar per channel; starts as the [K] virtual zeros
@@ -1311,8 +1317,8 @@ module Kernel = struct
              for single-stage plans. Allocated here, once: a direct [step]
              allocates exactly the output tensor (an OLS step additionally
              allocates its transform transients and a GEMM step its per-call
-             gathers and products — tensors are values, so every operation's
-             result is fresh) *)
+             products — tensors are values, so every operation's result is
+             fresh) *)
     ; mutable drained: bool
     ; mutable leading: int array (* leading shape of the last chunk *) }
 
@@ -1388,12 +1394,15 @@ module Kernel = struct
             let p_len = (2 * sp.sk) + 1 + ((sp.sl - 1) * sp.sm / sp.sl) in
             let rows = gemm_rows_of ~m:sp.sm in
             let span = (rows * sp.sm) + (2 * sp.sk) in
+            let gaa = array1 (kind dtype) (rows * p_len) in
             Gx
               { gg= Nx.cast dtype (Lazy.force bank)
               ; gr= rows
               ; gp= p_len
               ; gb= rows * sp.sm
               ; gspan= span
+              ; gaa
+              ; gbuf= Rig.Buffer.of_bigarray gaa
               ; gcarry= zeroed (kind dtype) (channels * span)
               ; gcalls= 0 }
         | Sdirect ->
@@ -1635,13 +1644,13 @@ module Kernel = struct
     let pend = st.fed + kk - (gs.gcalls * gs.gb) in
     let alen = pend + n in
     (* [gather c j] is the product's left operand for call [j], the [R; P]
-       block-rows laid into a fresh array that the operand takes over: channel
-       [c]'s stage inputs [j*B, j*B + B + 2K), cut into the [R] windows of [P]
-       samples advancing [M] that the rows read. Window offsets below [held] are
-       still in the carry, the rest are in this call's input, so a row crossing
-       that point is two runs and every other row is one. *)
+       block-rows laid into the kernel's gather and lent to the product as a
+       fresh value over it: channel [c]'s stage inputs [j*B, j*B + B + 2K), cut
+       into the [R] windows of [P] samples advancing [M] that the rows read.
+       Window offsets below [held] are still in the carry, the rest are in this
+       call's input, so a row crossing that point is two runs and every other
+       row is one. The product is read before the next gather writes. *)
     let gather c j =
-      let ga = array1 (kind k.dtype) (gs.gr * gs.gp) in
       let off = j * gs.gb in
       let held = Stdlib.min span (Stdlib.max 0 (pend - off)) in
       for r = 0 to gs.gr - 1 do
@@ -1650,10 +1659,10 @@ module Kernel = struct
         if kept > 0 then
           Bigarray.Array1.blit
             (Bigarray.Array1.sub gs.gcarry ((c * span) + off + w) kept)
-            (Bigarray.Array1.sub ga dst kept) ;
+            (Bigarray.Array1.sub gs.gaa dst kept) ;
         let rest = gs.gp - kept in
         if rest > 0 then
-          let into = Bigarray.Array1.sub ga (dst + kept) rest in
+          let into = Bigarray.Array1.sub gs.gaa (dst + kept) rest in
           match src with
           | From (s, stride) ->
               Bigarray.Array1.blit
@@ -1664,7 +1673,7 @@ module Kernel = struct
           | Silence ->
               Bigarray.Array1.fill into 0.
       done ;
-      tensor_of ga [|gs.gr; gs.gp|]
+      Nx.of_buffer k.dtype [|gs.gr; gs.gp|] gs.gbuf
     in
     let t = if alen < span then 0 else ((alen - span) / gs.gb) + 1 in
     if t > 0 then begin

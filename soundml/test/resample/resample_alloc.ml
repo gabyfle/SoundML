@@ -75,14 +75,14 @@ let cfg () = Resample.Config.create ~sample_rate:11025 ~target:8000 ()
 
 (* FFT-executed plans (the `High 8 -> 48 k plan of record runs its sharp stage
    by overlap-save) allocate transform transients per executed block — the
-   assembly, the spectra, the inverse — on top of the output tensor: the
-   documented deviation until nx grows destination passing, the same class the
-   Stft kernel lives with. The budgets are still BOUNDED per call and
-   independent of accumulated state: at chunk 512 the 8 -> 48 k stage-1 grid (B
-   = 824) completes a block on ~2 of 3 steps, and a block is a fixed handful of
-   tensors whatever the history. Measured on OCaml 5.5: ~450 minor words/step
-   and ~2 promoted, mono float32, identical across windows; budgets are well
-   over the measured figures, same discipline as the direct rows above. *)
+   assembly, the spectra, the inverse — on top of the output tensor: tensors are
+   values, so every operation's result is fresh, the same class the Stft kernel
+   lives with. The budgets are still BOUNDED per call and independent of
+   accumulated state: at chunk 512 the 8 -> 48 k stage-1 grid (B = 824)
+   completes a block on ~2 of 3 steps, and a block is a fixed handful of tensors
+   whatever the history. Measured on OCaml 5.5: ~450 minor words/step and ~2
+   promoted, mono float32, identical across windows; budgets are well over the
+   measured figures, same discipline as the direct rows above. *)
 let ols_minor_budget = 5500.
 
 let ols_promoted_budget = 60.
@@ -90,13 +90,13 @@ let ols_promoted_budget = 60.
 let ols_cfg () = Resample.Config.create ~sample_rate:8000 ~target:48000 ()
 
 (* GEMM-executed plans (the `High 44.1 -> 16 k plan of record is one phase-rich
-   stage) allocate one product result per executed call, and one or two small
-   views per gathered block-row, on top of the output tensor — the gather and
-   the carry are prepared once and reused, so nothing here grows with the
-   history. [apply] on a one-second clip runs the conversion as a fixed handful
-   of calls: ~2.3k minor and ~145 promoted words per call; budgets sit over the
-   measured figures (~3.5x minor, ~2x promoted), the same discipline as the rows
-   above. *)
+   stage) allocate one product result per executed call, the fresh value that
+   lends it the gather, and one or two small views per gathered block-row, on
+   top of the output tensor — the gather and the carry are prepared once and
+   reused, so nothing here grows with the history. [apply] on a one-second clip
+   runs the conversion as a fixed handful of calls: ~2.3k minor and ~21 promoted
+   words per call; budgets sit well over the measured figures (~3.5x minor, ~14x
+   promoted), the same discipline as the rows above. *)
 let gemm_apply_minor_budget = 8000.
 
 let gemm_apply_promoted_budget = 300.
