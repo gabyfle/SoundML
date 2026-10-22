@@ -171,6 +171,63 @@ let normalisation_tests =
         let raw = Chroma.apply ~norm:`None c s in
         let expected = Nx.matmul (Chroma.filterbank Nx.float64 c) s in
         Tutils.check_close ~msg:"raw" ~expected:(Nx.to_array expected) raw )
+  ; test "`None folds each band over its span in ascending bins" (fun () ->
+        (* Output (i, t) is 0. plus w.(i, j) *. s.(j, t) over the bins between
+           band i's first and last nonzero weight, in ascending j, each
+           multiply-add spelled as the library spells it (operands bound first)
+           so the platforms that contract it (arm64) fuse both alike. The bands
+           are dense (the default weighting), of ragged spans (a narrow octave
+           weighting) or sparse (the constant-Q assignment), over more frames
+           than one column tile holds. *)
+        let fold w s =
+          let m = Nx.dim 0 w and k = Nx.dim 1 w and n = Nx.dim 1 s in
+          let w = Nx.to_array w and v = Nx.to_array (Nx.cast Nx.float64 s) in
+          Array.init (m * n) (fun o ->
+              let i = o / n and t = o mod n in
+              let first = ref 0 and last = ref k in
+              while !first < k && w.((i * k) + !first) = 0. do
+                incr first
+              done ;
+              while !last > !first && w.((i * k) + !last - 1) = 0. do
+                decr last
+              done ;
+              let acc = ref 0. in
+              for j = !first to !last - 1 do
+                let w = w.((i * k) + j) and x = v.((j * n) + t) in
+                acc := !acc +. (w *. x)
+              done ;
+              !acc )
+        in
+        let check msg w project s =
+          let expected = fold w s in
+          let expected =
+            Nx.to_array
+              (Nx.cast (Nx.dtype s)
+                 (Nx.create Nx.float64 [|Nx.dim 0 w; Nx.dim 1 s|] expected) )
+          in
+          equal ~msg (array int64)
+            (Array.map Int64.bits_of_float expected)
+            (Array.map Int64.bits_of_float (Nx.to_array (project s)))
+        in
+        let frames = 70 in
+        List.iter
+          (fun (name, c) ->
+            let w = Chroma.filterbank Nx.float64 c in
+            let s = spectrum 129 frames in
+            check (name ^ ", float64") w (Chroma.apply ~norm:`None c) s ;
+            check (name ^ ", float32") w
+              (Chroma.apply ~norm:`None c)
+              (Nx.cast Nx.float32 s) )
+          [ ("dense", config ~fft_size:256 ())
+          ; ("ragged", config ~fft_size:256 ~octwidth:(Some 0.05) ()) ] ;
+        let c =
+          Cqt.Config.create ~n_bins:84 ~bins_per_octave:12 ~hop:512 ~sample_rate
+            ()
+        in
+        check "constant-Q"
+          (Chroma.cqt_projection Nx.float64 c)
+          (Chroma.of_cqt ~norm:`None c)
+          (spectrum 84 frames) )
   ; test "a sub-tiny frame is left alone rather than amplified" (fun () ->
         let c = config ~fft_size:256 () in
         let s = Nx.zeros Nx.float64 [|129; 3|] in

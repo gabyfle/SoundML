@@ -124,6 +124,15 @@ let zeroed k n =
 let tensor_of a shape =
   Nx.of_bigarray (Bigarray.reshape (Bigarray.genarray_of_array1 a) shape)
 
+(* [of_floats a shape] is the float64 tensor of [shape] holding the float array
+   [a] in order, copied element by element into rig storage: [Nx.create] boxes
+   every element on the way. *)
+let of_floats (a : float array) shape =
+  Store.make64 shape (fun dst ->
+      for i = 0 to Array.length a - 1 do
+        Bigarray.Array1.unsafe_set dst i (Array.unsafe_get a i)
+      done )
+
 (* {1 Filter design}
 
    Kaiser-windowed sinc, designed by the standard empirical Kaiser relations
@@ -156,16 +165,20 @@ let i0_inv_sq =
 
 let bessel_i0 x =
   let hx2 = 0.25 *. x *. x in
-  let rec go k term sum =
-    let term =
-      if k < 129 then term *. hx2 *. i0_inv_sq.(k)
-      else term *. hx2 /. Float.of_int (k * k)
+  (* a loop over float refs rather than a recursion over float arguments: the
+     refs stay unboxed, where each recursive call would box its two floats *)
+  let term = ref 1. and sum = ref 1. and k = ref 1 and finished = ref false in
+  while not !finished do
+    let t =
+      if !k < 129 then !term *. hx2 *. i0_inv_sq.(!k)
+      else !term *. hx2 /. Float.of_int (!k * !k)
     in
-    let sum' = sum +. term in
-    if term <= Float.epsilon *. sum' || k > 1000 then sum'
-    else go (k + 1) term sum'
-  in
-  go 1 1. 1.
+    let s = !sum +. t in
+    term := t ;
+    sum := s ;
+    if t <= Float.epsilon *. s || !k > 1000 then finished := true else incr k
+  done ;
+  !sum
 
 (* [design_prototype ~l ~k ~fc ~beta] is the [2*K*L + 1]-tap prototype: a
    windowed sinc with cutoff [fc] (Nyquist units of the interpolated rate),
@@ -178,19 +191,30 @@ let design_prototype ~l ~k ~fc ~beta =
   let n = (2 * mid) + 1 in
   let i0_beta = bessel_i0 beta in
   let h = Array.make n 0. in
-  for i = mid to n - 1 do
-    let z = Float.of_int (i - mid) in
-    let s =
-      if i = mid then fc else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
-    in
-    let r = z /. Float.of_int mid in
-    let v = s *. (bessel_i0 (beta *. Float.sqrt (1. -. (r *. r))) /. i0_beta) in
-    h.(i) <- v ;
-    h.(n - 1 - i) <- v
+  (* Taps are independent, so they are evaluated across domains ({!Par}); the
+     normalising sum then runs on one domain, in index order. *)
+  Par.ranges ~n:(n - mid) ~grain:512 (fun lo hi ->
+      for i = mid + lo to mid + hi - 1 do
+        let z = Float.of_int (i - mid) in
+        let s =
+          if i = mid then fc
+          else Float.sin (Float.pi *. fc *. z) /. (Float.pi *. z)
+        in
+        let r = z /. Float.of_int mid in
+        let v =
+          s *. (bessel_i0 (beta *. Float.sqrt (1. -. (r *. r))) /. i0_beta)
+        in
+        Array.unsafe_set h i v ;
+        Array.unsafe_set h (n - 1 - i) v
+      done ) ;
+  let sum = ref 0. in
+  for i = 0 to n - 1 do
+    sum := !sum +. Array.unsafe_get h i
   done ;
-  let sum = Array.fold_left ( +. ) 0. h in
-  let gain = Float.of_int l /. sum in
-  Array.iteri (fun i v -> h.(i) <- v *. gain) h ;
+  let gain = Float.of_int l /. !sum in
+  for i = 0 to n - 1 do
+    Array.unsafe_set h i (Array.unsafe_get h i *. gain)
+  done ;
   h
 
 (* [bank_of_prototype ~l ~k h] lays the prototype out phase-major, [L] rows of
@@ -254,7 +278,7 @@ let gemm_bank ~l ~m ~k ~blocks bank =
       g.(((d + s) * lp) + r) <- bank.((ph * taps) + s)
     done
   done ;
-  Nx.create Nx.float64 [|p_len; lp|] g
+  of_floats g [|p_len; lp|]
 
 (* {1 Configuration} *)
 
@@ -864,8 +888,8 @@ let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
   let h = design_prototype ~l ~k ~fc ~beta in
   let taps = (2 * k) + 1 in
   let b = bank_of_prototype ~l ~k h in
-  let bank = Nx.create Nx.float64 [|l; taps|] b in
-  let proto = Nx.create Nx.float64 [|Array.length h|] h in
+  let bank = of_floats b [|l; taps|] in
+  let proto = of_floats h [|Array.length h|] in
   { sl= l
   ; sm= m
   ; sk= k
@@ -1116,8 +1140,10 @@ module Config = struct
           done
         done ;
         let scale = Float.of_int (lc / q) /. Float.of_int (s1.sl * s2.sl) in
-        Array.iteri (fun i v -> out.(i) <- v *. scale) out ;
-        Nx.cast dtype (Nx.create Nx.float64 [|Array.length out|] out)
+        for i = 0 to Array.length out - 1 do
+          out.(i) <- out.(i) *. scale
+        done ;
+        Nx.cast dtype (of_floats out [|Array.length out|])
     | _ ->
         assert false
 

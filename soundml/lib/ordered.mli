@@ -74,7 +74,10 @@ val project : matrix -> (float, 'a) Nx.t -> (float, Nx.float64_elt) Nx.t
     [w.(i, j) *. x.(j, t)] added in ascending [j] over the columns between row
     [i]'s first and last nonzero weight. Columns outside that range contribute
     nothing, even where [x] is not finite: that is the only way the result
-    departs from the dense product.
+    departs from the dense product. Each term is one multiply-add, which
+    rounds once where OCaml contracts it into a fused instruction (arm64) and
+    twice elsewhere (x86_64): an output's bits depend on its terms and the
+    platform, never on its batch.
 
     [x] may have any float dtype: float32 and float64 are read in place,
     other dtypes are widened to float64 first.
