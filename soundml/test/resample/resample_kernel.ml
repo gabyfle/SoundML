@@ -385,10 +385,50 @@ let error_tests =
               configuration converts from 44100 Hz)" ) (fun () ->
             ignore (Pipeline.Stream.prepare p ~source:src ~max_chunk:64) ) ) ]
 
+(* {2 Sharing across domains} *)
+
+(* [on_domains n f] runs [f] on [n] domains released together, so that they
+   reach a config's first use at once, and is their results. *)
+let on_domains n f =
+  let ready = Atomic.make 0 in
+  List.init n (fun _ ->
+      Domain.spawn (fun () ->
+          Atomic.incr ready ;
+          while Atomic.get ready < n do
+            Domain.cpu_relax ()
+          done ;
+          f () ) )
+  |> List.map Domain.join
+
+let domain_tests =
+  [ test "a config shared across domains converts the same bits" (fun () ->
+        (* a config builds its executors' tables on first use — the GEMM
+           arrangement at each dtype, the overlap-save spectrum, and
+           [apply_gemm]'s matrix — so fresh configs are shared here *)
+        List.iter
+          (fun (sample_rate, target) ->
+            let x32 = signal Nx.float32 4096 and x64 = signal Nx.float64 4096 in
+            let run cfg =
+              ( bits (Resample.apply cfg x32)
+              , bits (Resample.apply cfg x64)
+              , bits (Resample.apply_gemm cfg x64) )
+            in
+            let fresh () = Resample.Config.create ~sample_rate ~target () in
+            let expected = run (fresh ()) in
+            let cfg = fresh () in
+            List.iter
+              (fun got ->
+                if got <> expected then
+                  failf "%d -> %d: a domain's conversion diverges" sample_rate
+                    target )
+              (on_domains 4 (fun () -> run cfg)) )
+          [(44100, 48000); (22050, 44100); (8000, 48000)] ) ]
+
 let suite =
   [ group "length" length_tests
   ; group "latency" latency_tests
   ; group "reference" reference_tests
   ; group "channels" channel_tests
   ; group "dtype" dtype_tests
-  ; group "errors" error_tests ]
+  ; group "errors" error_tests
+  ; group "domains" domain_tests ]

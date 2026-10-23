@@ -601,13 +601,13 @@ type ols_plan =
   { on: int (* N: block length in stage-input samples *)
   ; ob: int (* B: block advance in stage-input samples *)
   ; odelta: int (* window offset aligning ÷F decimation phase *)
-  ; oh: Nx.complex128_t Lazy.t
+  ; oh: Nx.complex128_t Lazy.Mutexed.t
         (* the prototype's spectrum on the transform grid: [rfft] of the
            zero-padded prototype — length [N*F/2 + 1] for ×F stages, [N/2 + 1]
            for ÷F — carrying the scalar weights the block product would
            otherwise apply sample by sample: 1/F, the ÷F alias-fold weight, and
            the inverse transform's 1/W where [ols_folds_inverse] admits it.
-           Forced on the first prepared kernel; not domain-safe, like [sgemm] *)
+           Forced on the first prepared kernel, from any domain, like [sgemm] *)
   }
 
 (* {1 The GEMM executor plan}
@@ -670,10 +670,12 @@ type stage_plan =
   ; svisit: (float, Nx.float64_elt) Nx.t
         (* [sbank] rows permuted into executor visit order ([visit_bank]); the
            layout the C executor is handed at [Kernel.prepare] *)
-  ; sgemm: (float, Nx.float64_elt) Nx.t Lazy.t
+  ; sgemm: (float, Nx.float64_elt) Nx.t Lazy.Mutexed.t
         (* [P; sl], built on the first [apply_gemm] and shared by every later
-           call on this config; forcing is not domain-safe, like every other
-           piece of state in this module *)
+           call on this config. A config is shared across domains, so each piece
+           built on first use is a [Lazy.Mutexed.t]: the first domain to force
+           it builds it, and any other that asks meanwhile waits for that
+           build *)
   ; sexec: stage_exec
         (* which executor runs this stage. The filter, the accessors and the law
            are identical whichever it is — the tag is visible only through
@@ -687,12 +689,12 @@ and stage_exec =
           ([gemm_bank] with [blocks = 1]) *)
 
 (* The [P; L] arrangement at each kernel dtype, the float32 one rounded from the
-   float64 values; each is built on the first kernel prepared at its dtype, so a
-   float32 kernel neither builds the float64 matrix nor casts it, and forcing is
-   not domain-safe, like [sgemm]. *)
+   float64 values; each is built on the first kernel prepared at its dtype, from
+   any domain, like [sgemm], so a float32 kernel neither builds the float64
+   matrix nor casts it. *)
 and gemm_banks =
-  { g64: (float, Nx.float64_elt) Nx.t Lazy.t
-  ; g32: (float, Nx.float32_elt) Nx.t Lazy.t }
+  { g64: (float, Nx.float64_elt) Nx.t Lazy.Mutexed.t
+  ; g32: (float, Nx.float32_elt) Nx.t Lazy.Mutexed.t }
 
 type config =
   { sample_rate: int
@@ -710,9 +712,9 @@ let gemm_of : type a. (float, a) Nx.dtype -> gemm_banks -> (float, a) Nx.t =
  fun dtype g ->
   match dtype with
   | Nx.Float32 ->
-      Lazy.force g.g32
+      Lazy.Mutexed.force g.g32
   | Nx.Float64 ->
-      Lazy.force g.g64
+      Lazy.Mutexed.force g.g64
   | _ ->
       assert false
 
@@ -1037,32 +1039,41 @@ let make_stage ?(exec = Xdirect) ~l ~m ~k ~fc ~beta () =
   ; sproto= proto
   ; sbank= bank
   ; svisit= visit_bank ~l ~m ~taps bank
-  ; sgemm= lazy (gemm_bank ~l ~m ~k ~blocks:(gemm_blocks l) bank)
+  ; sgemm=
+      Lazy.Mutexed.from_fun (fun () ->
+          gemm_bank ~l ~m ~k ~blocks:(gemm_blocks l) bank )
   ; sexec=
       ( match exec with
       | Xdirect ->
           Sdirect
       | Xgemm ->
           Sgemm
-            { g64= lazy (gemm_bank ~l ~m ~k ~blocks:1 bank)
-            ; g32= lazy (gemm_bank32 ~l ~m ~k ~blocks:1 bank) }
+            { g64=
+                Lazy.Mutexed.from_fun (fun () ->
+                    gemm_bank ~l ~m ~k ~blocks:1 bank )
+            ; g32=
+                Lazy.Mutexed.from_fun (fun () ->
+                    gemm_bank32 ~l ~m ~k ~blocks:1 bank ) }
       | Xols (n, b, delta) ->
           Sols
             { on= n
             ; ob= b
             ; odelta= delta
             ; oh=
-                lazy
-                  (let len = if l > 1 then n * l else n in
-                   let w = if l > 1 then n * l else n / m in
-                   let padded = Nx.pad [|(0, len - Array.length h)|] 0. proto in
-                   let spec = Nx.rfft Nx.complex128 padded in
-                   let scale =
-                     (if m > 1 then 1. /. Float.of_int m else 1.)
-                     *. if ols_folds_inverse w then 1. /. Float.of_int w else 1.
-                   in
-                   if scale = 1. then spec
-                   else Nx.mul_s spec {Complex.re= scale; im= 0.} ) } ) }
+                Lazy.Mutexed.from_fun (fun () ->
+                    let len = if l > 1 then n * l else n in
+                    let w = if l > 1 then n * l else n / m in
+                    let padded =
+                      Nx.pad [|(0, len - Array.length h)|] 0. proto
+                    in
+                    let spec = Nx.rfft Nx.complex128 padded in
+                    let scale =
+                      (if m > 1 then 1. /. Float.of_int m else 1.)
+                      *.
+                      if ols_folds_inverse w then 1. /. Float.of_int w else 1.
+                    in
+                    if scale = 1. then spec
+                    else Nx.mul_s spec {Complex.re= scale; im= 0.} ) } ) }
 
 module Config = struct
   type t = config
@@ -1111,7 +1122,8 @@ module Config = struct
             ; sproto= Nx.create Nx.float64 [|1|] [|1.|]
             ; sbank= Nx.create Nx.float64 [|1; 1|] [|1.|]
             ; svisit= Nx.create Nx.float64 [|1; 1|] [|1.|]
-            ; sgemm= lazy (Nx.create Nx.float64 [|1; 1|] [|1.|])
+            ; sgemm=
+                Lazy.Mutexed.from_val (Nx.create Nx.float64 [|1; 1|] [|1.|])
             ; sexec= Sdirect } ] }
     else begin
       let width = (1. -. passband) /. Float.of_int (Int.max l m) in
@@ -1586,7 +1598,7 @@ module Kernel = struct
         | Sols o ->
             Ox
               { op= o
-              ; ohs= Lazy.force o.oh
+              ; ohs= Lazy.Mutexed.force o.oh
               ; carry= zeroed (kind dtype) (channels * o.on)
               ; oblocks= 0 }
       in
@@ -2190,7 +2202,9 @@ let gemm_stage ~sl ~sm ~sk sgemm ~total dtype lead x =
         if i = rank - 2 then rank - 1 else if i = rank - 1 then rank - 2 else i )
   in
   let y =
-    Nx.matmul (Nx.transpose ~axes patches) (Nx.cast dtype (Lazy.force sgemm))
+    Nx.matmul
+      (Nx.transpose ~axes patches)
+      (Nx.cast dtype (Lazy.Mutexed.force sgemm))
   in
   let y = Nx.reshape (Array.append lead [|frames * sl|]) y in
   Nx.slice
