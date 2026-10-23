@@ -69,6 +69,7 @@ SUITE_DIRECTORIES = {
     "delta": "soundml/test/delta/vectors",
     "pcen": "soundml/test/pcen/vectors",
     "trim": "soundml/test/trim/vectors",
+    "defaults": "soundml/test/defaults/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -1476,8 +1477,8 @@ class OnsetFeaturesVectorGenerator:
       slice clamping, a left-aligned geometry, a small-FFT geometry, and a
       silence tail whose all-zero frames drive the amin floor and the global
       top_db clamp inside the logarithmic difference (verified to bind).
-      pad_mode is always passed explicitly ("reflect", the Stft.Config
-      default).
+      pad_mode is always passed explicitly ("reflect", which the OCaml side
+      names as ~pad:`Reflect).
 
     - onset_strength: librosa.onset.onset_strength end-to-end on its default
       chain (the log-power mel spectrogram at power_to_db defaults): lags
@@ -3032,7 +3033,7 @@ class PvocVectorGenerator:
       (compressing, expanding, unity and a non-round rate), two signal
       lengths, both float dtypes, short signals, and one batched pair. The
       analysis is librosa's default zero padding, which is this library's
-      `Constant 0.` rather than its own `Reflect` default. librosa 1.0's
+      `Constant 0.` default as well. librosa 1.0's
       vocoder interpolates magnitudes linearly between analysis frames and
       extrapolates them from the last two past the final one, and its phase
       accumulates the raw inter-frame difference, which is zero from the
@@ -3531,6 +3532,185 @@ class TrimVectorGenerator:
         write_suite(self.SUITE, "trim", self.cases())
 
 
+class DefaultsVectorGenerator:
+    """Golden vectors for the library's defaults against librosa's: every
+    call leaves pad_mode, center and window at librosa 1.0's defaults
+    (constant zero padding, centered frames, the Hann window), over the LCG
+    stream under this suite's seed.
+
+    Three files:
+
+    - stft: librosa.stft given n_fft alone -- magnitudes at two lengths and
+      both dtypes, a signal shorter than half the transform (which reflection
+      could only fill by reflecting repeatedly), the transform with every
+      argument at its default, and the real and imaginary parts of one
+      complex case.
+    - features: librosa.feature.melspectrogram (at n_fft 512 and with every
+      analysis argument at its default), mfcc, chroma_stft, spectral_contrast,
+      spectral_centroid and librosa.onset.onset_strength, plus rms and
+      zero_crossing_rate at their defaults. The feature functions fix
+      hop_length at 512 whatever n_fft is, so the n_fft 512 cases pass 128 --
+      what librosa.stft and Stft.Config both default to there; the mel and
+      chroma filterbanks are computed in float64, chroma pins tuning=0.0
+      (librosa estimates it from the signal), and rms asks for a float64
+      result.
+    - synthesis: librosa.griffinlim at init=None (its only deterministic
+      start), librosa.effects.time_stretch and librosa.effects.hpss given
+      n_fft alone.
+
+    Every case that accepts pad_mode is asserted to move by more than a
+    thousandth of its peak under pad_mode="reflect", so each one pins the
+    default padding rather than merely passing through it; time_stretch
+    cannot take the argument (it forwards its keywords to istft too) and
+    zero_crossing_rate has none. float32 cases quantize the signal to
+    float32 and compute the reference in float64.
+    """
+
+    SUITE = "defaults"
+
+    SEED = 20261026
+
+    SR = 22050
+
+    def signal(self, n, dtype="float64"):
+        y = StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    @staticmethod
+    def case(name, params, compute, sensitive=True):
+        """One case: compute(**extra) is the librosa call at its defaults;
+        when sensitive, the same call under pad_mode="reflect" must differ."""
+        expected = np.asarray(compute(), dtype=np.float64)
+        assert np.isfinite(expected).all(), name
+        if sensitive:
+            moved = np.max(np.abs(np.asarray(compute(pad_mode="reflect")) - expected))
+            assert moved > 1e-3 * np.max(np.abs(expected)), (name, moved)
+        return {"name": name, "params": params, "shape": list(expected.shape),
+                "values": expected.ravel().tolist()}
+
+    def stft_cases(self):
+        cases = []
+        # (fft_size, length, dtype, keyword arguments librosa.stft is given)
+        for fft_size, n, dtype, kwargs in [
+            (64, 127, "float64", {"n_fft": 64}),
+            (64, 128, "float64", {"n_fft": 64}),
+            (64, 127, "float32", {"n_fft": 64}),
+            (64, 20, "float64", {"n_fft": 64}),
+            (2048, 3000, "float64", {}),
+        ]:
+            y = self.signal(n, dtype)
+            cases.append(self.case(
+                f"magnitude_fft{fft_size}_n{n}_{dtype}",
+                {"kind": "magnitude", "fft_size": fft_size, "length": n,
+                 "dtype": dtype},
+                lambda y=y, kwargs=kwargs, **extra: np.abs(librosa.stft(
+                    y, dtype=np.complex128, **kwargs, **extra))))
+        y = self.signal(37)
+        for kind, part in (("real", np.real), ("imag", np.imag)):
+            cases.append(self.case(
+                f"{kind}_fft16_n37_float64",
+                {"kind": kind, "fft_size": 16, "length": 37, "dtype": "float64"},
+                lambda part=part, **extra: part(librosa.stft(
+                    y, n_fft=16, dtype=np.complex128, **extra))))
+        return cases
+
+    def feature_cases(self):
+        sr = self.SR
+        y = self.signal(1000)
+        y32 = self.signal(1000, "float32")
+        long = self.signal(3000)
+        geometry = {"n_fft": 512, "hop_length": 128}
+        mel = {"n_mels": 40, "dtype": np.float64}
+
+        def params(kind, n, dtype="float64", **extra):
+            return {"kind": kind, "length": n, "dtype": dtype, **extra}
+
+        return [
+            self.case("melspectrogram_fft512_mel40_float64",
+                      params("melspectrogram", 1000, fft_size=512, hop=128,
+                             n_mels=40),
+                      lambda **extra: librosa.feature.melspectrogram(
+                          y=y, sr=sr, **geometry, **mel, **extra)),
+            self.case("melspectrogram_fft512_mel40_float32",
+                      params("melspectrogram", 1000, "float32", fft_size=512,
+                             hop=128, n_mels=40),
+                      lambda **extra: librosa.feature.melspectrogram(
+                          y=y32, sr=sr, **geometry, **mel, **extra)),
+            self.case("melspectrogram_defaults",
+                      params("melspectrogram", 3000, fft_size=2048, hop=512,
+                             n_mels=128),
+                      lambda **extra: librosa.feature.melspectrogram(
+                          y=long, sr=sr, dtype=np.float64, **extra)),
+            self.case("mfcc_fft512_mel40",
+                      params("mfcc", 1000, fft_size=512, hop=128, n_mels=40),
+                      lambda **extra: librosa.feature.mfcc(
+                          y=y, sr=sr, **geometry, **mel, **extra)),
+            self.case("chroma_stft_fft512",
+                      params("chroma_stft", 1000, fft_size=512, hop=128),
+                      lambda **extra: librosa.feature.chroma_stft(
+                          y=y, sr=sr, **geometry, tuning=0.0, dtype=np.float64,
+                          **extra)),
+            self.case("spectral_contrast_fft512",
+                      params("spectral_contrast", 1000, fft_size=512, hop=128),
+                      lambda **extra: librosa.feature.spectral_contrast(
+                          y=y, sr=sr, **geometry, **extra)),
+            self.case("spectral_centroid_fft512",
+                      params("spectral_centroid", 1000, fft_size=512, hop=128),
+                      lambda **extra: librosa.feature.spectral_centroid(
+                          y=y, sr=sr, **geometry, **extra)),
+            self.case("onset_strength_fft512_mel40",
+                      params("onset_strength", 1000, fft_size=512, hop=128,
+                             n_mels=40),
+                      lambda **extra: librosa.onset.onset_strength(
+                          y=y, sr=sr, **geometry, **mel, **extra)),
+            self.case("onset_strength_defaults",
+                      params("onset_strength", 3000, fft_size=2048, hop=512,
+                             n_mels=128),
+                      lambda **extra: librosa.onset.onset_strength(
+                          y=long, sr=sr, dtype=np.float64, **extra)),
+            self.case("rms_defaults", params("rms", 3000),
+                      lambda **extra: librosa.feature.rms(
+                          y=long, dtype=np.float64, **extra)),
+            self.case("zero_crossing_rate_defaults",
+                      params("zero_crossing_rate", 3000),
+                      lambda: librosa.feature.zero_crossing_rate(long),
+                      sensitive=False),
+        ]
+
+    def synthesis_cases(self):
+        bins, frames = 33, 20
+        magnitudes = np.abs(self.signal(bins * frames)).reshape(bins, frames) + 0.5
+        y = self.signal(1000)
+        return [
+            self.case("griffinlim_fft64",
+                      {"kind": "griffinlim", "fft_size": 64, "bins": bins,
+                       "frames": frames, "dtype": "float64"},
+                      lambda **extra: librosa.griffinlim(
+                          magnitudes, init=None, **extra)),
+            self.case("time_stretch_fft256_r1p25",
+                      {"kind": "time_stretch", "fft_size": 256, "rate": 1.25,
+                       "length": 1000, "dtype": "float64"},
+                      lambda: librosa.effects.time_stretch(y, rate=1.25,
+                                                           n_fft=256),
+                      sensitive=False),
+            self.case("hpss_harmonic_fft256",
+                      {"kind": "harmonic", "fft_size": 256, "length": 1000,
+                       "dtype": "float64"},
+                      lambda **extra: librosa.effects.hpss(
+                          y, n_fft=256, **extra)[0]),
+            self.case("hpss_percussive_fft256",
+                      {"kind": "percussive", "fft_size": 256, "length": 1000,
+                       "dtype": "float64"},
+                      lambda **extra: librosa.effects.hpss(
+                          y, n_fft=256, **extra)[1]),
+        ]
+
+    def generate(self):
+        write_suite(self.SUITE, "stft", self.stft_cases())
+        write_suite(self.SUITE, "features", self.feature_cases())
+        write_suite(self.SUITE, "synthesis", self.synthesis_cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -3548,6 +3728,7 @@ GENERATORS = [
     DeltaVectorGenerator,
     PcenVectorGenerator,
     TrimVectorGenerator,
+    DefaultsVectorGenerator,
 ]
 
 if __name__ == "__main__":

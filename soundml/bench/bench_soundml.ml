@@ -101,11 +101,9 @@ let stft_benchmarks () =
         Soundml.Stft.power_spectrum stft_config x64 ) ]
 
 (* The synthesis rows read a spectrum of the same audio, built once outside the
-   timed thunk. Griffin-Lim pads with zeros, the padding its librosa twin
-   defaults to. *)
-let griffin_lim_config =
-  Soundml.Stft.Config.create ~fft_size:2048 ~hop:512 ~pad:(`Constant 0.) ()
-
+   timed thunk, with the analysis configuration above; Griffin-Lim reuses it as
+   is, its default zero padding being the one librosa's griffinlim defaults
+   to. *)
 let istft_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
   let x64 = Nx.rand Nx.float64 [|n_audio|] in
@@ -154,14 +152,14 @@ let istft_stream_benchmarks () =
 let griffin_lim_benchmarks () =
   let x32 = Nx.rand Nx.float32 [|n_audio|] in
   let x64 = Nx.rand Nx.float64 [|n_audio|] in
-  let s32 = Soundml.Stft.power_spectrum ~power:1. griffin_lim_config x32 in
-  let s64 = Soundml.Stft.power_spectrum ~power:1. griffin_lim_config x64 in
+  let s32 = Soundml.Stft.power_spectrum ~power:1. stft_config x32 in
+  let s64 = Soundml.Stft.power_spectrum ~power:1. stft_config x64 in
   [ Thumper.bench "griffin_lim 30s n32 f32 fft2048 hop512" (fun () ->
         Soundml.Stft.griffin_lim ~n_iter:32 ~momentum:0.99 ~init:`Zero_phase
-          griffin_lim_config s32 )
+          stft_config s32 )
   ; Thumper.bench "griffin_lim 30s n32 f64 fft2048 hop512" (fun () ->
         Soundml.Stft.griffin_lim ~n_iter:32 ~momentum:0.99 ~init:`Zero_phase
-          griffin_lim_config s64 ) ]
+          stft_config s64 ) ]
 
 (* The hpss group separates the same 30 s clip: three spectrogram-domain rows
    over the precomputed power spectrogram — the two dtypes at the default

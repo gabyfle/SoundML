@@ -73,35 +73,51 @@ let left_width fft = function
 
 let right_width fft = function `Centered -> fft / 2 | `Left | `Right -> 0
 
-(* {1 The configuration grid} *)
+(* {1 The configuration grid}
+
+   Every entry names reflection as its border, which the [`Left] ones never
+   read. Synthesis never reads the padding, but {!Sistft_stage} drives the same
+   grid through the analysis as well, and reflection is the border whose
+   streaming keeps the most state: the samples it mirrors before the first frame
+   and, where one hop reaches past half the transform, a held copy of the right
+   border. *)
 
 let grid =
-  [ ("centered fft8 hop2", Stft.Config.create ~fft_size:8 ~hop:2 ())
+  [ ( "centered fft8 hop2"
+    , Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:2 () )
   ; ( "centered fft8 hop3 non-divisible"
-    , Stft.Config.create ~fft_size:8 ~hop:3 () )
-  ; ("centered fft9 hop2 odd", Stft.Config.create ~fft_size:9 ~hop:2 ())
-  ; ("centered fft9 hop4 odd", Stft.Config.create ~fft_size:9 ~hop:4 ())
-  ; ("left fft8 hop3", Stft.Config.create ~alignment:`Left ~fft_size:8 ~hop:3 ())
+    , Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:3 () )
+  ; ( "centered fft9 hop2 odd"
+    , Stft.Config.create ~pad:`Reflect ~fft_size:9 ~hop:2 () )
+  ; ( "centered fft9 hop4 odd"
+    , Stft.Config.create ~pad:`Reflect ~fft_size:9 ~hop:4 () )
+  ; ( "left fft8 hop3"
+    , Stft.Config.create ~alignment:`Left ~pad:`Reflect ~fft_size:8 ~hop:3 () )
   ; ( "left fft16 hop4 win10"
-    , Stft.Config.create ~alignment:`Left ~fft_size:16 ~hop:4 ~win_length:10 ()
-    )
+    , Stft.Config.create ~alignment:`Left ~pad:`Reflect ~fft_size:16 ~hop:4
+        ~win_length:10 () )
   ; ( "right fft8 hop3"
-    , Stft.Config.create ~alignment:`Right ~fft_size:8 ~hop:3 () )
-  ; ( "right fft9 hop4 win7"
-    , Stft.Config.create ~alignment:`Right ~fft_size:9 ~hop:4 ~win_length:7 ()
+    , Stft.Config.create ~alignment:`Right ~pad:`Reflect ~fft_size:8 ~hop:3 ()
     )
+  ; ( "right fft9 hop4 win7"
+    , Stft.Config.create ~alignment:`Right ~pad:`Reflect ~fft_size:9 ~hop:4
+        ~win_length:7 () )
   ; ( "centered fft16 hop5 win12"
-    , Stft.Config.create ~fft_size:16 ~hop:5 ~win_length:12 () )
+    , Stft.Config.create ~pad:`Reflect ~fft_size:16 ~hop:5 ~win_length:12 () )
   ; ( "centered fft32 hop7 win21"
-    , Stft.Config.create ~fft_size:32 ~hop:7 ~win_length:21 () )
-  ; ("centered fft8 hop5 tail-held", Stft.Config.create ~fft_size:8 ~hop:5 ())
-  ; ("centered fft8 hop6 tail-held", Stft.Config.create ~fft_size:8 ~hop:6 ())
+    , Stft.Config.create ~pad:`Reflect ~fft_size:32 ~hop:7 ~win_length:21 () )
+  ; ( "centered fft8 hop5 tail-held"
+    , Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:5 () )
+  ; ( "centered fft8 hop6 tail-held"
+    , Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:6 () )
   ; ( "centered fft16 hop11 tail-held"
-    , Stft.Config.create ~fft_size:16 ~hop:11 () )
+    , Stft.Config.create ~pad:`Reflect ~fft_size:16 ~hop:11 () )
   ; ( "centered fft16 hop4 magnitude"
-    , Stft.Config.create ~fft_size:16 ~hop:4 ~scale:`Magnitude () )
+    , Stft.Config.create ~pad:`Reflect ~fft_size:16 ~hop:4 ~scale:`Magnitude ()
+    )
   ; ( "centered fft16 hop4 hamming"
-    , Stft.Config.create ~window:Window.Hamming ~fft_size:16 ~hop:4 () ) ]
+    , Stft.Config.create ~pad:`Reflect ~window:Window.Hamming ~fft_size:16
+        ~hop:4 () ) ]
 
 (* {1 Chunkings of the frame sequence} *)
 

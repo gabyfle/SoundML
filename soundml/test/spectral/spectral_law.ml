@@ -25,8 +25,8 @@ let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* stft geometry: fft 8, five bins over 0..500 Hz; the feature grid is the FFT
    grid those five bins imply. *)
-let stft_config ?(hop = 2) ?(alignment = `Centered) () =
-  Stft.Config.create ~alignment ~fft_size:8 ~hop ()
+let stft_config ?(hop = 2) ?(alignment = `Centered) ?pad () =
+  Stft.Config.create ~alignment ?pad ~fft_size:8 ~hop ()
 
 (* {2 Partitionings (the seeded pattern of the pipeline law tests)} *)
 
@@ -149,7 +149,7 @@ let law_tests =
         (fun () -> stft_config ~alignment:`Left ~hop:3 ())
         ("centroid", spectral_centroid_stage ~sample_rate ())
     ; chain_case "right reflect (border lookahead)"
-        (fun () -> stft_config ~alignment:`Right ~hop:3 ())
+        (fun () -> stft_config ~alignment:`Right ~pad:`Reflect ~hop:3 ())
         ("centroid", spectral_centroid_stage ~sample_rate ()) ]
 
 (* {2 Static queries} *)

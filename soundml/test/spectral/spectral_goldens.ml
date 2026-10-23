@@ -111,12 +111,13 @@ let spectrogram_case stem (case : Tutils.Golden.case) =
 
 (* End-to-end cases: the magnitude spectrogram comes from Stft.power_spectrum
    ~power:1. on the LCG signal, against librosa.feature.* called on the same
-   signal with the analysis geometry passed explicitly. *)
+   signal with the analysis geometry passed explicitly, reflect padding
+   included. *)
 let signal_case stem (case : Tutils.Golden.case) =
   test case.name (fun () ->
       let length = Tutils.Golden.int_param case "length" in
       let config =
-        Stft.Config.create
+        Stft.Config.create ~pad:`Reflect
           ~fft_size:(Tutils.Golden.int_param case "fft_size")
           ~hop:(Tutils.Golden.int_param case "hop")
           ()

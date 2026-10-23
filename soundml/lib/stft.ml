@@ -67,7 +67,7 @@ module Config = struct
     ; window_values: Float.Array.t (* [analysis_window]'s elements *) }
 
   let create ?(window = Window.Hann) ?win_length ?hop ?(alignment = `Centered)
-      ?(pad = `Reflect) ?(scale = `None) ~fft_size () =
+      ?(pad = `Constant 0.) ?(scale = `None) ~fft_size () =
     if fft_size < 1 then
       invalid_arg
         (Printf.sprintf

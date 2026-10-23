@@ -181,14 +181,17 @@ let measure c =
   ignore (Pipeline.Stream.flush s) ;
   (!first, !worst)
 
-(* [`Right] with a border that does not itself look ahead — the two geometries
-   the grid, which pads by reflection everywhere, does not carry. *)
+(* [`Right] with a border that does not itself look ahead — the geometries the
+   grid, which pads by reflection everywhere, does not carry, the default zero
+   border among them. *)
 let causal_right =
   [ ( "right constant fft16 hop4"
     , Stft.Config.create ~alignment:`Right ~pad:(`Constant 0.) ~fft_size:16
         ~hop:4 () )
   ; ( "right edge fft9 hop2"
-    , Stft.Config.create ~alignment:`Right ~pad:`Edge ~fft_size:9 ~hop:2 () ) ]
+    , Stft.Config.create ~alignment:`Right ~pad:`Edge ~fft_size:9 ~hop:2 () )
+  ; ( "right default fft8 hop3"
+    , Stft.Config.create ~alignment:`Right ~fft_size:8 ~hop:3 () ) ]
 
 let latency_tests =
   [ test "the composition reports the sum of the two declarations" (fun () ->
@@ -217,7 +220,8 @@ let latency_tests =
         equal ~msg:"right with a causal border: fft_size - 1" rate_t (r 15 1)
           (Pipeline.latency (round_trip right_causal)) ;
         let right_reflect =
-          Stft.Config.create ~alignment:`Right ~fft_size:16 ~hop:4 ()
+          Stft.Config.create ~alignment:`Right ~pad:`Reflect ~fft_size:16 ~hop:4
+            ()
         in
         equal ~msg:"right with a reflecting border: 2 * fft_size - 2" rate_t
           (r 30 1)

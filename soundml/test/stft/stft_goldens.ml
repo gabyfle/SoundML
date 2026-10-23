@@ -31,11 +31,13 @@ let alignment_of_param case =
   | other ->
       failf "golden case %s: unknown alignment %s" case.name other
 
+(* The vectors pass pad_mode="reflect" to librosa, so the configuration names
+   [`Reflect]; the defaults suite replays librosa's own zero padding. *)
 let config_of_params (case : Tutils.Golden.case) =
   Stft.Config.create
     ~win_length:(Tutils.Golden.int_param case "win_length")
     ~hop:(Tutils.Golden.int_param case "hop")
-    ~alignment:(alignment_of_param case)
+    ~alignment:(alignment_of_param case) ~pad:`Reflect
     ~fft_size:(Tutils.Golden.int_param case "fft_size")
     ()
 

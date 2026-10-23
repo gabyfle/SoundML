@@ -25,8 +25,8 @@ let rate_t = Testable.make ~pp:Pipeline.Rate.pp ~equal:Pipeline.Rate.equal
 
 (* stft geometry: fft 8, bins 5 over 0..500 Hz; mel geometry: 3 bands on the
    same grid, every filter supported *)
-let stft_config ?(hop = 2) ?(alignment = `Centered) () =
-  Stft.Config.create ~alignment ~fft_size:8 ~hop ()
+let stft_config ?(hop = 2) ?(alignment = `Centered) ?pad () =
+  Stft.Config.create ~alignment ?pad ~fft_size:8 ~hop ()
 
 let mel_config ?(norm = `Slaney) () =
   Mel.Config.create ~norm ~n_mels:3 ~sample_rate:1000 ~fft_size:8 ()
@@ -186,7 +186,7 @@ let law_tests =
       (fun () -> stft_config ~alignment:`Left ~hop:3 ())
       mel_config
   ; chain_case "power_stage >> mel right reflect (border lookahead)"
-      (fun () -> stft_config ~alignment:`Right ~hop:3 ())
+      (fun () -> stft_config ~alignment:`Right ~pad:`Reflect ~hop:3 ())
       mel_config
   ; mfcc_alone_case "mfcc stage alone" 3
   ; mfcc_alone_case "mfcc stage alone, two liftered coefficients" ~lifter:22. 2
