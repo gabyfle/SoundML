@@ -781,6 +781,12 @@ val onset_strength_stage :
 
     Raises [Invalid_argument] if [lag < 1]. *)
 
+(** {2:features_hpss Harmonic/percussive separation}
+
+    Median-filtering separation of sustained partials from transients, in the
+    signal, complex-spectrum, spectrogram and mask domains, each spectral face
+    with its {!Pipeline} stage. *)
+
 val hpss :
      Stft.Config.t
   -> ?kernel_size:int * int
@@ -928,6 +934,104 @@ val hpss_masks :
 
     The parameters are those of {!hpss}, and [Invalid_argument] is raised on
     the same conditions, with rank below two in place of rank zero. *)
+
+val hpss_of_spectrogram_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t * (float, 'a) Nx.t, 'k) Pipeline.t
+(** [hpss_of_spectrogram_stage ()] is {!hpss_of_spectrogram} as a pipeline
+    stage: rate 1:1 in frames and format-preserving, consuming
+    [\[...; bins; frames\]] chunks of a magnitude or power spectrogram —
+    compose it downstream of [Stft.power_stage c] — and emitting the
+    harmonic and percussive components of the same frames as a pair. Pairs
+    are joined component by component along the frame axis, so
+    [Pipeline.map fst] and [Pipeline.map snd] keep one component; joining
+    zero chunks yields the pair of empty [\[...; bins; 0\]] spectrograms.
+    Every partitioning of a spectrogram yields the bits
+    {!hpss_of_spectrogram} computes on the whole of it.
+
+    Only the harmonic median, along the frame axis, has memory. The window
+    of frame [i] reaches [k_h - 1 - k_h / 2] frames past it — [15] at the
+    default [k_h = 31], none at [k_h <= 2] — so the stage declares that many
+    frames of latency and emits frame [i] with the push that delivers frame
+    [i + k_h - 1 - k_h / 2]; a push that completes no frame emits no chunk.
+    The windows of the last [k_h - 1 - k_h / 2] frames of a stream (all of
+    a shorter one) cross its end and depend on its length through the
+    reflection, so the flush emits them, in one chunk. The percussive median
+    and the masks act within a frame and add no latency. Behind
+    [Stft.power_stage c] the stage adds [k_h - 1 - k_h / 2] hops to the
+    latency in source samples; lowering [k_h] is the one way to shorten it
+    that keeps the separation librosa's.
+
+    A push costs, per row, one window update for each frame it brings and,
+    for each frame it completes, the percussive median and the masks; the
+    state is two arrays of [k_h] floats per row, made at the first chunk.
+
+    Raises [Invalid_argument] for the parameters as {!hpss_of_spectrogram}
+    does, when the stage is built, and, at the chunk concerned, for a chunk
+    of rank below two or of a dtype other than float32 and float64, one
+    whose leading shape differs from the first chunk's, or one pushed after
+    the flush — reset the stream before reusing it. *)
+
+val hpss_masks_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t * (float, 'a) Nx.t, 'k) Pipeline.t
+(** [hpss_masks_stage ()] is {!hpss_masks} as a pipeline stage, emitting the
+    mask pair of each frame exactly as {!hpss_of_spectrogram_stage} emits the
+    components: the same latency, flush, joining and errors. Every
+    partitioning of a spectrogram yields the bits {!hpss_masks} computes on
+    the whole of it. *)
+
+val hpss_of_stft_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ( (Complex.t, 'c) Nx.t
+     , (Complex.t, 'c) Nx.t * (Complex.t, 'c) Nx.t
+     , 'k )
+     Pipeline.t
+(** [hpss_of_stft_stage ()] is {!hpss_of_stft} as a pipeline stage, emitting
+    the complex components of each frame, phase preserved, exactly as
+    {!hpss_of_spectrogram_stage} emits the spectrogram's: the same latency,
+    flush, joining and errors, over complex [\[...; bins; frames\]] chunks —
+    {!Stft.stage} output. The threaded stream format passes through
+    unchanged, as {!Stft.stage} leaves it. Every partitioning of a spectrum
+    yields the bits {!hpss_of_stft} computes on the whole of it.
+
+    Between an analysis and a synthesis stage it separates a signal as it
+    streams:
+
+    {[
+      Pipeline.(
+        Stft.stage cdtype c
+        >> map fst (hpss_of_stft_stage ())
+        >> Stft.synthesis_stage dtype c )
+    ]}
+
+    streams the harmonic part, [map snd] the percussive one — each computing
+    both components and dropping one, as {!harmonic} does — and
+    [Pipeline.fanout] over [stateless fst >> Stft.synthesis_stage dtype c]
+    and [stateless snd >> Stft.synthesis_stage dtype c] both, from one
+    analysis and one separation. The stream totals to {!Stft.invert} at its
+    default length of the components {!hpss_of_stft} finds in
+    {!Stft.transform}, bit for bit, and therefore to {!harmonic} and
+    {!percussive} on every sample both carry: all of [x] when centred frames
+    of an even [fft_size] tile it exactly, its length a multiple of [hop];
+    otherwise the stream ends at the synthesis's default length, as every
+    synthesis stream does. The chain declares
+    [latency (Stft.stage cdtype c) + (k_h - 1 - k_h / 2) * hop
+     + Config.synthesis_latency c] source samples of latency: 9728 at
+    [fft_size = 2048], [hop = 512], centred, and the default kernel —
+    441 ms at 22050 Hz.
+
+    The real and imaginary parts travel with the magnitude in rings of their
+    own, so the state is four arrays of [k_h] floats per row. *)
 
 val version : string
 (** [version] is the version of the SoundML distribution this library was built

@@ -19,7 +19,13 @@
    Hard masks (power = infinity) are exact 0/1 decisions where one flipped
    comparison changes a whole bin, so they are checked by exact agreement rather
    than by tolerance: the fraction of bins where the mask matches the reference
-   bit for bit must be 1. *)
+   bit for bit must be 1.
+
+   Every case is also replayed through the pipeline stages — the offline driver
+   and a stream of one-frame pushes for the spectrogram files, the analysis,
+   separation and synthesis chain for the effects file — under the same
+   tolerances, so the stages' parity with the reference is checked directly and
+   not only through their agreement with the offline faces. *)
 
 open Windtrap
 open Soundml
@@ -110,33 +116,77 @@ let check_exact_agreement ~msg ~expected actual =
       (Float.of_int (total - !flipped) /. Float.of_int total)
       !flipped total
 
+let source () = Pipeline.Format.audio Nx.float64 ~sample_rate:22050 ~channels:1
+
+let last_dim t = Nx.dim (Nx.ndim t - 1) t
+
+let frames_of t start stop =
+  let nd = Nx.ndim t in
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
+    t
+
+(* [streamed p x ~chunk] is [p] streamed over [x] in pushes of [chunk] items,
+   its chunks joined by [join]. *)
+let streamed p x ~chunk ~join =
+  let s = Pipeline.Stream.prepare p ~source:(source ()) ~max_chunk:chunk in
+  let n = last_dim x in
+  let pushed =
+    List.filter_map (Pipeline.Stream.push s)
+      (List.init
+         ((n + chunk - 1) / chunk)
+         (fun i -> frames_of x (i * chunk) (Int.min n ((i + 1) * chunk))) )
+  in
+  join (pushed @ Pipeline.Stream.flush s)
+
+let join_pairs parts =
+  ( Nx.concatenate ~axis:(-1) (List.map fst parts)
+  , Nx.concatenate ~axis:(-1) (List.map snd parts) )
+
+(* [separations ~masks ... s] is the separation of [s] by the offline face, by
+   its stage under the offline driver, and by its stage streamed one frame at a
+   time, each labelled. *)
+let separations ~masks ~kernel_size ~power ~margin s =
+  let stage () =
+    if masks then hpss_masks_stage ~kernel_size ~power ~margin ()
+    else hpss_of_spectrogram_stage ~kernel_size ~power ~margin ()
+  in
+  [ ( ""
+    , if masks then hpss_masks ~kernel_size ~power ~margin s
+      else hpss_of_spectrogram ~kernel_size ~power ~margin s )
+  ; (" (stage, run)", Pipeline.run ~source:(source ()) (stage ()) s)
+  ; ( " (stage, one-frame pushes)"
+    , streamed (stage ()) s ~chunk:1 ~join:join_pairs ) ]
+
 let run_spectrogram_case ~masks (case : Tutils.Golden.case) =
   test case.name (fun () ->
       let shape, values = source_of case in
       let kernel_size = kernel_of case in
       let power = power_of case in
       let margin = margin_of case in
-      let face s =
-        component_of case
-          ( if masks then hpss_masks ~kernel_size ~power ~margin s
-            else hpss_of_spectrogram ~kernel_size ~power ~margin s )
-      in
+      let faces s = separations ~masks ~kernel_size ~power ~margin s in
       match Tutils.Golden.string_param case "dtype" with
       | "float64" ->
-          let actual = face (Nx.create Nx.float64 shape values) in
-          if masks && not (Float.is_finite power) then
-            check_exact_agreement ~msg:case.name ~expected:case.values actual
-          else
-            Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
-              ~shape:case.shape ~msg:case.name ~expected:case.values actual
+          List.iter
+            (fun (how, pair) ->
+              let msg = case.name ^ how and actual = component_of case pair in
+              if masks && not (Float.is_finite power) then
+                check_exact_agreement ~msg ~expected:case.values actual
+              else
+                Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
+                  ~shape:case.shape ~msg ~expected:case.values actual )
+            (faces (Nx.create Nx.float64 shape values))
       | "float32" ->
-          let actual = face (Nx.create Nx.float32 shape values) in
-          if masks && not (Float.is_finite power) then
-            check_exact_agreement ~msg:case.name ~expected:case.values actual
-          else
-            Tutils.check_close ~rtol:Tutils.float32_rtol
-              ~atol:Tutils.float32_atol ~shape:case.shape ~msg:case.name
-              ~expected:case.values actual
+          List.iter
+            (fun (how, pair) ->
+              let msg = case.name ^ how and actual = component_of case pair in
+              if masks && not (Float.is_finite power) then
+                check_exact_agreement ~msg ~expected:case.values actual
+              else
+                Tutils.check_close ~rtol:Tutils.float32_rtol
+                  ~atol:Tutils.float32_atol ~shape:case.shape ~msg
+                  ~expected:case.values actual )
+            (faces (Nx.create Nx.float32 shape values))
       | other ->
           failf "golden case %s: unknown dtype %s" case.name other )
 
@@ -164,15 +214,54 @@ let run_effects_case (case : Tutils.Golden.case) =
         | other ->
             failf "golden case %s: unknown face %s" case.name other
       in
+      (* The streamed chain ends at the synthesis's default length, which is the
+         input's own here: centred frames on a hop that divides it. *)
+      let pick pair =
+        match Tutils.Golden.string_param case "face" with
+        | "harmonic" ->
+            fst pair
+        | "percussive" ->
+            snd pair
+        | _ ->
+            component_of case pair
+      in
+      let chain cdtype dtype =
+        Pipeline.(
+          Stft.stage cdtype config
+          >> map pick (hpss_of_stft_stage ~kernel_size ~power ~margin ())
+          >> Stft.synthesis_stage dtype config )
+      in
+      let join parts = Nx.concatenate ~axis:(-1) parts in
       match Tutils.Golden.string_param case "dtype" with
       | "float64" ->
-          Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
-            ~shape:case.shape ~msg:case.name ~expected:case.values
-            (face (Nx.create Nx.float64 [|length|] signal))
+          let x = Nx.create Nx.float64 [|length|] signal in
+          List.iter
+            (fun (how, actual) ->
+              Tutils.check_close ~rtol:float64_rtol ~atol:float64_atol
+                ~shape:case.shape ~msg:(case.name ^ how) ~expected:case.values
+                actual )
+            [ ("", face x)
+            ; ( " (stage chain, run)"
+              , Pipeline.run ~source:(source ())
+                  (chain Nx.complex128 Nx.float64)
+                  x )
+            ; ( " (stage chain, 100-sample pushes)"
+              , streamed (chain Nx.complex128 Nx.float64) x ~chunk:100 ~join )
+            ]
       | "float32" ->
-          Tutils.check_close ~rtol:Tutils.float32_rtol ~atol:Tutils.float32_atol
-            ~shape:case.shape ~msg:case.name ~expected:case.values
-            (face (Nx.create Nx.float32 [|length|] signal))
+          let x = Nx.create Nx.float32 [|length|] signal in
+          List.iter
+            (fun (how, actual) ->
+              Tutils.check_close ~rtol:Tutils.float32_rtol
+                ~atol:Tutils.float32_atol ~shape:case.shape
+                ~msg:(case.name ^ how) ~expected:case.values actual )
+            [ ("", face x)
+            ; ( " (stage chain, run)"
+              , Pipeline.run ~source:(source ())
+                  (chain Nx.complex64 Nx.float32)
+                  x )
+            ; ( " (stage chain, 100-sample pushes)"
+              , streamed (chain Nx.complex64 Nx.float32) x ~chunk:100 ~join ) ]
       | other ->
           failf "golden case %s: unknown dtype %s" case.name other )
 

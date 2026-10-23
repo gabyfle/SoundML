@@ -21,14 +21,15 @@
 
 (** Harmonic/percussive source separation by median filtering.
 
-    The implementation module behind [Soundml.hpss] and its spectrogram-,
-    mask- and complex-domain faces; the semantics are documented there, once,
-    on the public face. Median filtering the magnitude spectrogram along time
-    enhances the horizontal structure of sustained partials and filtering it
-    along frequency enhances the vertical structure of transients
-    (Fitzgerald, {e Harmonic/percussive separation using median filtering},
-    DAFx 2010); the two enhanced spectrograms drive a pair of masks whose
-    exponent and margins are those of Driedger, Müller and Disch
+    The implementation module behind [Soundml.hpss], its spectrogram-, mask-
+    and complex-domain faces and their pipeline stages; the semantics are
+    documented there, once, on the public face. Median filtering the
+    magnitude spectrogram along time enhances the horizontal structure of
+    sustained partials and filtering it along frequency enhances the
+    vertical structure of transients (Fitzgerald,
+    {e Harmonic/percussive separation using median filtering}, DAFx 2010);
+    the two enhanced spectrograms drive a pair of masks whose exponent and
+    margins are those of Driedger, Müller and Disch
     ({e Extending harmonic-percussive separation of audio signals}, ISMIR
     2014).
 
@@ -42,6 +43,17 @@
     [2 n]: [-1] reads [0], [n] reads [n - 1], and the pattern repeats, so a
     kernel may exceed the line length by any amount. These semantics hold for
     every [k] and every line length, boundaries included.
+
+    {2 Streaming}
+
+    Only the time median has memory. The window of frame [i] reaches
+    [k_h - 1 - k_h / 2] frames past it, so the frame is final once those
+    frames have arrived, except where its window crosses the end of the
+    signal and the reflection depends on the signal's length: those frames
+    are completed when the stream ends. Indices before the start reflect into
+    frames already seen. The stages carry that state across chunks, and the
+    offline faces are their one-chunk instance: every partitioning of a
+    spectrogram yields the same bits.
 
     {2 Parity}
 
@@ -89,6 +101,36 @@ val hpss_masks :
   -> (float, 'a) Nx.t * (float, 'a) Nx.t
 (** [hpss_masks s] is the harmonic and percussive mask pair of the magnitude
     or power spectrogram [s]. See [Soundml.hpss_masks]. *)
+
+val hpss_of_spectrogram_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t * (float, 'a) Nx.t, 'k) Pipeline.t
+(** [hpss_of_spectrogram_stage ()] is {!hpss_of_spectrogram} as a pipeline
+    stage. See [Soundml.hpss_of_spectrogram_stage]. *)
+
+val hpss_masks_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t * (float, 'a) Nx.t, 'k) Pipeline.t
+(** [hpss_masks_stage ()] is {!hpss_masks} as a pipeline stage. See
+    [Soundml.hpss_masks_stage]. *)
+
+val hpss_of_stft_stage :
+     ?kernel_size:int * int
+  -> ?power:float
+  -> ?margin:float * float
+  -> unit
+  -> ( (Complex.t, 'c) Nx.t
+     , (Complex.t, 'c) Nx.t * (Complex.t, 'c) Nx.t
+     , 'k )
+     Pipeline.t
+(** [hpss_of_stft_stage ()] is {!hpss_of_stft} as a pipeline stage. See
+    [Soundml.hpss_of_stft_stage]. *)
 
 val hpss :
      Stft.Config.t
