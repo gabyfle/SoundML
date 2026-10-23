@@ -513,13 +513,16 @@ end
     ]}
 
     the last of which is exactly the default length of {!invert}, so the two
-    agree on every sample and on how many there are. That is the whole of the
-    relationship: feeding all the frames and flushing {e is} [invert] at its
-    default length. There is no [length] here and there cannot be — naming one
-    retroactively drops frames that opened past it, a decision about frames
-    already consumed and already emitted — so a caller who wants
-    {!invert}'s [~length] trims the returned signal, which {!invert} describes
-    frame by frame.
+    agree on every sample and on how many there are: feeding all the frames
+    and flushing {e is} [invert] at its default length. {!invert}'s
+    [~length] belongs to the drain, {!flush}[ ~length]. Short of the default
+    length it keeps a prefix of the stream: the frames {!invert} drops for a
+    shorter result open past its end and reach none of its samples. Past the
+    default length it is not a zero extension: the positions the last frame
+    reaches beyond the trailing trim are signal, divided by the envelope of
+    the frames that reach them, and {!invert} returns them up to that frame's
+    end before it zero-fills — so the drain, which still holds the last
+    frames, is the one place that can produce them.
 
     Reconstruction itself, its conditioning at the edges and the interior it
     is exact on are {!invert}'s: this kernel computes the same quotient at the
@@ -570,12 +573,28 @@ module Synthesis : sig
       before feeding new frames — if [z] has rank below two or a bin axis
       that is not [bins c] long, or if a leading axis of [z] has size zero. *)
 
-  val flush : ('a, 'c) t -> (float, 'a) Nx.t option
+  val flush : ?length:int -> ('a, 'c) t -> (float, 'a) Nx.t option
   (** [flush k] drains the kernel: it releases the positions the last frame
       reaches past the hop grid, less the tail trim of the alignment, and is
       those samples, if any — [max 0 (fft_size - hop - R)] of them, none at
-      all where the trim already covers them. Draining consumes the tail — a
-      second [flush] is [None]; {!reset} the kernel before reusing it. *)
+      all where the trim already covers them.
+
+      [flush ~length:n k] ends the stream where [invert ~length:n] ends its
+      result instead: it is the samples from the last one emitted up to [n] —
+      the held tail, then the positions the last frame reaches past the hop
+      grid, the trailing trim's included, then zeros past the frame's end —
+      or [None] when the steps have already emitted [n] samples or more.
+      Every emitted chunk and this one, concatenated and cut to their first
+      [n] samples, are [invert ~length:n] on the concatenated frames, bit for
+      bit; the cut removes something only when [n] falls short of what the
+      steps released. A kernel never fed a frame drains to [n] zeros, laid
+      out with the leading axes of the last batch it was given, or as mono
+      audio when it was given none.
+
+      Draining consumes the tail — a second [flush] is [None]; {!reset} the
+      kernel before reusing it.
+
+      Raises [Invalid_argument] if [length] is negative. *)
 
   val reset : ('a, 'c) t -> unit
   (** [reset k] restores [k] to its freshly prepared state. *)
@@ -655,3 +674,10 @@ val synthesis_stage :
 
     Raises [Invalid_argument] if [c] is not invertible, under the condition
     {!invert} states. *)
+
+(**/**)
+
+val check_invertible : string -> Config.t -> unit
+(* Library-internal: raises the [Invalid_argument] of {!invert} for a
+   configuration that is not invertible, its message naming the operation [op].
+   The stages that synthesise through {!Synthesis} check it at construction. *)

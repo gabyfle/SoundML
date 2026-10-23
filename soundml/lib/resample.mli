@@ -350,3 +350,11 @@ val stage : Config.t -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
     copy (the chunk-ownership contract forbids returning the borrowed input).
     An elided resampler that still claimed latency would corrupt every
     downstream alignment. *)
+
+(**/**)
+
+val output_bound : Config.t -> n:int -> int
+(* Library-internal: the most samples one [Kernel.step] on at most [n] samples,
+   or the drain, can emit — the per-chunk bound {!stage} threads for chunks of
+   [n] samples, and [n] itself for the identity. The stages that drive {!Kernel}
+   inside a kernel of their own size their bound with it. *)

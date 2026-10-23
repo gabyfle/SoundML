@@ -1,7 +1,13 @@
 (test
  (name test_pvoc)
  (package soundml)
- (modules pvoc_signals pvoc_goldens pvoc_locked pvoc_edge test_pvoc)
+ (modules
+  pvoc_signals
+  pvoc_goldens
+  pvoc_locked
+  pvoc_edge
+  pvoc_stage
+  test_pvoc)
  (libraries nx soundml tutils windtrap yojson)
  (deps
   (glob_files vectors/*.json)))

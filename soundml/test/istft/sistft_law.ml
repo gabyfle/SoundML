@@ -470,8 +470,125 @@ let contract_tests =
           (bits (emitted r z'))
           (bits next) ) ]
 
+(* {1 The drain to a length}
+
+   [flush ~length:n] ends the stream where [invert ~length:n] ends its result:
+   every emitted chunk and the drain, cut to their first [n] samples, are
+   [invert ~length:n], bit for bit, at every [n] — short of the default length,
+   where the cut takes a prefix of what the steps released, and past it, where
+   the drain releases the held tail, then the positions the last frame reaches
+   beyond the trailing trim, then zeros. The lengths run from [0] to three past
+   the whole span of the frames, over every chunking, both dtypes and the three
+   tail-held geometries, where the held quotients are signal past the default
+   length rather than trim. *)
+
+let drive_to : type a c.
+       (float, a) Nx.dtype
+    -> Stft.Config.t
+    -> (Complex.t, c) Nx.t
+    -> int list
+    -> length:int
+    -> (float, a) Nx.t =
+ fun dtype c z sizes ~length ->
+  let k =
+    Stft.Synthesis.prepare dtype c (Nx.dtype z) ~channels:1
+      ~max_block:(List.fold_left Stdlib.max 1 sizes)
+  in
+  let outs = ref [] and pos = ref 0 in
+  List.iter
+    (fun s ->
+      let chunk = shrink_last z !pos (!pos + s) in
+      pos := !pos + s ;
+      match Stft.Synthesis.step k chunk with
+      | None ->
+          ()
+      | Some out ->
+          outs := out :: !outs )
+    sizes ;
+  ( match Stft.Synthesis.flush ~length k with
+  | None ->
+      ()
+  | Some out ->
+      outs := out :: !outs ) ;
+  is_none ~msg:"a second flush is empty" (Stft.Synthesis.flush ~length k) ;
+  let all =
+    match List.rev !outs with
+    | [] ->
+        Nx.zeros dtype (Array.append (batch_shape z) [|0|])
+    | parts ->
+        concat_last parts
+  in
+  if last_dim all > length then shrink_last all 0 length else all
+
+let check_lengths : type a c.
+       (float, a) Nx.dtype
+    -> Stft.Config.t
+    -> string
+    -> (Complex.t, c) Nx.t
+    -> unit =
+ fun dtype c label z ->
+  let frames = last_dim z in
+  let reach = ((frames - 1) * Stft.Config.hop c) + Stft.Config.fft_size c + 3 in
+  for length = 0 to reach do
+    let expected = bits (Stft.invert dtype c ~length z) in
+    List.iter
+      (fun (cname, sizes) ->
+        let got = drive_to dtype c z sizes ~length in
+        equal
+          ~msg:(Printf.sprintf "%s: length %d, chunking %s" label length cname)
+          bit_array expected (bits got) )
+      (chunkings frames)
+  done
+
+let drain_case (name, c) =
+  test name (fun () ->
+      List.iter
+        (fun n ->
+          let signal = lcg n in
+          check_lengths Nx.float64 c
+            (Printf.sprintf "f64/n=%d" n)
+            (Stft.transform Nx.complex128 c (Nx.create Nx.float64 [|n|] signal)) ;
+          check_lengths Nx.float32 c
+            (Printf.sprintf "f32/n=%d" n)
+            (Stft.transform Nx.complex64 c (Nx.create Nx.float32 [|n|] signal)) )
+        [5; 17] ;
+      List.iter
+        (fun frames ->
+          check_lengths Nx.float64 c
+            (Printf.sprintf "synthetic/frames=%d" frames)
+            (synthetic c frames) )
+        [1; 2; 7] )
+
+let drain_tests =
+  List.map drain_case grid
+  @ [ test "a kernel never fed a frame drains to zeros" (fun () ->
+          let k () =
+            Stft.Synthesis.prepare Nx.float64 c8 Nx.complex128 ~channels:2
+              ~max_block:4
+          in
+          let unfed = k () in
+          equal ~msg:"mono, when no batch came" (array int) [|5|]
+            (Nx.shape (Option.get (Stft.Synthesis.flush ~length:5 unfed))) ;
+          let empty = k () in
+          is_none ~msg:"an empty batch emits nothing"
+            (Stft.Synthesis.step empty (Nx.zeros Nx.complex128 [|2; 5; 0|])) ;
+          let zeros = Option.get (Stft.Synthesis.flush ~length:5 empty) in
+          equal ~msg:"in the batch's leading axes" (array int) [|2; 5|]
+            (Nx.shape zeros) ;
+          equal ~msg:"all zeros" float_exact 0.
+            (Nx.item [] (Nx.max (Nx.abs zeros))) ;
+          is_none ~msg:"length zero ends nothing"
+            (Stft.Synthesis.flush ~length:0 (k ())) )
+    ; test "the drain refuses a negative length" (fun () ->
+          raises ~msg:"negative"
+            (Invalid_argument
+               "flush: cannot synthesise a signal of length -1 (length must be \
+                non-negative)" ) (fun () ->
+              Stft.Synthesis.flush ~length:(-1) (prepare8 ()) ) ) ]
+
 let suite =
   [ group "synthesis-kernel-law" law_tests
   ; group "synthesis-kernel-length" length_tests
   ; group "synthesis-kernel-latency" latency_tests
-  ; group "synthesis-kernel-contracts" contract_tests ]
+  ; group "synthesis-kernel-contracts" contract_tests
+  ; group "synthesis-kernel-drain-length" drain_tests ]
