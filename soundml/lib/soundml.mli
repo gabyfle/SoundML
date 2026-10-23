@@ -97,6 +97,20 @@ module Resample = Resample
     against a fixed reference as they close. *)
 module Effects = Effects
 
+(** Linear recursive filtering: scipy's transposed direct form
+    ({!Filter.lfilter}) and second-order-section cascade ({!Filter.sosfilt}),
+    each with initial and final states, steady states
+    ({!Filter.lfilter_zi}, {!Filter.sosfilt_zi}) and an offline zero-phase
+    form ({!Filter.filtfilt}, {!Filter.sosfiltfilt}); Butterworth design as a
+    transfer function or as sections ({!Filter.butter},
+    {!Filter.butter_sos}); and librosa's {!Filter.preemphasis} and
+    {!Filter.deemphasis}. The filters stream as pipeline stages
+    ({!Filter.lfilter_stage}, {!Filter.sosfilt_stage},
+    {!Filter.preemphasis_stage}, {!Filter.deemphasis_stage}) that carry
+    their float64 state across chunks and reproduce the offline functions
+    bit for bit. *)
+module Filter = Filter
+
 (** {1:features Flat features} *)
 
 val mel_spectrogram :

@@ -113,6 +113,22 @@ Current suites:
   are kept clear of the level edges, every code expanded, quantized round
   trips). The float64 tolerances are ten times what a correctly rounded libm
   moves the goldens, the exponential sweeps' scaled by the phase they sweep.
+- `filters` — `Soundml.Filter` against scipy 1.18: `scipy.signal.butter`
+  as transfer functions and as second-order sections over lowpass,
+  highpass, bandpass and bandstop designs of orders 0 to 12 (band edges kept
+  away from the pole-pairing tie of `zpk2sos`, which the generator asserts),
+  `lfilter_zi` and `sosfilt_zi`, `lfilter` and `sosfilt` with their final
+  states from rest, from a full or a broadcast initial state and from the
+  steady state (transfer functions with b longer than a and a longer than b,
+  a leading coefficient to normalise by, a gain and FIR filters; sections up
+  to a tenth-order design), `filtfilt` and `sosfiltfilt` under the three
+  extensions, an explicit `padlen` and the shortest signals the default
+  accepts, and `librosa.effects.preemphasis` and `deemphasis` with and
+  without a state, including their round trip. Each case records the
+  coefficients and state it filters with; states are stored time axis last.
+  Without a state, librosa's de-emphasis returns the state of an
+  uncorrected recursion: the vectors record the state that continues the
+  corrected output, and the generator asserts librosa's value.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which

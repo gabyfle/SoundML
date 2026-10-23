@@ -13,6 +13,7 @@
   chroma
   resample
   effects
+  filter
   spectral
   energy
   delta
