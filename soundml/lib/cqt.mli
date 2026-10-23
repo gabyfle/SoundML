@@ -131,7 +131,8 @@ module Config : sig
       divisible by a high power of two additionally licenses an early
       decimation before the first octave. [pad] is the boundary extension of the per-octave analysis and
       defaults to [`Constant 0.] — zero padding, the boundary convention of
-      the reference constant-Q transform (unlike its STFT).
+      the reference constant-Q transform and {!Stft.Config.create}'s
+      default.
 
       Raises [Invalid_argument] if [n_bins], [bins_per_octave], [hop] or
       [sample_rate] is smaller than [1]; if [fmin] is not finite and positive;

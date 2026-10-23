@@ -78,11 +78,12 @@
 
     Numerical parity with librosa 1.0 ([librosa.phase_vocoder],
     [librosa.effects.time_stretch] and [librosa.effects.pitch_shift]) is
-    enforced against committed golden vectors, and is pinned at matching
-    explicit settings: [`Independent], [~pad:(`Constant 0.)] (its default
-    boundary extension, where this library's is [`Reflect]), and the same
-    transform size, hop, window and alignment. The deviations that remain are
-    these, and each is a contract rather than an accident.
+    enforced against committed golden vectors, and is pinned at
+    [`Independent] with the same transform size, hop, window and alignment,
+    over the zero padding both default to — the only boundary extension the
+    reference can stretch with, since it hands its keyword arguments to both
+    [stft] and [istft], and [istft] takes no [pad_mode]. The deviations that
+    remain are these, and each is a contract rather than an accident.
 
     - The interior is float64 at both dtypes, including the phase accumulator,
       where the reference accumulates float32 phases for float32 audio. Its

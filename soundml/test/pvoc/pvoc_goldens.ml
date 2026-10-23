@@ -5,9 +5,10 @@
    the signal exactly as the generator does and compare against a reference
    computed in float64.
 
-   The configurations pin librosa's own defaults where they differ from this
-   library's: zero padding rather than reflection, and centered frames. The
-   phase mode is [`Independent], the setting parity is defined at.
+   The configurations name librosa's own defaults, zero padding and centered
+   frames, explicitly — they are also this library's, and the only boundary
+   extension librosa's time_stretch can use. The phase mode is [`Independent],
+   the setting parity is defined at.
 
    Three files:
 

@@ -39,13 +39,17 @@
     conveniences ({!power_spectrum}, {!power_stage}) are dtype-preserving and
     never expose a complex dtype.
 
-    Defaults are the Hann window, [hop = fft_size / 4] and centered frames
-    over reflect padding; numerical parity with librosa 1.0 — including the
-    double interior above — is enforced against committed golden vectors in
-    the test suite. [`Centered] and [`Left] alignment correspond to its
-    [center=True] and [center=False]; librosa 1.0 itself
-    pads with zeros by default — pass [~pad:(`Constant 0.)] to reproduce its
-    defaults exactly. *)
+    Defaults are librosa 1.0's: the Hann window, [hop = fft_size / 4] and
+    centered frames over zero padding ([window="hann"], [center=True],
+    [pad_mode="constant"]), so a configuration given only its transform size
+    analyses every non-empty signal exactly as [librosa.stft] given only
+    [n_fft] does (an empty one is a named deviation, see {!section:grid}).
+    Numerical parity with librosa 1.0 — including the double interior above —
+    is enforced against committed golden vectors in the test suite, at those
+    defaults and at explicit settings. [`Centered] and [`Left] alignment
+    correspond to its [center=True] and [center=False]; [`Reflect] and
+    [`Edge] padding to [pad_mode="reflect"] — librosa's default before 0.9,
+    and [torch.stft]'s — and [pad_mode="edge"]. *)
 
 (** {1 Configuration} *)
 
@@ -71,7 +75,11 @@ module Config : sig
       form at [win_length] points; [win_length] defaults to [fft_size] and a
       shorter window is centered inside the FFT frame with zeros on both
       sides. [hop] is the frame advance in samples and defaults to
-      [fft_size / 4] or [1], whichever is larger.
+      [fft_size / 4] or [1], whichever is larger. From [fft_size = 4] up
+      that is librosa's default while the window spans the frame; with a
+      shorter window librosa advances by [win_length / 4], which [~hop]
+      reproduces. Below [4] librosa's default hop is [0] and its analysis
+      fails, so the clamp to [1] is an extension, not a parity claim.
 
       [alignment] places the analysis window relative to each frame's grid
       position [p * hop] and defaults to [`Centered]:
@@ -83,12 +91,16 @@ module Config : sig
         causal depends on [pad], below.
 
       [pad] selects the boundary extension used wherever the alignment pads
-      and defaults to [`Reflect] (mirror without repeating the edge
-      sample); [`Constant v] extends with [v] and [`Edge]
-      repeats the boundary sample. With [`Right] alignment, [`Constant] and
-      [`Edge] keep frames strictly causal — every frame reads only samples at
-      or before its grid position — while [`Reflect] mirrors early samples
-      into the left border.
+      and defaults to [`Constant 0.], zeros, librosa 1.0's own default;
+      [`Constant v] extends with [v], [`Reflect] mirrors the signal without
+      repeating the edge sample and [`Edge] repeats the boundary sample.
+      Only the frames that reach past an end read the extension
+      ({!first_complete}, {!last_complete}); every other frame is the same
+      bits under all three. With [`Right] alignment, [`Constant] and [`Edge]
+      keep frames strictly causal — every frame reads only samples at or
+      before its grid position, so the default right-aligned analysis has
+      no lookahead at all — while [`Reflect] mirrors early samples into the
+      left border, a lookahead {!stage} declares.
 
       [scale] normalises the analysis window and defaults to [`None]:
       [`Magnitude] divides the window by its sum (spectral peaks read as
@@ -157,7 +169,7 @@ module Config : sig
       parameters; the padding constant is compared with [Float.equal]. *)
 end
 
-(** {1 The frame grid}
+(** {1:grid The frame grid}
 
     Frame [p] of a signal covers the [fft_size] samples starting at
     [p * hop - k] where [k] is [fft_size / 2] for [`Centered], [0] for
@@ -166,7 +178,11 @@ end
     {!transform}, {!transform_range} and the streaming kernel index into the
     same grid, so offline, chunked and streaming analyses agree frame by
     frame. A zero-length signal produces zero frames regardless of
-    alignment. *)
+    alignment and padding — a deviation: librosa 1.0's default zero padding
+    turns an empty signal into one all-zero frame for an even [n_fft] and
+    rejects it for an odd one (under [pad_mode="reflect"] it rejects it
+    outright), and every feature computed from the transform inherits the
+    difference. *)
 
 val frames : Config.t -> n:int -> int
 (** [frames c ~n] is the number of frames a length-[n] signal produces.

@@ -87,9 +87,10 @@ let stft_config_of_params (case : Tutils.Golden.case) =
         failf "golden case %s: unknown alignment %s" case.Tutils.Golden.name
           other
   in
+  (* the end-to-end vectors pass pad_mode="reflect" to librosa *)
   Stft.Config.create
     ~hop:(Tutils.Golden.int_param case "hop")
-    ~alignment
+    ~alignment ~pad:`Reflect
     ~fft_size:(Tutils.Golden.int_param case "fft_size")
     ()
 

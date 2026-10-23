@@ -1,0 +1,7 @@
+(test
+ (name test_defaults)
+ (package soundml)
+ (modules defaults_goldens test_defaults)
+ (libraries nx soundml tutils windtrap)
+ (deps
+  (glob_files vectors/*.json)))

@@ -134,7 +134,13 @@ let complex_law_case name cdtype mk_config =
 
 let law_tests =
   [ float_law_case "power centered reflect" (fun () ->
+        Stft.power_stage
+          (Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:2 ()) )
+  ; float_law_case "power centered default (zeros)" (fun () ->
         Stft.power_stage (Stft.Config.create ~fft_size:8 ~hop:2 ()) )
+  ; float_law_case "power centered reflect, held right border" (fun () ->
+        Stft.power_stage
+          (Stft.Config.create ~pad:`Reflect ~fft_size:8 ~hop:5 ()) )
   ; float_law_case "power centered edge, non-divisor hop" (fun () ->
         Stft.power_stage (Stft.Config.create ~pad:`Edge ~fft_size:8 ~hop:3 ()) )
   ; float_law_case "power left" (fun () ->
@@ -145,6 +151,10 @@ let law_tests =
           (Stft.Config.create ~alignment:`Right ~pad:(`Constant 0.) ~fft_size:8
              ~hop:3 () ) )
   ; float_law_case "power right reflect (border lookahead)" (fun () ->
+        Stft.power_stage
+          (Stft.Config.create ~alignment:`Right ~pad:`Reflect ~fft_size:8 ~hop:3
+             () ) )
+  ; float_law_case "power right default (causal)" (fun () ->
         Stft.power_stage
           (Stft.Config.create ~alignment:`Right ~fft_size:8 ~hop:3 ()) )
   ; float_law_case "power hop larger than fft" (fun () ->
@@ -220,12 +230,38 @@ let static_tests =
         equal ~msg:"right latency" rate_t (r 0 1)
           (Pipeline.latency (Stft.power_stage right)) ;
         let right_reflect =
-          Stft.Config.create ~alignment:`Right ~fft_size:8 ~hop:3 ()
+          Stft.Config.create ~alignment:`Right ~pad:`Reflect ~fft_size:8 ~hop:3
+            ()
         in
         equal ~msg:"right+reflect declares the border lookahead" rate_t (r 7 1)
           (Pipeline.latency (Stft.power_stage right_reflect)) ;
         equal ~msg:"config latency stays geometric" int 0
           (Stft.Config.latency right_reflect) )
+  ; test "the default border is librosa's zeros" (fun () ->
+        let default = Stft.Config.create ~fft_size:8 () in
+        is_true ~msg:"pad defaults to `Constant 0."
+          ( match Stft.Config.pad default with
+          | `Constant v ->
+              Float.equal v 0.
+          | `Reflect | `Edge ->
+              false ) ;
+        is_true ~msg:"the default equals an explicit zero border"
+          (Stft.Config.equal default
+             (Stft.Config.create ~pad:(`Constant 0.) ~fft_size:8 ()) ) ;
+        is_true ~msg:"and differs from reflection"
+          (not
+             (Stft.Config.equal default
+                (Stft.Config.create ~pad:`Reflect ~fft_size:8 ()) ) ) ;
+        let right =
+          Stft.Config.create ~alignment:`Right ~fft_size:8 ~hop:3 ()
+        in
+        equal ~msg:"the default right-aligned stage declares no lookahead"
+          rate_t (r 0 1)
+          (Pipeline.latency (Stft.power_stage right)) ;
+        let centered = Stft.Config.create ~fft_size:8 ~hop:3 () in
+        equal ~msg:"the default centered stage declares the half frame" rate_t
+          (r 4 1)
+          (Pipeline.latency (Stft.stage Nx.complex128 centered)) )
   ; test "downstream formats see rate and channels" (fun () ->
         let seen = ref None in
         let probe =
