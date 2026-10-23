@@ -535,6 +535,83 @@ val delta_stage :
     other than float32 and float64, or a leading shape other than the first
     chunk's. *)
 
+(** {2:features_pcen Per-channel energy normalization}
+
+    PCEN: the adaptive gain control that keyword spotters and far-field
+    speech front ends apply to a mel spectrogram in place of the log. *)
+
+val pcen :
+     ?hop:int
+  -> ?gain:float
+  -> ?bias:float
+  -> ?power:float
+  -> ?time_constant:float
+  -> ?eps:float
+  -> ?b:float
+  -> ?max_size:int
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [pcen ~sample_rate s] is the per-channel energy normalization of the
+    non-negative spectrogram [s] — [[...; bands; frames]], or one band
+    [[frames]] — in the shape and dtype of [s], as [librosa.pcen] computes
+    it. Each band [E] is smoothed over time and divided by a power of its
+    smoothed self, then compressed:
+
+    {[
+      M t = b * E t + (1 - b) * M (t - 1)
+      pcen t = (E t / (eps + M t) ** gain + bias) ** power - bias ** power
+    ]}
+
+    with [M] started as if every frame before the first had magnitude [1]
+    (scipy's [lfilter_zi]). With [max_size > 1], [M] smooths instead the
+    maximum of [E] over the [max_size] bands around each band, reflected at
+    the edges of the band axis. [power = 0.] compresses by
+    [log1p (E t / (eps + M t) ** gain)] instead, and [bias = 0.] gives
+    [(E t / (eps + M t) ** gain) ** power], as librosa does.
+
+    The smoothing coefficient [b] defaults to the one whose squared response
+    falls to half at [time_constant] seconds of frames advancing [hop]
+    samples at [sample_rate]: [(sqrt (1 + 4 t ** 2) - 1) / (2 t ** 2)] with
+    [t = time_constant * sample_rate / hop]. [hop] defaults to [512], [gain]
+    to [0.98], [bias] to [2.], [power] to [0.5], [time_constant] to [0.4],
+    [eps] to [1e-6] and [max_size] to [1]. The defaults are tuned for
+    magnitudes at the scale of 32-bit integer audio: librosa's examples
+    scale a magnitude mel spectrogram of float audio by [2 ** 31] first.
+
+    Every value is computed in double precision — the smoothing exactly as
+    scipy's [lfilter] runs it — and rounded to the dtype of [s] once.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], if
+    [gain], [bias] or [power] is negative or not finite, if [eps] or
+    [time_constant] is not finite and positive, if [b] does not lie in
+    [(0, 1\]], if [max_size] is below [1], if [s] has rank zero, or rank one
+    with [max_size > 1], or a dtype other than float32 and float64. *)
+
+val pcen_stage :
+     ?hop:int
+  -> ?gain:float
+  -> ?bias:float
+  -> ?power:float
+  -> ?time_constant:float
+  -> ?eps:float
+  -> ?b:float
+  -> ?max_size:int
+  -> sample_rate:int
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [pcen_stage ~sample_rate ()] is {!pcen} as a pipeline stage: causal,
+    rate 1:1 in frames, latency zero and format-preserving, carrying one
+    smoothing state per band across chunks. It consumes [[...; bands;
+    frames]] chunks — compose
+    [Stft.power_stage ~power:1. s >> Mel.stage mel >> pcen_stage ~sample_rate ()]
+    for a streamed PCEN front end — and every partitioning of a spectrogram
+    yields the bits {!pcen} computes on the whole of it.
+
+    Raises [Invalid_argument] for the parameters as {!pcen} does, and, at
+    the chunk concerned, for a chunk {!pcen} would refuse or one whose
+    leading shape differs from the first chunk's. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each
