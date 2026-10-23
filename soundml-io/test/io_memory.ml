@@ -525,6 +525,10 @@ let encode_tests =
         refused ~msg:"Memory.write"
           (Memory.write ~format:(Format.create `Ogg)
              (small_audio ~channels:300 ~frames:16) ) )
+  ; test "Unsupported: Vorbis above 200 kHz" (fun () ->
+        refused ~msg:"Memory.write"
+          (Memory.write ~format:(Format.create `Ogg)
+             {(small_audio ~channels:1 ~frames:16) with sample_rate= 200_001} ) )
   ; test "the preconditions are write's, named after the memory face" (fun () ->
         let format = Format.create `Wav in
         let refuses a =
