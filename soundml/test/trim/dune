@@ -1,0 +1,7 @@
+(test
+ (name test_trim)
+ (package soundml)
+ (modules trim_goldens test_trim)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

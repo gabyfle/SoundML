@@ -37,7 +37,7 @@
     and the normalisation are the analysis's, and the padding mode is the
     boundary extension it reads.
 
-    All four entry points are dtype-preserving — complex to complex, float to
+    The four modification entry points are dtype-preserving — complex to complex, float to
     float — and never expose a complex dtype the caller did not already hold:
     the interior is float64 throughout and rounds once, at the boundary, into
     the dtype of the argument. The time or frame axis is the last axis; leading
@@ -266,3 +266,59 @@ val semitones : ?bins_per_octave:int -> float -> Pipeline.Rate.t
     Raises [Invalid_argument] if [bins_per_octave < 1], if [n] is not finite,
     or if the resulting ratio is beyond the cap — nine octaves from unity,
     where no admissible rational approximates it. *)
+
+(** {1 Silence}
+
+    librosa's silence detection, frame by frame: a frame is non-silent when
+    the RMS energy of its [frame_length] samples, framed every [hop] samples
+    around the frame's position with constant-zero padding at the ends (the
+    framing of [Soundml.rms]), lies above [-top_db] decibels relative to the
+    reference. A frame's decibels are [20 * log10] of its RMS against
+    [20 * log10] of the reference, both floored at [1e-5] first, computed in
+    double precision whatever the dtype of the signal. Leading axes are kept,
+    and a frame is non-silent when it is on any of them — librosa's default
+    [aggregate=np.max]. *)
+
+(** The amplitude the decibels of {!trim} and {!split} are relative to:
+    [`Maximum] is the largest frame RMS of the whole signal, over every
+    leading axis (librosa's [ref=np.max]); [`Value r] is the fixed RMS
+    amplitude [r]. *)
+type reference = [`Maximum | `Value of float]
+
+val trim :
+     ?top_db:float
+  -> ?reference:reference
+  -> ?frame_length:int
+  -> ?hop:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t * (int * int)
+(** [trim x] is [x] without its leading and trailing silence, with the
+    sample interval [(start, stop)] it keeps, as [librosa.effects.trim]
+    computes them: [start] is [first * hop] and [stop] is
+    [min n ((last + 1) * hop)] for the first and last non-silent frames of
+    the [n] samples, and the interval is [(0, 0)] — an empty result — when no
+    frame is. The result is [x] sliced to [\[start, stop)] along its last
+    axis.
+
+    [top_db] defaults to [60.], [reference] to [`Maximum], [frame_length] to
+    [2048] and [hop] to [512]. Under [`Maximum] a signal of zeros puts every
+    frame at [0] dB, both sides floored alike, and is kept whole, as librosa
+    keeps it.
+
+    Raises [Invalid_argument] if [x] has rank zero, if [top_db] is not
+    finite, if a [`Value] reference is not finite and positive, or if
+    [frame_length] or [hop] is below [1]. *)
+
+val split :
+     ?top_db:float
+  -> ?reference:reference
+  -> ?frame_length:int
+  -> ?hop:int
+  -> (float, 'a) Nx.t
+  -> (int * int) array
+(** [split x] is the non-silent intervals of [x] in order, as
+    [librosa.effects.split] computes them: each maximal run of non-silent
+    frames [f] to [g] gives the sample interval
+    [(f * hop, min n ((g + 1) * hop))]. It is empty when every frame is
+    silent. Frames are judged as {!trim} judges them, with the same defaults,
+    and the same [Invalid_argument]s are raised. *)

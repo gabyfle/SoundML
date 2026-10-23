@@ -560,3 +560,110 @@ let semitones ?(bins_per_octave = 12) n =
   | Some (_, num, den) ->
       let d = gcd num den in
       {Pipeline.Rate.num= num / d; den= den / d}
+
+(* {1 Silence}
+
+   librosa's non-silence test: the RMS energy of each frame (constant-zero
+   centered framing, {!Energy.rms}), in decibels against the reference as
+   [amplitude_to_db] computes them — squared and floored at [1e-10] on both
+   sides — reduced over the leading axes by their maximum, and compared with
+   [-top_db]. The decibels are double precision whatever the dtype of the
+   signal. *)
+
+type reference = [`Maximum | `Value of float]
+
+let check_silence op ~top_db ~reference ~frame_length ~hop =
+  if frame_length < 1 then
+    invalid_arg
+      (Printf.sprintf
+         "%s: cannot analyse frames of %d samples (frame_length must be at \
+          least 1)"
+         op frame_length ) ;
+  if hop < 1 then
+    invalid_arg
+      (Printf.sprintf
+         "%s: cannot advance frames by %d samples (hop must be at least 1)" op
+         hop ) ;
+  if not (Float.is_finite top_db) then
+    invalid_arg
+      (Printf.sprintf
+         "%s: cannot threshold at %g dB below the reference (top_db must be \
+          finite)"
+         op top_db ) ;
+  match reference with
+  | `Value r when not (Float.is_finite r && r > 0.) ->
+      invalid_arg
+        (Printf.sprintf
+           "%s: cannot measure decibels against %g (the reference must be \
+            finite and positive)"
+           op r )
+  | `Value _ | `Maximum ->
+      ()
+
+(* [nonsilent op ~top_db ~reference ~frame_length ~hop x] is, for each frame of
+   [x], whether it is above the threshold. *)
+let nonsilent op ~top_db ~reference ~frame_length ~hop x =
+  check_rank op x ;
+  check_silence op ~top_db ~reference ~frame_length ~hop ;
+  let rms = Energy.rms ~frame_length ~hop x in
+  let frames = Nx.dim (Nx.ndim rms - 1) rms in
+  let mse = Nx.to_array (Nx.cast Nx.float64 rms) in
+  let rows = if frames = 0 then 0 else Array.length mse / frames in
+  let amin = 1e-5 *. 1e-5 in
+  let reference =
+    match reference with
+    | `Value r ->
+        r
+    | `Maximum ->
+        Array.fold_left (fun m v -> Float.max m (Float.abs v)) 0. mse
+  in
+  let offset = 10. *. Float.log10 (Float.max amin (reference *. reference)) in
+  Array.init frames (fun t ->
+      let loudest = ref Float.neg_infinity in
+      for r = 0 to rows - 1 do
+        let v = mse.((r * frames) + t) in
+        let db = (10. *. Float.log10 (Float.max amin (v *. v))) -. offset in
+        if db > !loudest then loudest := db
+      done ;
+      !loudest > -.top_db )
+
+let trim ?(top_db = 60.) ?(reference = `Maximum) ?(frame_length = 2048)
+    ?(hop = 512) x =
+  let loud = nonsilent "trim" ~top_db ~reference ~frame_length ~hop x in
+  let n = Nx.dim (Nx.ndim x - 1) x in
+  let first = ref (-1) and last = ref (-1) in
+  Array.iteri
+    (fun t l ->
+      if l then begin
+        if !first < 0 then first := t ;
+        last := t
+      end )
+    loud ;
+  let start, stop =
+    if !first < 0 then (0, 0) else (!first * hop, Int.min n ((!last + 1) * hop))
+  in
+  let nd = Nx.ndim x in
+  ( Nx.slice
+      (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
+      x
+  , (start, stop) )
+
+let split ?(top_db = 60.) ?(reference = `Maximum) ?(frame_length = 2048)
+    ?(hop = 512) x =
+  let loud = nonsilent "split" ~top_db ~reference ~frame_length ~hop x in
+  let n = Nx.dim (Nx.ndim x - 1) x in
+  let frames = Array.length loud in
+  (* an interval opens at a frame that is loud after a quiet one (or first) and
+     closes at the next quiet frame (or the end) *)
+  let edges = ref [] in
+  for t = 0 to frames - 1 do
+    let before = t > 0 && loud.(t - 1) in
+    if loud.(t) <> before then edges := t :: !edges
+  done ;
+  if frames > 0 && loud.(frames - 1) then edges := frames :: !edges ;
+  let samples =
+    Array.of_list (List.rev_map (fun f -> Int.min n (f * hop)) !edges)
+  in
+  Array.init
+    (Array.length samples / 2)
+    (fun i -> (samples.(2 * i), samples.((2 * i) + 1)))
