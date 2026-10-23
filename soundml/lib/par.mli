@@ -19,20 +19,25 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Data parallelism over short-lived domains.
+(** Data parallelism over a pool of worker domains.
 
     The library's own kernels split their outputs into disjoint ranges and
     compute each range in a fixed arithmetic order, so which domain computes
     a range never changes a bit of the result: parallelism here is a matter
     of speed alone.
 
-    Workers are domains spawned on demand. An idle domain makes every minor
-    collection of the program stop for it, so none is kept alive between
-    uses: a worker that finds no work spins for some tens of microseconds —
-    long enough to catch a kernel issued right after the last one, too short
-    to compete with nx's own pool for the cores — and then exits. A kernel
-    never waits for the workers to start: the calling domain claims chunks
-    from the first moment, and each worker joins in as it comes up. *)
+    Workers are domains spawned on demand. A worker that finds no work spins
+    for some tens of microseconds — long enough to catch a kernel issued
+    right after the last one, too short to compete with nx's own pool for the
+    cores — and then parks until the next kernel wakes it, which costs far
+    less than a new domain. A parked domain still makes every minor
+    collection of the program stop for it, so the pool retires once a whole
+    major cycle has passed without a kernel: every worker then exits at once.
+    The cycles are watched from the domain that first used the pool, so a
+    pool used from another domain while that one is blocked stays parked
+    until it runs again or exits. A kernel never waits for the workers to
+    start: the calling domain claims chunks from the first moment, and each
+    worker joins in as it comes up. *)
 
 val run : chunks:int -> (int -> unit) -> unit
 (** [run ~chunks f] calls [f i] once for every [i] in [\[0, chunks)], on the

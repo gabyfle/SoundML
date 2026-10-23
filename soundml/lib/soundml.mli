@@ -27,6 +27,13 @@
     Nx, so a frame's value is the same bits alone or among others, at every
     dtype; {!Cqt} states its own agreement. See {!Pipeline}.
 
+    Parallelism: the library's own kernels split their work across a pool of
+    worker domains, which never changes a bit of a result. The workers park
+    between kernels and all exit once a whole major collection cycle passes
+    without one. A parked domain takes part in every stop-the-world
+    collection of the program, so a program that shares the process with
+    its own latency-sensitive domains pays for the pool until it retires.
+
     Audio-file I/O ships separately as [soundml-io]. *)
 
 (** Streaming and offline chunk pipelines: one pipeline value drives both the
