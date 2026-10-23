@@ -453,6 +453,27 @@ let rms_stage ?(frame_length = 2048) ?(hop = 512) () =
   check_hop "rms_stage" hop ;
   feature_stage "rms_stage" ~frame_length ~hop `Zeros Loops.Rms
 
+(* [Rms_kernel] is the carry of [rms_stage] without the stage around it, for
+   stages that consume the frames in-line. *)
+module Rms_kernel = struct
+  type nonrec 'a t = 'a state
+
+  let create ~frame_length ~hop =
+    state_create ~frame_length ~hop `Zeros Loops.Rms
+
+  let step = state_step
+
+  let flush = state_flush
+
+  let reset = state_reset
+
+  let latency = stage_latency
+
+  let rate = stage_rate
+
+  let out_format = stage_out_format
+end
+
 let zero_crossing_rate_stage ?(frame_length = 2048) ?(hop = 512)
     ?(threshold = 1e-10) () =
   check_frame_length "zero_crossing_rate_stage" frame_length ;

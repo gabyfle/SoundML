@@ -1,0 +1,43 @@
+; Must-not-compile gate: [Effects.split_stage] refuses the whole-signal
+; reference [`Maximum] by its argument's type, with an error naming the tag.
+
+(rule
+ (copy %{lib:soundml:soundml.cmi} soundml.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__.cmi} soundml__.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__Effects.cmi} soundml__Effects.cmi))
+
+(rule
+ (copy %{lib:soundml:soundml__Pipeline.cmi} soundml__Pipeline.cmi))
+
+; OCAMLLIB points %{ocamlc} at its standard library explicitly: the compiler
+; resolves it relative to its own path, which a sandboxed run breaks.
+
+(rule
+ (targets reject_maximum_stage.err)
+ (deps
+  soundml.cmi
+  soundml__.cmi
+  soundml__Effects.cmi
+  soundml__Pipeline.cmi
+  (:src reject_maximum_stage.ml))
+ (action
+  (setenv
+   OCAMLLIB
+   %{ocaml_where}
+   (with-accepted-exit-codes
+    2
+    (with-stderr-to
+     %{targets}
+     (run %{ocamlc} -color never -I . -c %{src}))))))
+
+(rule
+ (alias runtest)
+ (deps reject_maximum_stage.err)
+ (action
+  (progn
+   (run grep -q "does not allow tag(s) `Maximum" %{deps})
+   (run grep -q "Value of float" %{deps}))))

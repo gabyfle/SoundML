@@ -1,3 +1,4 @@
 open Windtrap
 
-let () = exit (run "Soundml.Effects silence" Trim_goldens.suite)
+let () =
+  exit (run "Soundml.Effects silence" (Trim_goldens.suite @ Split_law.suite))

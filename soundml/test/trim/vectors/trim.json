@@ -22,6 +22,18 @@
   {"name": "trim_short_float64", "params": {"segments": [[300, 0.5]], "channels": 1, "dtype": "float64"}, "shape": [2], "values": [0.0, 300.0]},
   {"name": "split_short_float64", "params": {"segments": [[300, 0.5]], "channels": 1, "dtype": "float64"}, "shape": [1, 2], "values": [0.0, 300.0]},
   {"name": "trim_all_quiet_ref1_float64", "params": {"segments": [[6000, 1e-05]], "channels": 1, "dtype": "float64", "reference": 1.0}, "shape": [2], "values": [0.0, 0.0]},
-  {"name": "split_all_quiet_ref1_float64", "params": {"segments": [[6000, 1e-05]], "channels": 1, "dtype": "float64", "reference": 1.0}, "shape": [0, 2], "values": []}
+  {"name": "split_all_quiet_ref1_float64", "params": {"segments": [[6000, 1e-05]], "channels": 1, "dtype": "float64", "reference": 1.0}, "shape": [0, 2], "values": []},
+  {"name": "trim_fl511_hop128_ref1_float64", "params": {"segments": [[3000, 0.0], [5000, 0.5], [4000, 0.0001], [3000, 0.3], [2500, 0.0]], "channels": 1, "dtype": "float64", "frame_length": 511, "hop": 128, "reference": 1.0}, "shape": [2], "values": [2816.0, 15360.0]},
+  {"name": "split_fl511_hop128_ref1_float64", "params": {"segments": [[3000, 0.0], [5000, 0.5], [4000, 0.0001], [3000, 0.3], [2500, 0.0]], "channels": 1, "dtype": "float64", "frame_length": 511, "hop": 128, "reference": 1.0}, "shape": [2, 2], "values": [2816.0, 8320.0, 11776.0, 15360.0]},
+  {"name": "trim_fl511_hop128_ref1_float32", "params": {"segments": [[3000, 0.0], [5000, 0.5], [4000, 0.0001], [3000, 0.3], [2500, 0.0]], "channels": 1, "dtype": "float32", "frame_length": 511, "hop": 128, "reference": 1.0}, "shape": [2], "values": [2816.0, 15360.0]},
+  {"name": "split_fl511_hop128_ref1_float32", "params": {"segments": [[3000, 0.0], [5000, 0.5], [4000, 0.0001], [3000, 0.3], [2500, 0.0]], "channels": 1, "dtype": "float32", "frame_length": 511, "hop": 128, "reference": 1.0}, "shape": [2, 2], "values": [2816.0, 8320.0, 11776.0, 15360.0]},
+  {"name": "trim_tail_hop_over_half_float64", "params": {"segments": [[3996, 0.0], [100, 0.5]], "channels": 1, "dtype": "float64", "frame_length": 256, "hop": 512, "reference": 1.0}, "shape": [2], "values": [4096.0, 4096.0]},
+  {"name": "split_tail_hop_over_half_float64", "params": {"segments": [[3996, 0.0], [100, 0.5]], "channels": 1, "dtype": "float64", "frame_length": 256, "hop": 512, "reference": 1.0}, "shape": [1, 2], "values": [4096.0, 4096.0]},
+  {"name": "trim_zeros_ref1e-3_float64", "params": {"segments": [[4000, 0.0]], "channels": 1, "dtype": "float64", "reference": 0.001}, "shape": [2], "values": [0.0, 4000.0]},
+  {"name": "split_zeros_ref1e-3_float64", "params": {"segments": [[4000, 0.0]], "channels": 1, "dtype": "float64", "reference": 0.001}, "shape": [1, 2], "values": [0.0, 4000.0]},
+  {"name": "trim_stereo_ref0.5_top_db40_float64", "params": {"segments": [[4000, 0.0], [3000, 0.4], [5000, 0.0], [2000, 0.2], [4000, 0.0], [3000, 0.5]], "channels": 2, "dtype": "float64", "reference": 0.5, "top_db": 40}, "shape": [2], "values": [3072.0, 21000.0]},
+  {"name": "split_stereo_ref0.5_top_db40_float64", "params": {"segments": [[4000, 0.0], [3000, 0.4], [5000, 0.0], [2000, 0.2], [4000, 0.0], [3000, 0.5]], "channels": 2, "dtype": "float64", "reference": 0.5, "top_db": 40}, "shape": [3, 2], "values": [3072.0, 8192.0, 11264.0, 15360.0, 17408.0, 21000.0]},
+  {"name": "trim_stereo_ref0.5_top_db40_float32", "params": {"segments": [[4000, 0.0], [3000, 0.4], [5000, 0.0], [2000, 0.2], [4000, 0.0], [3000, 0.5]], "channels": 2, "dtype": "float32", "reference": 0.5, "top_db": 40}, "shape": [2], "values": [3072.0, 21000.0]},
+  {"name": "split_stereo_ref0.5_top_db40_float32", "params": {"segments": [[4000, 0.0], [3000, 0.4], [5000, 0.0], [2000, 0.2], [4000, 0.0], [3000, 0.5]], "channels": 2, "dtype": "float32", "reference": 0.5, "top_db": 40}, "shape": [3, 2], "values": [3072.0, 8192.0, 11264.0, 15360.0, 17408.0, 21000.0]}
 ]
 }

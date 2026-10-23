@@ -19,7 +19,7 @@
 (*                                                                           *)
 (*****************************************************************************)
 
-(** Time-scale and pitch modification.
+(** Time-scale and pitch modification, and silence detection.
 
     The phase vocoder reads a signal's {!Stft} at hop [H] and writes it back at
     the same hop from a resampled time axis: output frame [i] is assembled from
@@ -278,12 +278,37 @@ val semitones : ?bins_per_octave:int -> float -> Pipeline.Rate.t
     [20 * log10] of the reference, both floored at [1e-5] first, computed in
     double precision whatever the dtype of the signal. Leading axes are kept,
     and a frame is non-silent when it is on any of them — librosa's default
-    [aggregate=np.max]. *)
+    [aggregate=np.max].
+
+    Against a fixed reference a frame's verdict reads its own samples alone,
+    so {!split} streams: {!split_stage} is its causal stage, offline {!split}
+    the one-chunk instance of the same judgement. The whole-signal reference
+    [`Maximum] is known only once the signal has ended and stays offline.
+
+    Parity with librosa 1.0 ([librosa.effects.trim] and
+    [librosa.effects.split]) is enforced against committed golden vectors.
+    The deviations are these.
+
+    - The decibels are computed in double precision, where librosa's RMS is
+      float32 at every dtype; a frame within rounding of the threshold may
+      be judged differently.
+    - The aggregate over the leading axes is the maximum, and a fixed
+      reference must be finite and positive, where librosa takes the
+      absolute value of [ref] and floors it at [1e-5].
+    - An empty signal has no frames and so no interval, as [Soundml.rms]
+      gives it none; librosa instead judges one all-zero frame for an even
+      [frame_length] — the interval [(0, 0)] when zeros are non-silent — and
+      rejects the empty signal for an odd one.
+
+    The floor puts digital silence at [20 * log10 (1e-5 / r)] decibels
+    relative to a fixed reference [r]: non-silent, in librosa as here,
+    whenever that lies above [-top_db] — for every [r] below [1e-2] at the
+    default [60] dB. *)
 
 (** The amplitude the decibels of {!trim} and {!split} are relative to:
     [`Maximum] is the largest frame RMS of the whole signal, over every
     leading axis (librosa's [ref=np.max]); [`Value r] is the fixed RMS
-    amplitude [r]. *)
+    amplitude [r], the only kind {!split_stage} takes. *)
 type reference = [`Maximum | `Value of float]
 
 val trim :
@@ -322,4 +347,70 @@ val split :
     frames [f] to [g] gives the sample interval
     [(f * hop, min n ((g + 1) * hop))]. It is empty when every frame is
     silent. Frames are judged as {!trim} judges them, with the same defaults,
-    and the same [Invalid_argument]s are raised. *)
+    and the same [Invalid_argument]s are raised.
+
+    Only the final interval is clamped: an interval that closes at a silent
+    frame [g] ends at [g * hop], at most [n], and one that runs to the last
+    frame ends at [n] itself. The interval {!trim} keeps is the span of
+    these, from the first [start] to the last [stop], or [(0, 0)] when there
+    are none. *)
+
+val split_stage :
+     ?top_db:float
+  -> ?frame_length:int
+  -> ?hop:int
+  -> reference:[`Value of float]
+  -> unit
+  -> ((float, 'a) Nx.t, (int * int) array, 'k) Pipeline.t
+(** [split_stage ~reference:(`Value r) ()] is {!split} as a causal pipeline
+    stage: audio chunks in, and out the non-silent intervals each chunk
+    decides, as [(start, stop)] sample indices of the stage's own input
+    stream, counted from its first sample since [prepare] or [reset].
+    Concatenated, they are [split ~reference:(`Value r) x] for the signal
+    [x] the stream carried, on every partitioning: both faces judge the same
+    frames — those of [Soundml.rms], which the carry of [Soundml.rms_stage]
+    reproduces bit for bit — through one decision. [top_db], [frame_length]
+    and [hop] default as in {!split}.
+
+    The reference is required and fixed. librosa's default, the whole
+    signal's maximum, is not known before the stream ends, and [`Maximum] is
+    not a value of the argument's type: [split_stage ~reference:`Maximum ()]
+    does not compile, and a caller holding a {!reference} matches on it
+    first.
+
+    Latency. Frame [p] is centred at sample [p * hop] and is judged once its
+    last sample, [p * hop + (frame_length + 1) / 2 - 1], has arrived, so the
+    stage declares the latency and the rate of [Soundml.rms_stage]:
+    [frame_length / 2] samples — exact for an odd [frame_length], one sample
+    more than it holds for an even one — and [1/hop], the frame clock its
+    decisions run on. An interval [(start, stop)] closes at its first silent frame,
+    which is centred at [stop], and is emitted by the push that brings the
+    samples seen to [stop + (frame_length + 1) / 2]: the earliest that frame
+    can be judged. A frame that reaches past the end of the stream is judged
+    at [flush], over the zero right border, and [flush] then closes a run
+    still open at the stream's end [n], as librosa clamps it. Intervals
+    arrive only when sound stops, so the lookahead guarantee of
+    {!Pipeline.kernel} reads in decisions: after [m] samples, every interval
+    with [stop <= m - (frame_length + 1) / 2] has been emitted. A push that
+    closes nothing emits nothing. The [stop] of an interval lies at the
+    centre of its first silent frame, typically half a frame after the sound
+    fades; that offset is the frame rule's, in the offline function too, not
+    the stage's delay.
+
+    An interval can be empty: [(n, n)] when the final run is the last frame
+    alone and that frame is centred at [n], as librosa reports it, which
+    takes an even [frame_length], [n] a multiple of [hop] and
+    [hop > frame_length / 2] — never at the defaults.
+
+    The stage keeps the RMS carry, at most [frame_length] samples per
+    channel, and four integers. There is no trimming stage: whether a silent
+    stretch lies inside the trimmed signal or after it depends on whether
+    sound resumes, arbitrarily far ahead, so such a stage would hold the
+    stretch with no bound on its memory and release it as one chunk with no
+    bound on its size. The span of the intervals is the interval {!trim}
+    keeps.
+
+    Raises [Invalid_argument] at construction if [top_db] is not finite, if
+    [r] is not finite and positive, or if [frame_length] or [hop] is below
+    [1]; and at a chunk of rank zero, or of a leading shape other than the
+    first chunk's. *)

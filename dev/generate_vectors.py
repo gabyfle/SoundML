@@ -3458,9 +3458,14 @@ class TrimVectorGenerator:
     references, a stereo signal whose channels are loud at different times
     (librosa's aggregate=np.max), a signal of zeros (kept whole under
     ref=np.max, the floors cancelling), one shorter than a frame and one
-    entirely below a fixed reference. Every frame's decibels are asserted to
-    lie at least 0.1 dB from the threshold, so neither side's rounding can
-    move a decision; float32 cases quantize the input first.
+    entirely below a fixed reference. The fixed-reference cases also pin
+    Effects.split_stage, which takes only those: among them an odd frame
+    length, a stereo signal at both dtypes, zeros made non-silent by a small
+    reference (the 1e-5 floor sits 20 dB above its threshold), and a hop
+    over half the frame whose last frame alone is loud, the empty interval
+    at the end of the signal. Every frame's decibels are asserted to lie at
+    least 0.1 dB from the threshold, so neither side's rounding can move a
+    decision; float32 cases quantize the input first.
     """
 
     SUITE = "trim"
@@ -3485,6 +3490,15 @@ class TrimVectorGenerator:
         ("zeros", [[4000, 0.0]], 1, {}, ["float64"]),
         ("short", [[300, 0.5]], 1, {}, ["float64"]),
         ("all_quiet_ref1", [[6000, 1e-5]], 1, {"ref": 1.0}, ["float64"]),
+        ("fl511_hop128_ref1", QUIET_SPEECH, 1,
+         {"frame_length": 511, "hop_length": 128, "ref": 1.0},
+         ["float64", "float32"]),
+        ("tail_hop_over_half", [[3996, 0.0], [100, 0.5]], 1,
+         {"frame_length": 256, "hop_length": 512, "ref": 1.0}, ["float64"]),
+        ("zeros_ref1e-3", [[4000, 0.0]], 1, {"ref": 1e-3}, ["float64"]),
+        ("stereo_ref0.5_top_db40", [[4000, 0.0], [3000, 0.4], [5000, 0.0],
+                                    [2000, 0.2], [4000, 0.0], [3000, 0.5]], 2,
+         {"ref": 0.5, "top_db": 40}, ["float64", "float32"]),
     ]
 
     def signal(self, segments, channels):

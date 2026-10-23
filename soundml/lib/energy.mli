@@ -43,6 +43,47 @@ val rms_stage :
   -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
 (** [rms_stage ()] is {!rms} as a pipeline stage. See [Soundml.rms_stage]. *)
 
+(** The streaming carry behind {!rms_stage}, for library stages that judge
+    frame energies as they arrive ([Effects.split_stage]). Its frames are
+    those of {!rms}, bit for bit, on every partitioning of the signal. *)
+module Rms_kernel : sig
+  (** The type for the carry of one stream. Mutable; single-owner. *)
+  type 'a t
+
+  val create : frame_length:int -> hop:int -> 'a t
+  (** [create ~frame_length ~hop] is a fresh carry on that geometry, which
+      the caller has validated. *)
+
+  val step : 'a t -> (float, 'a) Nx.t -> (float, 'a) Nx.t option
+  (** [step k chunk] consumes the next [m] samples of the stream, [chunk]
+      shaped [[...; m]] in the leading shape of the chunks before it, and is
+      the frames they complete, shaped [[...; 1; frames]]. The chunk is
+      borrowed.
+
+      Raises [Invalid_argument] after {!flush}, or if a leading axis of
+      [chunk] has size zero. *)
+
+  val flush : 'a t -> (float, 'a) Nx.t option
+  (** [flush k] ends the stream and is the frames its right border
+      completes, in one tensor. A second [flush] is [None]. *)
+
+  val reset : 'a t -> unit
+  (** [reset k] restores the freshly created carry. *)
+
+  val latency : frame_length:int -> int
+  (** [latency ~frame_length] is the lookahead {!rms_stage} declares,
+      [frame_length / 2] samples. *)
+
+  val rate : hop:int -> Pipeline.Rate.t
+  (** [rate ~hop] is the frame rate {!rms_stage} declares, [1/hop]. *)
+
+  val out_format :
+    frame_length:int -> hop:int -> Pipeline.Format.t -> Pipeline.Format.t
+  (** [out_format ~frame_length ~hop f] is the output format {!rms_stage}
+      derives from [f]: items per second scaled by {!rate}, and the most
+      frames one step can complete as the per-chunk bound. *)
+end
+
 val zero_crossing_rate :
      ?frame_length:int
   -> ?hop:int
