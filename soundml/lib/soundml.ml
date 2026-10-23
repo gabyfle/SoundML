@@ -242,6 +242,12 @@ let hpss_of_stft = Hpss.hpss_of_stft
 
 let hpss_masks = Hpss.hpss_masks
 
+let hpss_of_spectrogram_stage = Hpss.hpss_of_spectrogram_stage
+
+let hpss_masks_stage = Hpss.hpss_masks_stage
+
+let hpss_of_stft_stage = Hpss.hpss_of_stft_stage
+
 let hpss = Hpss.hpss
 
 let harmonic = Hpss.harmonic
