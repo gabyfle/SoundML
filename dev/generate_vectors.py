@@ -69,6 +69,7 @@ SUITE_DIRECTORIES = {
     "delta": "soundml/test/delta/vectors",
     "pcen": "soundml/test/pcen/vectors",
     "trim": "soundml/test/trim/vectors",
+    "filters": "soundml/test/filter/vectors",
     "defaults": "soundml/test/defaults/vectors",
     "synthesis": "soundml/test/synthesis/vectors",
     "io": "soundml-io/test/vectors",
@@ -3592,6 +3593,413 @@ class TrimVectorGenerator:
         write_suite(self.SUITE, "trim", self.cases())
 
 
+class FilterVectorGenerator:
+    """Golden vectors for Soundml.Filter: scipy.signal's butter (transfer
+    function and second-order sections), lfilter_zi, sosfilt_zi, lfilter,
+    sosfilt, filtfilt and sosfiltfilt, and librosa.effects.preemphasis and
+    deemphasis, over the LCG stream under this suite's seed reshaped in C
+    order to [samples], [channels; samples] and [2; 3; samples].
+
+    Every filtering case records the coefficients it filters with (and its
+    initial state), so the filtering vectors pin the kernels independently of
+    the design. States are recorded in the library's layout, the time axis
+    last: a cascade's [..., n_sections, 2] where scipy has
+    (n_sections, ..., 2), the generator moving the axis both ways. A case
+    with "output": "zf" holds the final state of the case of the same name
+    with "output": "y"; scipy returns a state only when given one, so the
+    cases started from rest pass an explicit zero state.
+
+    The band designs keep their edges away from the pole-pairing tie of
+    zpk2sos (edges symmetric about a quarter of the sample rate give mirror
+    poles equally close to the unit circle, whose pairing then turns on the
+    last bit of the platform's complex square root); the generator asserts
+    the distance. The transfer-function filtering cases use designs of order
+    four or less, whose arithmetic the ill-conditioning of high-order
+    polynomials does not amplify. float32 cases quantize the input to float32
+    and compute the reference in float64. librosa's de-emphasis without a
+    state returns the state of its uncorrected recursion, which the generator
+    asserts; the vector records the state that continues the corrected
+    output, coef times its last sample.
+    """
+
+    SUITE = "filters"
+
+    SEED = 20261109
+
+    # (key, band type, cutoffs in Hz, sample rate)
+    BANDS = [
+        ("low1000", "lowpass", [1000.0], 16000),
+        ("low30", "lowpass", [30.0], 44100),
+        ("low0.3", "lowpass", [0.3], 2),
+        ("high300", "highpass", [300.0], 16000),
+        ("high5000", "highpass", [5000.0], 44100),
+        ("band300_3400", "bandpass", [300.0, 3400.0], 16000),
+        ("band1000_1200", "bandpass", [1000.0, 1200.0], 16000),
+        ("band50_15000", "bandpass", [50.0, 15000.0], 44100),
+        ("stop2000_2500", "bandstop", [2000.0, 2500.0], 16000),
+        ("stop100_6000", "bandstop", [100.0, 6000.0], 22050),
+        ("stop49_51", "bandstop", [49.0, 51.0], 1000),
+    ]
+
+    BA_ORDERS = [0, 1, 2, 3, 4, 5, 8]
+
+    SOS_ORDERS = [0, 1, 2, 3, 4, 5, 8, 10, 12]
+
+    def signal(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    def state(self, shape, seed_offset):
+        """A deterministic state of `shape`, from a second LCG stream."""
+        n = int(np.prod(shape))
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED + seed_offset).reshape(shape)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def input(self, shape, dtype):
+        return self.quantize(self.signal(int(np.prod(shape))).reshape(shape), dtype)
+
+    @staticmethod
+    def butter(order, kind, cutoffs, sr, output):
+        wn = cutoffs[0] if len(cutoffs) == 1 else cutoffs
+        return scipy.signal.butter(order, wn, btype=kind, fs=sr, output=output)
+
+    def check_pairing(self, order, kind, cutoffs, sr):
+        """Keeps the band designs away from zpk2sos's pairing ties: the band
+        is not symmetric about sr / 4, and the poles' distances to the unit
+        circle, which decide the order of the sections, stay well apart."""
+        if len(cutoffs) == 2:
+            assert abs(cutoffs[0] + cutoffs[1] - sr / 2) > 1e-6 * sr, (kind, cutoffs, sr)
+        _, p, _ = self.butter(order, kind, cutoffs, sr, "zpk")
+        upper = p[p.imag >= 0]
+        if len(upper) > 1:
+            d = np.sort(np.abs(1 - np.abs(upper)))
+            assert np.min(np.diff(d)) > 1e-9, (order, kind, cutoffs, np.min(np.diff(d)))
+
+    def butter_cases(self):
+        cases = []
+        for output, orders in (("ba", self.BA_ORDERS), ("sos", self.SOS_ORDERS)):
+            for key, kind, cutoffs, sr in self.BANDS:
+                for order in orders:
+                    if output == "sos":
+                        self.check_pairing(order, kind, cutoffs, sr)
+                        values = self.butter(order, kind, cutoffs, sr, "sos")
+                    else:
+                        b, a = self.butter(order, kind, cutoffs, sr, "ba")
+                        assert b.shape == a.shape
+                        values = np.stack([b, a])
+                    assert np.isfinite(values).all()
+                    cases.append({
+                        "name": f"{output}_{key}_order{order}",
+                        "params": {"order": order, "kind": kind, "cutoffs": cutoffs,
+                                   "sample_rate": sr, "output": output},
+                        "shape": list(values.shape),
+                        "values": values.ravel().tolist()})
+        return cases
+
+    # Transfer functions beyond butter's: b longer than a, a longer than b, a
+    # leading coefficient to normalise by, a gain, FIR filters.
+    HAND_BA = [
+        ("b_longer", [0.5, 0.25, -0.1], [1.0, -0.3]),
+        ("a_longer", [0.2], [1.0, -1.2, 0.5, -0.1]),
+        ("a0_2.5", [0.3, -0.2, 0.1], [2.5, -0.5, 0.25]),
+        ("gain", [0.3], [2.0]),
+        ("fir3", [0.25, 0.5, 0.25], [1.0]),
+        ("preemph", [1.0, -0.97], [1.0]),
+    ]
+
+    def fir(self, taps):
+        return (0.1 * self.state([taps], 7)).tolist(), [1.0]
+
+    def zi_cases(self):
+        cases = []
+        designs = []
+        for order in range(1, 9):
+            for key, kind, cutoffs, sr in (self.BANDS[0], self.BANDS[3], self.BANDS[5], self.BANDS[8]):
+                b, a = self.butter(order, kind, cutoffs, sr, "ba")
+                designs.append((f"{key}_order{order}", b.tolist(), a.tolist()))
+        b, a = self.butter(3, "lowpass", [1000.0], 16000, "ba")
+        designs.append(("low1000_order3_a_scaled", b.tolist(), (2.5 * a).tolist()))
+        designs += self.HAND_BA
+        designs.append(("fir140", *self.fir(140)))
+        for key, b, a in designs:
+            zi = scipy.signal.lfilter_zi(b, a)
+            cases.append({"name": f"lfilter_zi_{key}",
+                          "params": {"function": "lfilter_zi", "b": b, "a": a},
+                          "shape": list(zi.shape), "values": zi.tolist()})
+        for order in range(1, 13):
+            for key, kind, cutoffs, sr in (self.BANDS[0], self.BANDS[3], self.BANDS[5], self.BANDS[8]):
+                self.check_pairing(order, kind, cutoffs, sr)
+                sos = self.butter(order, kind, cutoffs, sr, "sos")
+                zi = scipy.signal.sosfilt_zi(sos)
+                cases.append({"name": f"sosfilt_zi_{key}_order{order}",
+                              "params": {"function": "sosfilt_zi",
+                                         "sos": sos.ravel().tolist(),
+                                         "n_sections": int(sos.shape[0])},
+                              "shape": list(zi.shape), "values": zi.ravel().tolist()})
+        return cases
+
+    def lfilter_designs(self):
+        designs = []
+        for order, key, kind, cutoffs, sr in ((1, "low1000", "lowpass", [1000.0], 16000),
+                                              (2, "low1000", "lowpass", [1000.0], 16000),
+                                              (4, "low1000", "lowpass", [1000.0], 16000),
+                                              (3, "high300", "highpass", [300.0], 16000),
+                                              (2, "band300_3400", "bandpass", [300.0, 3400.0], 16000),
+                                              (3, "stop2000_2500", "bandstop", [2000.0, 2500.0], 16000)):
+            b, a = self.butter(order, kind, cutoffs, sr, "ba")
+            designs.append((f"{key}_order{order}", b.tolist(), a.tolist()))
+        designs += self.HAND_BA
+        designs.append(("fir16", *self.fir(16)))
+        return designs
+
+    def sos_designs(self):
+        designs = []
+        for order, key, kind, cutoffs, sr in ((6, "high50", "highpass", [50.0], 16000),
+                                              (4, "band1000_1200", "bandpass", [1000.0, 1200.0], 16000),
+                                              (8, "low2000", "lowpass", [2000.0], 16000),
+                                              (5, "stop100_6500", "bandstop", [100.0, 6500.0], 16000),
+                                              (10, "low100", "lowpass", [100.0], 16000),
+                                              (1, "low1000", "lowpass", [1000.0], 16000)):
+            self.check_pairing(order, kind, cutoffs, sr)
+            sos = self.butter(order, kind, cutoffs, sr, "sos")
+            designs.append((f"{key}_order{order}", sos))
+        return designs
+
+    # (key, input shape, initial state, dtypes): the state is "none" (rest),
+    # "full" (an LCG state of the full shape), "broadcast" (one state with a
+    # leading axis of size 1, for every row) or "steady" (the steady state
+    # scaled by each row's first sample)
+    LAYOUTS = [
+        ("1d_none", [200], "none", ["float64", "float32"]),
+        ("1d_full", [200], "full", ["float64"]),
+        ("1d_steady", [200], "steady", ["float64"]),
+        ("2ch_broadcast", [2, 120], "broadcast", ["float64", "float32"]),
+        ("2ch_steady", [2, 120], "steady", ["float64"]),
+        ("batch_full", [2, 3, 40], "full", ["float64"]),
+    ]
+
+    # the designs whose float32 layouts are emitted
+    FLOAT32_DESIGNS = ["low1000_order2", "band300_3400_order2", "a0_2.5", "fir3",
+                       "high50_order6", "stop100_6500_order5"]
+
+    def lfilter_cases(self):
+        cases = []
+        for key, b, a in self.lfilter_designs():
+            order = max(len(a), len(b)) - 1
+            for layout, shape, init, dtypes in self.LAYOUTS:
+                for dtype in dtypes:
+                    if dtype == "float32" and key not in self.FLOAT32_DESIGNS:
+                        continue
+                    x = self.input(shape, dtype)
+                    lead = shape[:-1]
+                    if init == "none":
+                        zi = None
+                        zi_ref = np.zeros(lead + [order])
+                    elif init == "full":
+                        zi = self.state(lead + [order], 1)
+                        zi_ref = zi
+                    elif init == "broadcast":
+                        zi = self.state([1] * len(lead) + [order], 2)
+                        zi_ref = zi
+                    else:
+                        zi = scipy.signal.lfilter_zi(b, a) * x[..., :1]
+                        zi_ref = zi
+                    y, zf = scipy.signal.lfilter(b, a, x, zi=zi_ref)
+                    assert y.dtype == np.float64 and np.isfinite(y).all()
+                    params = {"b": b, "a": a, "input_shape": shape, "dtype": dtype}
+                    if zi is not None:
+                        params["zi"] = np.asarray(zi).ravel().tolist()
+                        params["zi_shape"] = list(np.shape(zi))
+                    name = f"{key}_{layout}_{dtype}"
+                    cases.append({"name": name, "params": {**params, "output": "y"},
+                                  "shape": list(y.shape), "values": y.ravel().tolist()})
+                    zf = np.broadcast_to(zf, lead + [order])
+                    cases.append({"name": name, "params": {**params, "output": "zf"},
+                                  "shape": list(zf.shape), "values": zf.ravel().tolist()})
+        return cases
+
+    def sosfilt_cases(self):
+        cases = []
+        for key, sos in self.sos_designs():
+            ns = sos.shape[0]
+            for layout, shape, init, dtypes in self.LAYOUTS:
+                for dtype in dtypes:
+                    if dtype == "float32" and key not in self.FLOAT32_DESIGNS:
+                        continue
+                    x = self.input(shape, dtype)
+                    lead = shape[:-1]
+                    if init == "none":
+                        zi = None
+                        zi_ref = np.zeros(lead + [ns, 2])
+                    elif init == "full":
+                        zi = self.state(lead + [ns, 2], 3)
+                        zi_ref = zi
+                    elif init == "broadcast":
+                        zi = self.state([1] * len(lead) + [ns, 2], 4)
+                        zi_ref = np.broadcast_to(zi, lead + [ns, 2])
+                    else:
+                        zi = scipy.signal.sosfilt_zi(sos) * x[..., :1, None]
+                        zi_ref = zi
+                    y, zf = scipy.signal.sosfilt(sos, x, zi=np.moveaxis(zi_ref, -2, 0))
+                    zf = np.moveaxis(zf, 0, -2)
+                    assert y.dtype == np.float64 and np.isfinite(y).all()
+                    params = {"sos": sos.ravel().tolist(), "n_sections": int(ns),
+                              "input_shape": shape, "dtype": dtype}
+                    if zi is not None:
+                        params["zi"] = np.asarray(zi).ravel().tolist()
+                        params["zi_shape"] = list(np.shape(zi))
+                    name = f"{key}_{layout}_{dtype}"
+                    cases.append({"name": name, "params": {**params, "output": "y"},
+                                  "shape": list(y.shape), "values": y.ravel().tolist()})
+                    cases.append({"name": name, "params": {**params, "output": "zf"},
+                                  "shape": list(zf.shape), "values": zf.ravel().tolist()})
+        return cases
+
+    def filtfilt_cases(self):
+        cases = []
+        low4 = self.butter(4, "lowpass", [1000.0], 16000, "ba")
+        band2 = self.butter(2, "bandpass", [300.0, 3400.0], 16000, "ba")
+        high3 = self.butter(3, "highpass", [300.0], 16000, "ba")
+        a0 = ([0.3, -0.2, 0.1], [2.5, -0.5, 0.25])
+        sos5 = self.butter(5, "lowpass", [1000.0], 16000, "sos")
+        sos_band4 = self.butter(4, "bandpass", [300.0, 3400.0], 16000, "sos")
+        sos_high6 = self.butter(6, "highpass", [300.0], 16000, "sos")
+        # (key, design, input shape, pad, padlen, dtype)
+        grid = [
+            ("low4", low4, [300], "odd", None, "float64"),
+            ("low4", low4, [300], "odd", None, "float32"),
+            ("low4_min_length", low4, [16], "odd", None, "float64"),
+            ("low4_min_length_plus_1", low4, [17], "odd", None, "float64"),
+            ("low4_padlen_n_minus_1", low4, [40], "odd", 39, "float64"),
+            ("low4_padlen0", low4, [300], "odd", 0, "float64"),
+            ("low4_even", low4, [300], "even", None, "float64"),
+            ("low4_constant", low4, [300], "constant", None, "float64"),
+            ("low4_2ch", low4, [2, 200], "odd", None, "float64"),
+            ("band2", band2, [300], "odd", None, "float64"),
+            ("high3_batch", high3, [2, 3, 60], "odd", None, "float64"),
+            ("a0_2.5", a0, [300], "odd", None, "float64"),
+            ("sos_low5", sos5, [300], "odd", None, "float64"),
+            ("sos_low5", sos5, [300], "odd", None, "float32"),
+            ("sos_low5_min_length", sos5, [19], "odd", None, "float64"),
+            ("sos_low5_min_length_plus_1", sos5, [20], "odd", None, "float64"),
+            ("sos_low5_padlen_n_minus_1", sos5, [40], "odd", 39, "float64"),
+            ("sos_low5_padlen0", sos5, [300], "odd", 0, "float64"),
+            ("sos_low5_even", sos5, [300], "even", None, "float64"),
+            ("sos_low5_constant", sos5, [300], "constant", None, "float64"),
+            ("sos_band4_2ch", sos_band4, [2, 200], "odd", None, "float64"),
+            ("sos_high6_batch", sos_high6, [2, 3, 60], "odd", None, "float64"),
+        ]
+        for key, design, shape, pad, padlen, dtype in grid:
+            x = self.input(shape, dtype)
+            if isinstance(design, np.ndarray):
+                y = scipy.signal.sosfiltfilt(design, x, padtype=pad, padlen=padlen)
+                params = {"function": "sosfiltfilt", "sos": design.ravel().tolist(),
+                          "n_sections": int(design.shape[0])}
+            else:
+                b, a = design
+                y = scipy.signal.filtfilt(b, a, x, padtype=pad, padlen=padlen)
+                params = {"function": "filtfilt", "b": list(map(float, b)),
+                          "a": list(map(float, a))}
+            assert y.dtype == np.float64 and np.isfinite(y).all()
+            params.update({"pad": pad, "input_shape": shape, "dtype": dtype})
+            if padlen is not None:
+                params["padlen"] = padlen
+            cases.append({"name": f"{key}_{dtype}", "params": params,
+                          "shape": list(y.shape), "values": y.ravel().tolist()})
+        # the minimum lengths are the defaults' boundary: one sample fewer raises
+        for design, n in ((low4, 15), (sos5, 18)):
+            try:
+                if isinstance(design, np.ndarray):
+                    scipy.signal.sosfiltfilt(design, self.signal(n))
+                else:
+                    scipy.signal.filtfilt(*design, self.signal(n))
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"padlen boundary moved: {n} samples accepted")
+        return cases
+
+    # (key, function, coef or None for the default, zi: None, "row" for one
+    # state per row or a float for one state broadcast over every row, input
+    # shape, dtypes)
+    EMPHASIS = [
+        ("pre_default_1d", "preemphasis", None, None, [300], ["float64", "float32"]),
+        ("pre_default_2ch", "preemphasis", None, None, [2, 200], ["float64"]),
+        ("pre_default_batch", "preemphasis", None, None, [2, 3, 60], ["float64"]),
+        ("pre_default_two_samples", "preemphasis", None, None, [2], ["float64"]),
+        ("pre_coef0.5", "preemphasis", 0.5, None, [300], ["float64"]),
+        ("pre_coef0.999", "preemphasis", 0.999, None, [300], ["float64"]),
+        ("pre_coef0_zi0", "preemphasis", 0.0, 0.0, [300], ["float64"]),
+        ("pre_zi_scalar", "preemphasis", None, 0.3, [2, 200], ["float64", "float32"]),
+        ("pre_zi_row", "preemphasis", None, "row", [2, 200], ["float64"]),
+        ("de_default_1d", "deemphasis", None, None, [300], ["float64", "float32"]),
+        ("de_default_2ch", "deemphasis", None, None, [2, 200], ["float64"]),
+        ("de_default_batch", "deemphasis", None, None, [2, 3, 60], ["float64"]),
+        ("de_default_two_samples", "deemphasis", None, None, [2], ["float64"]),
+        ("de_coef0.5", "deemphasis", 0.5, None, [300], ["float64"]),
+        ("de_coef0.999", "deemphasis", 0.999, None, [300], ["float64"]),
+        ("de_coef0_zi0", "deemphasis", 0.0, 0.0, [300], ["float64"]),
+        ("de_zi_scalar", "deemphasis", None, 0.3, [2, 200], ["float64", "float32"]),
+        ("de_zi_row", "deemphasis", None, "row", [2, 200], ["float64"]),
+    ]
+
+    def emphasis_cases(self):
+        cases = []
+        for key, function, coef, zi, shape, dtypes in self.EMPHASIS:
+            for dtype in dtypes:
+                x = self.input(shape, dtype)
+                lead = shape[:-1]
+                kwargs = {} if coef is None else {"coef": coef}
+                params = {"function": function, "input_shape": shape, "dtype": dtype}
+                if coef is not None:
+                    params["coef"] = coef
+                if zi is None:
+                    zi_ours = None
+                elif zi == "row":
+                    zi_ours = self.state(lead + [1], 5)
+                else:
+                    zi_ours = np.full([1], zi)
+                if zi_ours is not None:
+                    params["zi"] = zi_ours.ravel().tolist()
+                    params["zi_shape"] = list(zi_ours.shape)
+                    # librosa hands zi to lfilter, which wants every dimension
+                    kwargs["zi"] = np.broadcast_to(zi_ours, lead + [1]).copy()
+                fn = getattr(librosa.effects, function)
+                y, zf = fn(x, return_zf=True, **kwargs)
+                assert y.dtype == np.float64 and np.isfinite(y).all()
+                if function == "deemphasis" and zi is None:
+                    c = 0.97 if coef is None else coef
+                    # librosa's own state is its uncorrected recursion's
+                    _, uncorrected = scipy.signal.lfilter(
+                        [1.0], [1.0, -c], x, zi=np.zeros(lead + [1]))
+                    assert np.array_equal(zf, uncorrected), key
+                    zf = c * y[..., -1:]
+                name = f"{key}_{dtype}"
+                cases.append({"name": name, "params": {**params, "output": "y"},
+                              "shape": list(y.shape), "values": y.ravel().tolist()})
+                cases.append({"name": name, "params": {**params, "output": "zf"},
+                              "shape": list(zf.shape), "values": zf.ravel().tolist()})
+        # the round trip of the defaults
+        for shape in ([300], [2, 200]):
+            x = self.input(shape, "float64")
+            y = librosa.effects.deemphasis(librosa.effects.preemphasis(x))
+            cases.append({"name": f"round_trip_{'x'.join(map(str, shape))}",
+                          "params": {"function": "round_trip", "input_shape": shape,
+                                     "dtype": "float64", "output": "y"},
+                          "shape": list(y.shape), "values": y.ravel().tolist()})
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "butter", self.butter_cases())
+        write_suite(self.SUITE, "zi", self.zi_cases())
+        write_suite(self.SUITE, "lfilter", self.lfilter_cases())
+        write_suite(self.SUITE, "sosfilt", self.sosfilt_cases())
+        write_suite(self.SUITE, "filtfilt", self.filtfilt_cases())
+        write_suite(self.SUITE, "emphasis", self.emphasis_cases())
+
+
 class DefaultsVectorGenerator:
     """Golden vectors for the library's defaults against librosa's: every
     call leaves pad_mode, center and window at librosa 1.0's defaults
@@ -4196,6 +4604,7 @@ GENERATORS = [
     DeltaVectorGenerator,
     PcenVectorGenerator,
     TrimVectorGenerator,
+    FilterVectorGenerator,
     DefaultsVectorGenerator,
     SynthesisVectorGenerator,
 ]

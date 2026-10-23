@@ -8,6 +8,7 @@ module Cqt = Cqt
 module Chroma = Chroma
 module Resample = Resample
 module Effects = Effects
+module Filter = Filter
 
 let check_fft_sizes fn stft_config mel_config =
   let stft_size = Stft.Config.fft_size stft_config in
