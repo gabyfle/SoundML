@@ -1,0 +1,7 @@
+(test
+ (name test_pcen)
+ (package soundml)
+ (modules pcen_goldens pcen_law test_pcen)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

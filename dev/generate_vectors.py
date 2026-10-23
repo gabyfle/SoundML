@@ -67,6 +67,7 @@ SUITE_DIRECTORIES = {
     "resample": "soundml/test/resample/vectors",
     "pvoc": "soundml/test/pvoc/vectors",
     "delta": "soundml/test/delta/vectors",
+    "pcen": "soundml/test/pcen/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -3377,6 +3378,74 @@ class DeltaVectorGenerator:
         write_suite(self.SUITE, "delta", self.cases())
 
 
+class PcenVectorGenerator:
+    """Golden vectors for Soundml.pcen: librosa.pcen over synthetic magnitude
+    spectrograms, |LCG values| under this suite's seed scaled by 2 ** 15 and
+    reshaped in C order to [frames], [bands; frames] and
+    [channels; bands; frames].
+
+    Cases cover librosa's defaults (22.05 kHz, hop 512), a 16 kHz hop-160
+    speech geometry with a short time constant, explicit b (including 1, no
+    smoothing), every compression branch (power 0, bias 0, the general
+    case), a non-default gain and eps, and max_size 3 and 4 (odd and even
+    windows of the band maximum, reflected at the edges; the batched cases
+    pass max_axis=-2, the band axis, which librosa needs above rank 2).
+    float32 cases quantize the input to float32 and compute the reference in
+    float64.
+    """
+
+    SUITE = "pcen"
+
+    SEED = 20261024
+
+    # (case key, input shape, pcen keyword arguments, dtypes)
+    CASES = [
+        ("defaults", [16, 40], {}, ["float64", "float32"]),
+        ("defaults_1d", [40], {}, ["float64"]),
+        ("defaults_batched", [2, 16, 40], {}, ["float64"]),
+        ("speech16k", [16, 40], {"sr": 16000, "hop_length": 160,
+                                 "time_constant": 0.06}, ["float64"]),
+        ("b0.1", [16, 40], {"b": 0.1}, ["float64"]),
+        ("b1", [16, 40], {"b": 1.0}, ["float64"]),
+        ("power0", [16, 40], {"power": 0.0}, ["float64"]),
+        ("bias0", [16, 40], {"bias": 0.0}, ["float64"]),
+        ("power1_gain0.5", [16, 40], {"power": 1.0, "gain": 0.5}, ["float64"]),
+        ("eps1e-3", [16, 40], {"eps": 1e-3}, ["float64"]),
+        ("max3", [16, 40], {"max_size": 3}, ["float64", "float32"]),
+        ("max4", [16, 40], {"max_size": 4}, ["float64"]),
+        ("max4_batched", [2, 16, 40], {"max_size": 4, "max_axis": -2},
+         ["float64"]),
+        ("max9_wider_than_half", [6, 40], {"max_size": 9}, ["float64"]),
+    ]
+
+    def signal(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def cases(self):
+        cases = []
+        for key, shape, kwargs, dtypes in self.CASES:
+            base = np.abs(self.signal(int(np.prod(shape)))).reshape(shape) * 2.0**15
+            for dtype in dtypes:
+                S = self.quantize(base, dtype)
+                expected = librosa.pcen(S, **kwargs)
+                assert expected.dtype == np.float64
+                assert np.isfinite(expected).all(), key
+                params = {"input_shape": shape, "dtype": dtype}
+                params.update({{"sr": "sample_rate", "hop_length": "hop"}.get(k, k): v
+                               for k, v in kwargs.items() if k != "max_axis"})
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "pcen", self.cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -3392,6 +3461,7 @@ GENERATORS = [
     PvocVectorGenerator,
     IoVectorGenerator,
     DeltaVectorGenerator,
+    PcenVectorGenerator,
 ]
 
 if __name__ == "__main__":

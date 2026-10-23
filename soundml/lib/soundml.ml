@@ -213,6 +213,13 @@ let delta = Delta.delta
 
 let delta_stage = Delta.stage
 
+(* Per-channel energy normalization: flat delegations to the private [Pcen]
+   module. *)
+
+let pcen = Pcen.pcen
+
+let pcen_stage = Pcen.stage
+
 (* Spectral contrast and onset strength: flat delegations to the private
    [Contrast] and [Onset] modules. *)
 
