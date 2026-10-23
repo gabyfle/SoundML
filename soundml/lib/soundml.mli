@@ -469,6 +469,72 @@ val zero_crossing_rate_stage :
     Raises [Invalid_argument] if [frame_length] or [hop] is smaller than
     [1], or if [threshold] is not finite and non-negative. *)
 
+(** {2:features_delta Delta features}
+
+    The local derivative of a feature sequence along its frame axis —
+    typically of {!mfcc} or a log-mel spectrogram, whose deltas and
+    delta-deltas speech front ends stack beside the static features. *)
+
+(** The border of {!delta}: how the frames within [width / 2] of either end
+    are differentiated.
+    - [`Interp] (librosa's default) fits the first and last full windows and
+      evaluates those fits at the frames they cover.
+    - [`Nearest] extends the sequence by copies of its first and last frames,
+      the edge rule of Kaldi's and python_speech_features' deltas. *)
+type delta_mode = [`Interp | `Nearest]
+
+val delta :
+     ?width:int
+  -> ?order:int
+  -> ?mode:delta_mode
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [delta x] is the [order]-th derivative of [x] along its last axis, in the
+    shape and dtype of [x], as [librosa.feature.delta] computes it: the
+    Savitzky-Golay filter that fits a degree-[order] polynomial by least
+    squares to each window of [width] frames and differentiates it [order]
+    times at the window's centre. [width] defaults to [9], [order] to [1]
+    ([2] gives delta-deltas) and [mode] to [`Interp]. Leading axes
+    broadcast, so a batch of feature matrices is one call.
+
+    The derivative of a degree-[order] fit is constant over its window, so
+    each output frame is one fixed weighted sum of [width] input frames —
+    weight [k / (sum of j^2)] at frame offset [k] when [order = 1] —
+    accumulated in double precision in window order and rounded to the dtype
+    of [x] once. Under [`Interp], the first and last [width / 2] outputs
+    therefore repeat the outputs of the first and last full windows.
+
+    Raises [Invalid_argument] if [width] is not an odd integer of at least
+    [3], if [order] does not lie in [\[1, width - 1\]], if [x] has rank zero
+    or a dtype other than float32 and float64, or if [mode] is [`Interp] and
+    [x] holds fewer than [width] frames — librosa's own restriction. *)
+
+val delta_stage :
+     ?width:int
+  -> ?order:int
+  -> ?mode:delta_mode
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [delta_stage ()] is {!delta} as a pipeline stage: rate 1:1 in frames and
+    format-preserving, consuming and emitting [[...; features; frames]]
+    chunks — compose
+    [Stft.power_stage s >> Mel.stage mel >> mfcc_stage mel () >> delta_stage ()]
+    for streamed MFCC deltas. Every partitioning of a sequence yields the
+    bits {!delta} computes on the whole of it.
+
+    An output frame is emitted once every frame its window reads has
+    arrived, so the stage withholds [width / 2] frames, and under [`Interp]
+    it also holds its first outputs until the first full window has arrived:
+    it declares a latency of [width - 1] frames under [`Interp] and
+    [width / 2] under [`Nearest]. The flush emits the last [width / 2]
+    outputs; under [`Interp] it raises [Invalid_argument] if the stream held
+    fewer than [width] frames, as {!delta} raises on such a sequence.
+
+    Raises [Invalid_argument] if [width] or [order] is invalid as for
+    {!delta}, and, at the chunk concerned, if a chunk has rank zero, a dtype
+    other than float32 and float64, or a leading shape other than the first
+    chunk's. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each

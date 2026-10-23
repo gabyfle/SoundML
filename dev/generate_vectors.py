@@ -66,6 +66,7 @@ SUITE_DIRECTORIES = {
     "hpss": "soundml/test/hpss/vectors",
     "resample": "soundml/test/resample/vectors",
     "pvoc": "soundml/test/pvoc/vectors",
+    "delta": "soundml/test/delta/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -3312,6 +3313,70 @@ class PvocVectorGenerator:
                     dict(GENERATOR_VERSIONS, oracle="dev/generate_vectors.py"))
 
 
+class DeltaVectorGenerator:
+    """Golden vectors for Soundml.delta: librosa.feature.delta over the LCG
+    stream under this suite's seed, reshaped in C order to [frames],
+    [features; frames] and [channels; features; frames].
+
+    The grid crosses widths 3, 5, 9 and 11 with orders 1 to 3 (and order 4
+    at width 9), both borders librosa's delta passes to savgol_filter that
+    the library implements ("interp", the default, and "nearest"), and frame
+    counts at the edges of each border: exactly width frames (the fewest
+    "interp" accepts), one more, and longer sequences; "nearest" also takes
+    one and two frames. float32 cases quantize the input to float32 and
+    compute the reference in float64, like the energy suite.
+    """
+
+    SUITE = "delta"
+
+    SEED = 20261023
+
+    # (width, order)
+    FILTERS = [(3, 1), (5, 1), (5, 2), (5, 3), (9, 1), (9, 2), (9, 4), (11, 2)]
+
+    def signal(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def frame_counts(self, width, mode):
+        counts = [width, width + 1, 40]
+        if mode == "nearest":
+            counts = [1, 2, width - 1] + counts
+        return sorted(set(counts))
+
+    def cases(self):
+        cases = []
+        for width, order in self.FILTERS:
+            for mode in ("interp", "nearest"):
+                for frames in self.frame_counts(width, mode):
+                    for lead in ([], [3], [2, 3]):
+                        shape = lead + [frames]
+                        base = self.signal(int(np.prod(shape))).reshape(shape)
+                        dtypes = ["float64", "float32"] if lead == [3] else ["float64"]
+                        for dtype in dtypes:
+                            x = self.quantize(base, dtype)
+                            expected = librosa.feature.delta(
+                                x, width=width, order=order, axis=-1, mode=mode)
+                            assert expected.dtype == np.float64
+                            assert np.isfinite(expected).all()
+                            name = (f"w{width}_o{order}_{mode}_"
+                                    f"{'x'.join(map(str, shape))}_{dtype}")
+                            cases.append({
+                                "name": name,
+                                "params": {"width": width, "order": order,
+                                           "mode": mode, "input_shape": shape,
+                                           "dtype": dtype},
+                                "shape": list(expected.shape),
+                                "values": expected.ravel().tolist()})
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "delta", self.cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -3326,6 +3391,7 @@ GENERATORS = [
     HpssVectorGenerator,
     PvocVectorGenerator,
     IoVectorGenerator,
+    DeltaVectorGenerator,
 ]
 
 if __name__ == "__main__":
