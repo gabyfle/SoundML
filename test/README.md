@@ -98,6 +98,21 @@ Current suites:
   separation selects values and multiplies them, with no accumulation whose
   order could differ — while the effects cases have the STFT round trip
   beneath them and follow the usual float64-reference convention.
+- `synthesis` — the synthetic signals and the mu-law: `librosa.tone`
+  (frequencies up to just under Nyquist and a negative one, default and
+  explicit phases, lengths and truncated durations, and the last 1024 samples
+  of a 2^22-sample tone), `librosa.chirp` over `scipy.signal.chirp` (both
+  sweep kinds in both directions, the exponential equal-frequency branch, a
+  phase whose degree round trip moves its bits, and lengths for which librosa
+  returns one sample fewer, stored as scipy's sweep over every sample asked
+  for), `librosa.clicks` (times, frames and sample indices, overlapping
+  unsorted clicks, clicks cut and dropped by the length, a stereo custom
+  click; the float32 cases are librosa's own float32 track, the float64 ones
+  its placement loop replayed in float64) and `librosa.mu_compress` /
+  `mu_expand` (continuous values, codes at five values of mu whose inputs
+  are kept clear of the level edges, every code expanded, quantized round
+  trips). The float64 tolerances are ten times what a correctly rounded libm
+  moves the goldens, the exponential sweeps' scaled by the phase they sweep.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which

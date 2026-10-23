@@ -254,4 +254,23 @@ let harmonic = Hpss.harmonic
 
 let percussive = Hpss.percussive
 
+(* Synthetic signals and mu-law companding: flat delegations to the private
+   [Synthesis] module. *)
+
+type click_positions = Synthesis.positions
+
+let tone = Synthesis.tone
+
+let chirp = Synthesis.chirp
+
+let clicks = Synthesis.clicks
+
+let mu_compress = Synthesis.mu_compress
+
+let mu_compress_stage = Synthesis.mu_compress_stage
+
+let mu_expand = Synthesis.mu_expand
+
+let mu_expand_stage = Synthesis.mu_expand_stage
+
 let version = "0.1.0-dev"
