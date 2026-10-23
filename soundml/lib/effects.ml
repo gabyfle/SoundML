@@ -568,7 +568,13 @@ let semitones ?(bins_per_octave = 12) n =
    [amplitude_to_db] computes them — squared and floored at [1e-10] on both
    sides — reduced over the leading axes by their maximum, and compared with
    [-top_db]. The decibels are double precision whatever the dtype of the
-   signal. *)
+   signal.
+
+   Once the reference is fixed the verdicts are frame-local, so a [`Value]
+   reference streams: {!split_stage} judges the frames of the RMS carry as they
+   complete, through the same {!loud_frames} and the same interval {!tracker}
+   the offline functions use, and the carry's frames are those of {!Energy.rms}
+   on every partitioning. *)
 
 type reference = [`Maximum | `Value of float]
 
@@ -600,24 +606,23 @@ let check_silence op ~top_db ~reference ~frame_length ~hop =
   | `Value _ | `Maximum ->
       ()
 
-(* [nonsilent op ~top_db ~reference ~frame_length ~hop x] is, for each frame of
-   [x], whether it is above the threshold. *)
-let nonsilent op ~top_db ~reference ~frame_length ~hop x =
-  check_rank op x ;
-  check_silence op ~top_db ~reference ~frame_length ~hop ;
-  let rms = Energy.rms ~frame_length ~hop x in
-  let frames = Nx.dim (Nx.ndim rms - 1) rms in
-  let mse = Nx.to_array (Nx.cast Nx.float64 rms) in
+let amin = 1e-5 *. 1e-5
+
+(* [offset_of r] is the decibels of the reference amplitude [r]. *)
+let offset_of r = 10. *. Float.log10 (Float.max amin (r *. r))
+
+(* [energies rms] is the frame count of the energies [rms] ([[...; 1; frames]])
+   and their values in double precision, row after row. *)
+let energies rms =
+  (Nx.dim (Nx.ndim rms - 1) rms, Nx.to_array (Nx.cast Nx.float64 rms))
+
+(* [loud_frames ~offset ~top_db ~frames mse] is, for each of the [frames] frames
+   whose energies [mse] holds row after row, whether its loudest row lies above
+   [-top_db] decibels relative to the reference of decibels [offset]. The
+   offline and the streaming faces both decide through this one function, so a
+   frame's verdict is the same arithmetic on both. *)
+let loud_frames ~offset ~top_db ~frames mse =
   let rows = if frames = 0 then 0 else Array.length mse / frames in
-  let amin = 1e-5 *. 1e-5 in
-  let reference =
-    match reference with
-    | `Value r ->
-        r
-    | `Maximum ->
-        Array.fold_left (fun m v -> Float.max m (Float.abs v)) 0. mse
-  in
-  let offset = 10. *. Float.log10 (Float.max amin (reference *. reference)) in
   Array.init frames (fun t ->
       let loudest = ref Float.neg_infinity in
       for r = 0 to rows - 1 do
@@ -626,6 +631,68 @@ let nonsilent op ~top_db ~reference ~frame_length ~hop x =
         if db > !loudest then loudest := db
       done ;
       !loudest > -.top_db )
+
+(* [nonsilent op ~top_db ~reference ~frame_length ~hop x] is, for each frame of
+   [x], whether it is above the threshold. *)
+let nonsilent op ~top_db ~reference ~frame_length ~hop x =
+  check_rank op x ;
+  check_silence op ~top_db ~reference ~frame_length ~hop ;
+  let frames, mse = energies (Energy.rms ~frame_length ~hop x) in
+  let reference =
+    match reference with
+    | `Value r ->
+        r
+    | `Maximum ->
+        Array.fold_left (fun m v -> Float.max m (Float.abs v)) 0. mse
+  in
+  loud_frames ~offset:(offset_of reference) ~top_db ~frames mse
+
+(* An interval tracker over the verdicts of the frames in stream order: [frame]
+   counts the verdicts read, and [opened] is the first frame of the run of
+   non-silent frames in progress, or [-1]. The run of frames [f] to [g - 1] is
+   the samples [(f * hop, g * hop)], librosa's [frames_to_samples] of its
+   edges. *)
+type tracker = {hop: int; mutable frame: int; mutable opened: int}
+
+let tracker hop = {hop; frame= 0; opened= -1}
+
+let tracker_reset t =
+  t.frame <- 0 ;
+  t.opened <- -1
+
+(* [advance t loud closed] reads the verdicts [loud] and is [closed] with the
+   intervals they close added in front, newest first. An interval closes at the
+   first silent frame [g] after its run, and its end [g * hop] is not clamped:
+   frame [g] exists, so [g * hop <= (frames - 1) * hop <= n - frame_length mod
+   2] for the [frames] frames of [n] samples, and librosa's clamp to [n] cannot
+   bind — nor on a start, for the same reason. *)
+let advance t loud closed =
+  Array.fold_left
+    (fun closed l ->
+      let f = t.frame in
+      t.frame <- f + 1 ;
+      if l then begin
+        if t.opened < 0 then t.opened <- f ;
+        closed
+      end
+      else if t.opened < 0 then closed
+      else begin
+        let a = t.opened in
+        t.opened <- -1 ;
+        (a * t.hop, f * t.hop) :: closed
+      end )
+    closed loud
+
+(* [finish t ~n closed] closes the run still open at the end of the [n]-sample
+   signal, at [min n (frames * hop)] — librosa's clamp, which binds here and
+   only here: [frames * hop >= n] always, so the run ends at [n]. *)
+let finish t ~n closed =
+  if t.opened < 0 then closed
+  else begin
+    let a = t.opened in
+    t.opened <- -1 ;
+    (a * t.hop, Int.min n (t.frame * t.hop)) :: closed
+  end
 
 let trim ?(top_db = 60.) ?(reference = `Maximum) ?(frame_length = 2048)
     ?(hop = 512) x =
@@ -652,18 +719,98 @@ let split ?(top_db = 60.) ?(reference = `Maximum) ?(frame_length = 2048)
     ?(hop = 512) x =
   let loud = nonsilent "split" ~top_db ~reference ~frame_length ~hop x in
   let n = Nx.dim (Nx.ndim x - 1) x in
-  let frames = Array.length loud in
-  (* an interval opens at a frame that is loud after a quiet one (or first) and
-     closes at the next quiet frame (or the end) *)
-  let edges = ref [] in
-  for t = 0 to frames - 1 do
-    let before = t > 0 && loud.(t - 1) in
-    if loud.(t) <> before then edges := t :: !edges
-  done ;
-  if frames > 0 && loud.(frames - 1) then edges := frames :: !edges ;
-  let samples =
-    Array.of_list (List.rev_map (fun f -> Int.min n (f * hop)) !edges)
+  let t = tracker hop in
+  Array.of_list (List.rev (finish t ~n (advance t loud [])))
+
+(* {2 The streaming face}
+
+   One stream's state: the RMS carry, the interval tracker over the verdicts of
+   its frames, the samples seen — the [n] the final interval is clamped to — and
+   the leading shape of the first chunk, which every later chunk must keep. A
+   stream with a zero-size leading axis holds no signal, so none of its frames
+   is ever loud: it bypasses the carry, which refuses such chunks, and closes
+   nothing, as offline {!split} finds nothing in it. *)
+
+type 'a split_state =
+  { carry: 'a Energy.Rms_kernel.t
+  ; edges: tracker
+  ; mutable samples: int
+  ; mutable lead: int array option }
+
+let shape_string a =
+  String.concat "; " (Array.to_list (Array.map string_of_int a))
+
+(* [emitted closed] is the chunk of the intervals [closed], newest first. *)
+let emitted = function
+  | [] ->
+      None
+  | closed ->
+      Some (Array.of_list (List.rev closed))
+
+let split_stage ?(top_db = 60.) ?(frame_length = 2048) ?(hop = 512) ~reference
+    () =
+  let fn = "split_stage" in
+  check_silence fn ~top_db
+    ~reference:(reference :> reference)
+    ~frame_length ~hop ;
+  let (`Value r) = reference in
+  let offset = offset_of r in
+  let judge rms =
+    let frames, mse = energies rms in
+    loud_frames ~offset ~top_db ~frames mse
   in
-  Array.init
-    (Array.length samples / 2)
-    (fun i -> (samples.(2 * i), samples.((2 * i) + 1)))
+  let step s chunk =
+    check_rank fn chunk ;
+    let rank = Nx.ndim chunk in
+    let lead = Array.sub (Nx.shape chunk) 0 (rank - 1) in
+    ( match s.lead with
+    | None ->
+        s.lead <- Some lead
+    | Some l when l = lead ->
+        ()
+    | Some l ->
+        invalid_arg
+          (Printf.sprintf
+             "%s: cannot continue a stream of leading shape [%s] with a chunk \
+              of leading shape [%s]"
+             fn (shape_string l) (shape_string lead) ) ) ;
+    s.samples <- s.samples + Nx.dim (rank - 1) chunk ;
+    if Array.exists (fun d -> d = 0) lead then None
+    else
+      match Energy.Rms_kernel.step s.carry chunk with
+      | None ->
+          None
+      | Some rms ->
+          emitted (advance s.edges (judge rms) [])
+  in
+  (* the drained frames may close runs, and the run still open ends with the
+     stream; a frame closes at most one interval and the final one needs a loud
+     last frame, so the tail is at most one interval per drained frame — or the
+     final one alone — and fits the threaded bound as one chunk *)
+  let flush s =
+    let closed =
+      match Energy.Rms_kernel.flush s.carry with
+      | None ->
+          []
+      | Some rms ->
+          advance s.edges (judge rms) []
+    in
+    Option.to_list (emitted (finish s.edges ~n:s.samples closed))
+  in
+  let reset s =
+    Energy.Rms_kernel.reset s.carry ;
+    tracker_reset s.edges ;
+    s.samples <- 0 ;
+    s.lead <- None
+  in
+  Pipeline.kernel
+    ~latency:(Energy.Rms_kernel.latency ~frame_length)
+    ~rate:(Energy.Rms_kernel.rate ~hop)
+    ~out_format:(Energy.Rms_kernel.out_format ~frame_length ~hop)
+    ~flush ~reset ~concat:Array.concat
+    ~prepare:(fun _ ->
+      { carry= Energy.Rms_kernel.create ~frame_length ~hop
+      ; edges= tracker hop
+      ; samples= 0
+      ; lead= None } )
+    ~step ()

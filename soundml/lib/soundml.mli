@@ -89,7 +89,9 @@ module Resample = Resample
     {!Effects.time_stretch}, the spectrum-level {!Effects.phase_vocoder} it is
     built on, its identity phase-locked variant, and {!Effects.pitch_shift},
     which composes the stretch with {!Resample} at the exact rational ratio
-    {!Effects.semitones} names. *)
+    {!Effects.semitones} names. Also silence detection: {!Effects.trim} and
+    {!Effects.split}, and {!Effects.split_stage}, which finds the non-silent
+    intervals of a stream against a fixed reference as they close. *)
 module Effects = Effects
 
 (** {1:features Flat features} *)
