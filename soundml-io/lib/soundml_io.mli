@@ -313,8 +313,9 @@ val write : ?format:Format.t -> string -> 'a audio -> (unit, error) result
 
     Raises [Invalid_argument] if [a.sample_rate < 1], [a.data] has rank 0
     or rank > 2, or its dtype is neither float32 nor float64. Everything
-    else is typed: {!Unsupported} for encoder refusals ([sf_format_check]),
-    {!Not_found} for a missing directory, {!Io} for the rest. *)
+    else is typed: {!Unsupported} for encoder refusals ([sf_format_check],
+    and the Vorbis bounds it misses: more than 255 channels or a rate above
+    200 kHz), {!Not_found} for a missing directory, {!Io} for the rest. *)
 
 (** {1 Headerless PCM} *)
 

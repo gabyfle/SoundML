@@ -95,6 +95,21 @@ let matrix_tests =
         expect_error ~msg:"write"
           (function Unsupported _ -> true | _ -> false)
           (write path (small_audio ~channels:300 ~frames:16)) )
+  ; test "Unsupported: Vorbis above 200 kHz, which libvorbis cannot encode"
+      (fun () ->
+        let path = Filename.concat (tmp_dir ()) "fast.ogg" in
+        expect_error ~msg:"write"
+          (function Unsupported _ -> true | _ -> false)
+          (write path
+             {(small_audio ~channels:1 ~frames:16) with sample_rate= 200_001} ) ;
+        match
+          write path
+            {(small_audio ~channels:2 ~frames:16) with sample_rate= 200_000}
+        with
+        | Ok () ->
+            ()
+        | Error e ->
+            failf "200 kHz must encode: %a" pp_error e )
   ; test "Truncated: the truncated-FLAC fixture" (fun () ->
         expect_error ~msg:"read"
           (function

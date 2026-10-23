@@ -1317,12 +1317,15 @@ let refusal fmt ~channels ~sample_rate =
     (if channels = 1 then "" else "s")
     sample_rate
 
-(* Vorbis carries at most 255 channels (an 8-bit header field); libsndfile
-   1.2.2's sf_format_check does not enforce the bound and its Ogg writer
-   segfaults past it (measured: 256 channels crash, 255 encode fine), so the
-   refusal must happen here, before any sf_open. *)
+(* Vorbis carries at most 255 channels (an 8-bit header field), and libvorbis
+   1.3.7's encoder has no setup template above 200 kHz (the
+   samplerate_max_restriction of lib/modes/setup_X.h). libsndfile 1.2.2's
+   sf_format_check enforces neither bound and its Ogg writer segfaults past them
+   (measured: 256 channels crash, 255 encode fine; 200001 Hz crashes, 200000 Hz
+   and rates down to 1 Hz encode fine), so the refusal must happen here, before
+   any sf_open. *)
 let encode_refused fmt ~code ~channels ~sample_rate =
-  (Format.encoding fmt = `Vorbis && channels > 255)
+  (Format.encoding fmt = `Vorbis && (channels > 255 || sample_rate > 200_000))
   || not (stub_format_check code channels sample_rate)
 
 (* Every frame of [a] through the open handle [h], in the stub's capped calls:
