@@ -503,9 +503,12 @@ val pitch_shift_stage :
     default [60] dB. *)
 
 (** The amplitude the decibels of {!trim} and {!split} are relative to:
-    [`Maximum] is the largest frame RMS of the whole signal, over every
-    leading axis (librosa's [ref=np.max]); [`Value r] is the fixed RMS
-    amplitude [r], the only kind {!split_stage} takes. *)
+    [`Maximum] is the largest frame RMS over the last two axes of the frame
+    decibels, as librosa 1.0's [ref=np.max] takes it — over every channel of
+    mono or [[channels; samples]] audio, and over each [[channels; samples]]
+    clip of a batch of rank three or more, every clip against its own;
+    [`Value r] is the fixed RMS amplitude [r], the only kind {!split_stage}
+    takes. *)
 type reference = [`Maximum | `Value of float]
 
 val trim :

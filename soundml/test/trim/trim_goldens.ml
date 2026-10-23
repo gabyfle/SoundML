@@ -31,17 +31,58 @@ let segments (case : Tutils.Golden.case) =
   | _ ->
       failf "%s: segments is not a list" case.name
 
+let segment_list name = function
+  | `List l ->
+      List.map
+        (function
+          | `List [length; scale] ->
+              (Yojson.Safe.Util.to_int length, Yojson.Safe.Util.to_number scale)
+          | _ ->
+              failf "%s: malformed segment" name )
+        l
+  | _ ->
+      failf "%s: a row's segments are not a list" name
+
+(* [batch dtype case] rebuilds a batch case's signal: the stream cut into rows,
+   each row times its own segments' scales, shaped [lead; samples]. *)
+let batch dtype (case : Tutils.Golden.case) =
+  let rows =
+    match Tutils.Golden.param case "row_segments" with
+    | `List rows ->
+        List.map (segment_list case.name) rows
+    | _ ->
+        failf "%s: row_segments is not a list" case.name
+  in
+  let lead =
+    match Tutils.Golden.param case "lead" with
+    | `List l ->
+        List.map Yojson.Safe.Util.to_int l
+    | _ ->
+        failf "%s: lead is not a list" case.name
+  in
+  let n = List.fold_left (fun a (l, _) -> a + l) 0 (List.hd rows) in
+  let scales =
+    Array.concat
+      (List.concat_map (List.map (fun (l, s) -> Array.make l s)) rows)
+  in
+  let stream = lcg_values (List.length rows * n) in
+  Nx.create dtype
+    (Array.of_list (lead @ [n]))
+    (Array.mapi (fun i v -> v *. scales.(i)) stream)
+
 (* [signal dtype case] rebuilds the case's signal: the stream times each
    segment's scale, tiled over the channels. *)
 let signal dtype (case : Tutils.Golden.case) =
-  let segs = segments case in
-  let channels = Tutils.Golden.int_param case "channels" in
-  let n = List.fold_left (fun a (l, _) -> a + l) 0 segs in
-  let scales = Array.concat (List.map (fun (l, s) -> Array.make l s) segs) in
-  let stream = lcg_values (channels * n) in
-  let values = Array.mapi (fun i v -> v *. scales.(i mod n)) stream in
-  let shape = if channels > 1 then [|channels; n|] else [|n|] in
-  Nx.create dtype shape values
+  if List.mem_assoc "row_segments" case.params then batch dtype case
+  else
+    let segs = segments case in
+    let channels = Tutils.Golden.int_param case "channels" in
+    let n = List.fold_left (fun a (l, _) -> a + l) 0 segs in
+    let scales = Array.concat (List.map (fun (l, s) -> Array.make l s) segs) in
+    let stream = lcg_values (channels * n) in
+    let values = Array.mapi (fun i v -> v *. scales.(i mod n)) stream in
+    let shape = if channels > 1 then [|channels; n|] else [|n|] in
+    Nx.create dtype shape values
 
 let options (case : Tutils.Golden.case) =
   let has key = List.mem_assoc key case.params in
