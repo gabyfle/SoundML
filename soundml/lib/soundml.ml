@@ -250,6 +250,19 @@ let estimate_tuning = Tuning.estimate_tuning
 
 let estimate_tuning_of_spectrogram = Tuning.estimate_tuning_of_spectrogram
 
+(* Autocorrelation, linear prediction and polynomial features: flat delegations
+   to the private [Analysis] module. *)
+
+let autocorrelate = Analysis.autocorrelate
+
+let lpc = Analysis.lpc
+
+let poly_features = Analysis.poly_features
+
+let poly_features_of_spectrogram = Analysis.poly_features_of_spectrogram
+
+let poly_features_stage = Analysis.stage
+
 (* Spectral contrast and onset strength: flat delegations to the private
    [Contrast] and [Onset] modules. *)
 
