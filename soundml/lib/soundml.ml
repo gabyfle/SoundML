@@ -172,7 +172,7 @@ let chroma_cqt cqt_config ?n_chroma ?norm x =
     (Cqt.power_spectrum ~power:1. cqt_config x)
 
 let resample ?quality ~sample_rate ~target x =
-  Resample.(apply (Config.create ?quality ~sample_rate ~target ()) x)
+  Resample.(apply (Config.cached ?quality ~sample_rate ~target ()) x)
 
 (* Spectral-shape features: flat delegations to the private [Spectral]
    module. *)

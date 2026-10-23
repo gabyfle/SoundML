@@ -235,7 +235,9 @@ val pitch_shift :
     rather than by {!semitones} — may exceed the coefficient budget
     {!Resample.Config.create} documents, which raises from there. The terms of
     the ratio, not its value, are what the conversion costs: they are the
-    number of polyphase phases the bank holds.
+    number of polyphase phases the bank holds. The conversion's configuration
+    is kept for later shifts by the same ratio and preset, as
+    [Soundml.resample] keeps its own, so it is designed once.
 
     [ratio = {num = 1; den = 1}] is not a shortcut: the vocoder runs at rate
     [1.] as above and the identity resampler passes its result through

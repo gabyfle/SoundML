@@ -1348,11 +1348,8 @@ module Config = struct
       | _ ->
           assert false
 
-  let equal a b =
-    a.sample_rate = b.sample_rate
-    && a.target = b.target
-    &&
-    match (a.quality, b.quality) with
+  let same_quality a b =
+    match (a, b) with
     | `Fast, `Fast | `High, `High | `Best, `Best ->
         true
     | `Custom x, `Custom y ->
@@ -1360,6 +1357,69 @@ module Config = struct
         && Float.equal x.passband y.passband
     | _ ->
         false
+
+  let equal a b =
+    a.sample_rate = b.sample_rate
+    && a.target = b.target
+    && same_quality a.quality b.quality
+
+  (* {2 The conveniences' configurations}
+
+     The flat conveniences that take rates rather than a config —
+     [Soundml.resample], [Effects.pitch_shift] and soundml-io's load-time
+     conversion — keep the configurations they built last, newest first: a few
+     conversions recur (a corpus at one or two native rates, a pitch shift's few
+     intervals), and designing one again costs many times converting a short
+     clip through it. The filters they hold are bounded by [bank_budget_bytes],
+     the least recently used going first, so a conversion with a large bank
+     evicts the others rather than piling up; the newest is always kept. A
+     config is immutable and domain-safe, so callers that share one see nothing
+     of it but the time. A miss designs outside the lock: two domains that miss
+     together both design, and both return the first one kept. *)
+
+  let designed_bytes c =
+    List.fold_left
+      (fun acc s ->
+        acc + (8 * (Nx.numel s.sproto + Nx.numel s.sbank + Nx.numel s.svisit)) )
+      0 c.stages
+
+  let recent = ref [] (* newest first; read and written under [recent_lock] *)
+
+  let recent_lock = Mutex.create ()
+
+  let find ~quality ~sample_rate ~target =
+    List.find_opt
+      (fun c ->
+        c.sample_rate = sample_rate
+        && c.target = target
+        && same_quality c.quality quality )
+      !recent
+
+  (* The prefix of [cs] whose filters fit in [budget] bytes. *)
+  let rec within budget = function
+    | [] ->
+        []
+    | c :: cs ->
+        let b = designed_bytes c in
+        if b > budget then [] else c :: within (budget - b) cs
+
+  (* Puts [c] first; the lock is held. *)
+  let keep c =
+    let others = List.filter (fun o -> o != c) !recent in
+    recent := c :: within (bank_budget_bytes - designed_bytes c) others ;
+    c
+
+  let cached ?(quality = `High) ~sample_rate ~target () =
+    match
+      Mutex.protect recent_lock (fun () ->
+          Option.map keep (find ~quality ~sample_rate ~target) )
+    with
+    | Some c ->
+        c
+    | None ->
+        let c = create ~quality ~sample_rate ~target () in
+        Mutex.protect recent_lock (fun () ->
+            keep (Option.value (find ~quality ~sample_rate ~target) ~default:c) )
 end
 
 (* {1 The C seam} *)

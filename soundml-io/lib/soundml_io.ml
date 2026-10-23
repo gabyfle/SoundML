@@ -625,7 +625,7 @@ let make_state (type a) (dt : (float, a) Nx.dtype) path h ~frames ~channels
            fact, typed like every other file defect. The handle must not leak
            with any exception. *)
         match
-          Resample.Config.create ?quality ~sample_rate:native_rate ~target ()
+          Resample.Config.cached ?quality ~sample_rate:native_rate ~target ()
         with
         | exception Invalid_argument msg ->
             let (_ : int * string) = stub_close h in

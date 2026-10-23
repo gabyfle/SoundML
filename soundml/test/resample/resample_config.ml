@@ -144,6 +144,27 @@ let geometry_tests =
             , 44100
             , "resample(22050 -> 44100 Hz, quality=high, L/M=2/1, \
                taps=381(ols,N=2048), latency=95)" ) ] )
+  ; test "the conveniences design a repeated conversion once" (fun () ->
+        let cached sample_rate target =
+          Resample.Config.cached ~sample_rate ~target ()
+        in
+        let c = cached 22050 16000 in
+        equal ~msg:"the same parameters" bool true (cached 22050 16000 == c) ;
+        equal ~msg:"what create builds" bool true
+          (Resample.Config.equal c
+             (Resample.Config.create ~sample_rate:22050 ~target:16000 ()) ) ;
+        (* about 9.5 MB of other filters, past the 8 MB kept *)
+        List.iter
+          (fun (sample_rate, target) -> ignore (cached sample_rate target))
+          [ (44100, 16000)
+          ; (16000, 44100)
+          ; (48000, 44100)
+          ; (44100, 48000)
+          ; (16000, 22050)
+          ; (32000, 44100) ] ;
+        let c' = cached 22050 16000 in
+        equal ~msg:"evicted, then designed again" bool false (c' == c) ;
+        equal ~msg:"and kept again" bool true (cached 22050 16000 == c') )
   ; test "identity configuration designs nothing" (fun () ->
         let cfg = Resample.Config.create ~sample_rate:48000 ~target:48000 () in
         equal ~msg:"latency" int 0 (Resample.Config.latency cfg) ;

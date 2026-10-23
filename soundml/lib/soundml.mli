@@ -210,8 +210,10 @@ val resample :
   -> (float, 'a) Nx.t
   -> (float, 'a) Nx.t
 (** [resample ~sample_rate ~target x] is
-    [Resample.(apply (Config.create ~sample_rate ~target ()) x)]. For repeated
-    conversions at one ratio, build the config once. *)
+    [Resample.(apply (Config.create ~sample_rate ~target ()) x)]. The config
+    is kept for later calls at the same rates and quality, with the few
+    others built most recently (up to 8 MB of designed filters), so a
+    conversion repeated over a corpus is designed once. *)
 
 (** {2:features_spectral Spectral-shape features}
 
