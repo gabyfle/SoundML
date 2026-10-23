@@ -446,7 +446,9 @@ module Kernel : sig
     -> ('a, 'c) t
   (** [prepare cdtype c dtype ~channels ~max_block] is a fresh kernel state
       for chunks of at most [max_block] samples of [channels]-channel
-      [dtype] audio, producing [cdtype] spectra.
+      [dtype] audio, producing [cdtype] spectra. [max_block] sizes the
+      buffer the kernel carries samples in from chunk to chunk; a longer
+      chunk is still accepted, and grows it.
 
       Raises [Invalid_argument] if [channels < 1] or [max_block < 1]. *)
 
@@ -458,8 +460,9 @@ module Kernel : sig
       time axis.
 
       Raises [Invalid_argument] if [k] was drained by {!flush} — {!reset} it
-      before feeding a new signal — or if a leading axis of [chunk] has size
-      zero. *)
+      before feeding a new signal — if a leading axis of [chunk] has size
+      zero, or if [chunk]'s leading axes are not those of the chunks fed
+      before it. *)
 
   val flush : ('a, 'c) t -> (Complex.t, 'c) Nx.t option
   (** [flush k] drains the kernel: it installs the right boundary extension

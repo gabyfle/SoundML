@@ -361,20 +361,6 @@ let pad_signal (c : Config.t) x =
 let to_double : type b. (float, b) Nx.t -> (float, Nx.float64_elt) Nx.t =
  fun t -> match Nx.dtype t with Nx.Float64 -> t | _ -> Nx.cast Nx.float64 t
 
-(* [analyse c cdtype samples count] is frames [0, count) of the padded-stream
-   segment [samples], frames-major: shaped [[...; count; bins]], the layout the
-   batched transform writes, which the complex paths view transposed and the
-   power paths read in place; [samples] must span at least [(count - 1) * hop +
-   fft_size] positions, and a longer segment's tail is not read. The analysis is
-   one fused double-precision window multiply (see the header note) and one
-   batched [rfft] straight into the caller's witness dtype; per-frame work never
-   routes through per-frame Nx calls. The segment is already padded, so the
-   extension passed to the framing loop is never consulted. *)
-let analyse (c : Config.t) cdtype samples count =
-  Nx.rfft cdtype
-    (Loops.frames ~window:c.window_values ~hop:c.hop ~left:0 ~ext:Loops.Edge
-       ~first:0 ~count samples )
-
 (* [extension c x] is [c]'s boundary extension of [x]; a constant is first
    stored at [x]'s dtype, as padding [x] would store it. *)
 let extension (c : Config.t) x =
@@ -401,77 +387,270 @@ let bins_major rows = Nx.swapaxes (-1) (-2) rows
 (* {1 The streaming kernel} *)
 
 (* State of one streaming analysis. The padded stream is the signal with its
-   boundary extension; [pending_rev] holds the unconsumed suffix of that stream
-   (in reverse), [skip] counts padded positions still to drop when the hop
-   outruns the data. Before the left extension is computable ([started = false])
-   raw chunks accumulate in [prelude_rev]; [tail] keeps the last [right + 1] raw
-   samples so the right extension is computable at drain time. Retained tensors
-   are always kernel-owned copies — incoming chunks are borrowed. *)
+   boundary extension, and its unconsumed suffix lives in [carry], a host buffer
+   the kernel owns: float64, laid out [[planes; cap]] for chunks of leading
+   shape [lead], the suffix at positions [[start, start + len)] of every plane.
+   Each chunk is widened into it once — exactly, and the framing multiplies in
+   double either way — and frames are read from it in place; the suffix moves
+   only when a chunk would run past [cap], back to the head of the buffer.
+   [skip] counts padded positions still to drop when the hop outruns the data.
+
+   Before the left extension is computable ([started = false]) raw chunks
+   accumulate in [prelude_rev], as kernel-owned copies; [ext] is the extension
+   at the stream's dtype, fixed when the stream starts. The right extension
+   reads the last [right + 1] raw samples at drain time. They end the suffix
+   whenever a frame leaves that many positions of it behind; otherwise
+   ([tailed]) the first [tail_len] positions of each [right + 1]-long plane of
+   [tail] keep them. Frames are written to a [scratch] buffer of their count and
+   transformed at once, so no tensor over kernel memory outlives the call that
+   made it; incoming chunks are borrowed. *)
 type 'a state =
   { cfg: Config.t
   ; left: int
   ; right: int
+  ; block: int option  (** the chunk length the carry is sized for *)
+  ; reuse: int  (** the most frames a chunk of [block] samples completes *)
+  ; tailed: bool
   ; mutable started: bool
   ; mutable drained: bool
   ; mutable received: int
   ; mutable prelude_rev: (float, 'a) Nx.t list
-  ; mutable pending_rev: (float, 'a) Nx.t list
-  ; mutable pending_len: int
-  ; mutable tail: (float, 'a) Nx.t option
+  ; mutable ext: Loops.extension
+  ; mutable lead: int array
+  ; mutable planes: int
+  ; mutable cap: int
+  ; mutable shape: int array  (** [lead] then [cap] *)
+  ; mutable carry: Rig.Buffer.t
+  ; mutable start: int
+  ; mutable len: int
+  ; mutable tail: Store.f64
+  ; mutable tail_len: int
+  ; mutable scratch: (int * Store.buffer) list
   ; mutable skip: int }
 
-let state_create (cfg : Config.t) =
+let state_create (cfg : Config.t) ~block =
+  let left = left_width cfg and right = right_width cfg in
   { cfg
-  ; left= left_width cfg
-  ; right= right_width cfg
+  ; left
+  ; right
+  ; block
+  ; reuse= (match block with None -> 0 | Some b -> 1 + ((left + b) / cfg.hop))
+  ; tailed=
+      right > 0
+      && (match cfg.pad with `Constant _ -> false | `Reflect | `Edge -> true)
+      && cfg.fft_size - cfg.hop <= right
   ; started= false
   ; drained= false
   ; received= 0
   ; prelude_rev= []
-  ; pending_rev= []
-  ; pending_len= 0
-  ; tail= None
+  ; ext= Loops.Edge
+  ; lead= [||]
+  ; planes= 1
+  ; cap= 0
+  ; shape= [|0|]
+  ; carry= Rig.Buffer.create Rig.host 0
+  ; start= 0
+  ; len= 0
+  ; tail= Bigarray.Array1.create Bigarray.float64 Bigarray.c_layout 0
+  ; tail_len= 0
+  ; scratch= []
   ; skip= 0 }
 
+(* Resetting keeps the buffers: the next stream reuses them when its chunks have
+   the same leading shape. *)
 let state_reset s =
   s.started <- false ;
   s.drained <- false ;
   s.received <- 0 ;
   s.prelude_rev <- [] ;
-  s.pending_rev <- [] ;
-  s.pending_len <- 0 ;
-  s.tail <- None ;
+  s.start <- 0 ;
+  s.len <- 0 ;
+  s.tail_len <- 0 ;
   s.skip <- 0
 
-(* [process s cdtype extra extra_len] appends [extra] (stream order, possibly
-   borrowed) to the pending padded stream and emits every frame that became
-   complete. The leftover suffix is copied out, so nothing borrowed is retained
-   and the materialized concatenation dies with the call. *)
-let process s cdtype extra extra_len =
-  let fft = s.cfg.Config.fft_size and hop = s.cfg.Config.hop in
-  let total = s.pending_len + extra_len in
-  let count = if total < fft then 0 else 1 + ((total - fft) / hop) in
-  if count = 0 then begin
-    List.iter
-      (fun t ->
-        if last_dim t > 0 then s.pending_rev <- Nx.copy t :: s.pending_rev )
-      extra ;
-    s.pending_len <- total ;
-    None
+let same_shape a b =
+  Array.length a = Array.length b && Array.for_all2 Int.equal a b
+
+(* [widen32 src ~n ~from dst ~stride ~at ~count planes] copies samples [[from,
+   from + count)] of each [n]-sample plane of [src] to positions [[at, at +
+   count)] of the matching [stride]-long plane of [dst], each widened to double,
+   which is exact. *)
+let widen32 (src : Store.f32) ~n ~from (dst : Store.f64) ~stride ~at ~count
+    planes =
+  for o = 0 to planes - 1 do
+    let s = (o * n) + from and d = (o * stride) + at in
+    for i = 0 to count - 1 do
+      Bigarray.Array1.unsafe_set dst (d + i)
+        (Bigarray.Array1.unsafe_get src (s + i))
+    done
+  done
+
+let widen64 (src : Store.f64) ~n ~from (dst : Store.f64) ~stride ~at ~count
+    planes =
+  for o = 0 to planes - 1 do
+    let s = (o * n) + from and d = (o * stride) + at in
+    for i = 0 to count - 1 do
+      Bigarray.Array1.unsafe_set dst (d + i)
+        (Bigarray.Array1.unsafe_get src (s + i))
+    done
+  done
+
+(* [widen x ~from dst ~stride ~at ~count] is that copy out of the tensor [x],
+   read in place; the narrower dtypes pass through float64 first, as the framing
+   loop reads them. *)
+let widen (type a) (x : (float, a) Nx.t) ~from dst ~stride ~at ~count =
+  if count > 0 then
+    let n = last_dim x in
+    let planes = Nx.numel x / n in
+    match Nx.dtype x with
+    | Nx.Float32 ->
+        Store.read32 x (fun src ->
+            widen32 src ~n ~from dst ~stride ~at ~count planes )
+    | Nx.Float64 ->
+        Store.read64 x (fun src ->
+            widen64 src ~n ~from dst ~stride ~at ~count planes )
+    | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
+        Store.read64 (Nx.cast Nx.float64 x) (fun src ->
+            widen64 src ~n ~from dst ~stride ~at ~count planes )
+
+(* [capacity s need] is the plane length of a carry that must hold [need]
+   positions now. Between chunks the suffix is shorter than a frame, so [left +
+   fft_size + block + right] positions hold any chunk of [block] samples, the
+   prelude and either extension; sixteen frames of slack past that space the
+   moves of the suffix, each copying less than a frame per plane, at least
+   sixteen frames' worth of samples apart. Without a bound, the carry holds the
+   one chunk it is given and the right extension. *)
+let capacity s need =
+  match s.block with
+  | None ->
+      need + s.right
+  | Some b ->
+      let fft = s.cfg.Config.fft_size in
+      Int.max need (s.left + fft + b + s.right + (16 * fft))
+
+(* [layout s lead need] empties the carry for chunks of leading shape [lead],
+   with room for [need] positions at least; buffers of the right shape and size
+   are kept. *)
+let layout s lead need =
+  if s.cap < need || not (same_shape lead s.lead) then begin
+    let planes = Array.fold_left ( * ) 1 lead in
+    let cap = capacity s need in
+    s.lead <- lead ;
+    s.planes <- planes ;
+    s.cap <- cap ;
+    s.shape <- Array.append lead [|cap|] ;
+    s.carry <- Rig.Buffer.create Rig.host (8 * planes * cap) ;
+    s.scratch <- [] ;
+    if s.tailed then
+      s.tail <-
+        Bigarray.Array1.create Bigarray.float64 Bigarray.c_layout
+          (planes * (s.right + 1))
+  end ;
+  s.start <- 0 ;
+  s.len <- 0 ;
+  s.tail_len <- 0
+
+(* [reserve s extra] makes room for [extra] positions past the suffix: in place
+   while they fit, by moving the suffix to the head of the buffer when they fit
+   only there, and in a buffer at least twice as long otherwise. *)
+let reserve s extra =
+  let need = s.len + extra in
+  if s.start + need > s.cap then begin
+    let move src dst ~stride =
+      for o = 0 to s.planes - 1 do
+        Bigarray.Array1.blit
+          (Bigarray.Array1.sub src ((o * s.cap) + s.start) s.len)
+          (Bigarray.Array1.sub dst (o * stride) s.len)
+      done
+    in
+    if need <= s.cap then
+      begin if s.len > 0 then
+        Rig.Buffer.write s.carry Bigarray.float64 (fun a ->
+            move a a ~stride:s.cap )
+      end
+    else begin
+      let cap = Int.max (2 * s.cap) (capacity s need) in
+      let carry = Rig.Buffer.create Rig.host (8 * s.planes * cap) in
+      if s.len > 0 then
+        Rig.Buffer.read s.carry Bigarray.float64 (fun src ->
+            Rig.Buffer.write carry Bigarray.float64 (fun dst ->
+                move src dst ~stride:cap ) ) ;
+      s.carry <- carry ;
+      s.cap <- cap ;
+      s.shape <- Array.append s.lead [|cap|]
+    end ;
+    s.start <- 0
   end
+
+(* [append s x from] appends samples [[from, n)] of every plane of the chunk
+   [x], whose leading shape is the carry's, to the suffix. *)
+let append s x from =
+  let count = last_dim x - from in
+  reserve s count ;
+  let at = s.start + s.len in
+  Rig.Buffer.write s.carry Bigarray.float64 (fun dst ->
+      widen x ~from dst ~stride:s.cap ~at ~count ) ;
+  s.len <- s.len + count
+
+(* [scratch s count] is the host buffer a [count]-frame block is written to.
+   Blocks of one size recur from chunk to chunk, so the buffers of the last four
+   sizes framed are kept; a block larger than any chunk of [block] samples
+   completes gets fresh memory instead, which it does not keep. *)
+let scratch s count =
+  let rec find = function
+    | [] ->
+        None
+    | (c, b) :: rest ->
+        if Int.equal c count then Some b else find rest
+  in
+  match find s.scratch with
+  | Some _ as b ->
+      b
+  | None when count > s.reuse ->
+      None
+  | None ->
+      let b = Store.buffer (8 * s.planes * count * s.cfg.Config.fft_size) in
+      let kept =
+        match s.scratch with x :: y :: z :: _ -> [x; y; z] | l -> l
+      in
+      s.scratch <- (count, b) :: kept ;
+      Some b
+
+(* [analyse s cdtype count] is the first [count] frames of the suffix,
+   frames-major: shaped [[...; count; bins]], the layout the batched transform
+   writes, which the complex paths view transposed and the power paths read in
+   place. The analysis is one fused double-precision window multiply over the
+   carry, read in place (see the header note), and one batched [rfft] straight
+   into the caller's witness dtype; per-frame work never routes through
+   per-frame Nx calls. [start] is a whole number of hops — the suffix advances
+   by whole frames and moves only to position zero — so the suffix's frames are
+   the carry's own frames from [start / hop] on, and the extension passed to the
+   framing loop is never consulted. *)
+let analyse s cdtype count =
+  let c = s.cfg in
+  Nx.rfft cdtype
+    (Loops.frames ?into:(scratch s count) ~window:c.Config.window_values
+       ~hop:c.Config.hop ~left:0 ~ext:Loops.Edge ~first:(s.start / c.Config.hop)
+       ~count
+       (Nx.of_buffer Nx.float64 s.shape s.carry) )
+
+(* [process s cdtype] emits every frame of the suffix that became complete and
+   drops the positions no later frame reads. *)
+let process s cdtype =
+  let fft = s.cfg.Config.fft_size and hop = s.cfg.Config.hop in
+  let count = if s.len < fft then 0 else 1 + ((s.len - fft) / hop) in
+  if count = 0 then None
   else begin
-    let parts = List.rev_append s.pending_rev extra in
-    let samples = match parts with [one] -> one | many -> concat_last many in
-    let out = analyse s.cfg cdtype samples count in
+    let out = analyse s cdtype count in
     let next_start = count * hop in
-    if next_start >= total then begin
-      s.skip <- s.skip + next_start - total ;
-      s.pending_rev <- [] ;
-      s.pending_len <- 0
+    if next_start >= s.len then begin
+      s.skip <- s.skip + next_start - s.len ;
+      s.start <- 0 ;
+      s.len <- 0
     end
     else begin
-      s.pending_rev <- [Nx.copy (shrink_last samples next_start total)] ;
-      s.pending_len <- total - next_start
+      s.start <- s.start + next_start ;
+      s.len <- s.len - next_start
     end ;
     Some out
   end
@@ -486,72 +665,99 @@ let install_threshold (cfg : Config.t) =
   | `Constant _ | `Edge ->
       1
 
-(* [left_pad s x] is the [left]-position left extension computed from the signal
-   head [x]; single reflection suffices because installation waits for [left +
-   1] samples in the reflect case. *)
-let left_pad s x =
-  if s.left = 0 then None
-  else
-    match s.cfg.Config.pad with
-    | `Constant v ->
-        Some
-          (Nx.full (Nx.dtype x)
-             (Array.append
-                (Array.sub (Nx.shape x) 0 (Nx.ndim x - 1))
-                [|s.left|] )
-             v )
-    | `Reflect ->
-        Some (take_last x (Array.init s.left (fun j -> s.left - j)))
-    | `Edge ->
-        Some (take_last x (Array.make s.left 0))
+(* [record_tail s x] keeps the first [tail_len] positions of each [tail] plane
+   equal to the last [right + 1] raw samples — every raw sample while fewer have
+   arrived — across pushes: the newest samples of [x] land after what they leave
+   of the old ones, which move to the head, at most [right + 1] positions per
+   plane. *)
+let record_tail s x =
+  let keep = s.right + 1 and m = last_dim x in
+  if m >= keep then begin
+    widen x ~from:(m - keep) s.tail ~stride:keep ~at:0 ~count:keep ;
+    s.tail_len <- keep
+  end
+  else begin
+    let drop = Int.max 0 (s.tail_len + m - keep) in
+    let kept = s.tail_len - drop in
+    if drop > 0 then
+      for o = 0 to s.planes - 1 do
+        let base = o * keep in
+        for j = 0 to kept - 1 do
+          Bigarray.Array1.unsafe_set s.tail (base + j)
+            (Bigarray.Array1.unsafe_get s.tail (base + drop + j))
+        done
+      done ;
+    widen x ~from:0 s.tail ~stride:keep ~at:kept ~count:m ;
+    s.tail_len <- kept + m
+  end
 
 (* [install s cdtype x] switches to the started phase: [x] is every raw sample
-   so far (at least [left + 1] of them), the left extension is computed, the raw
-   tail snapshotted, and the frames that already fit are emitted. *)
+   so far (at least [install_threshold] of them). The carry is laid out for
+   [x]'s leading shape and [x] widened into it past the [left] positions of the
+   left extension, which are then read from it — single reflection suffices
+   because installation waits for [left + 1] samples in the reflect case — and
+   the frames that already fit are emitted. *)
 let install s cdtype x =
-  let n = last_dim x in
-  if s.right > 0 then begin
-    let keep = Int.min (s.right + 1) n in
-    s.tail <- Some (Nx.copy (shrink_last x (n - keep) n))
-  end ;
+  let n = last_dim x and left = s.left in
   s.started <- true ;
   s.prelude_rev <- [] ;
-  match left_pad s x with
-  | None ->
-      process s cdtype [x] n
-  | Some lp ->
-      process s cdtype [lp; x] (s.left + n)
+  s.ext <- extension s.cfg x ;
+  layout s (leading_shape x) (left + n) ;
+  s.len <- left ;
+  append s x 0 ;
+  if left > 0 then
+    Rig.Buffer.write s.carry Bigarray.float64 (fun a ->
+        for o = 0 to s.planes - 1 do
+          let base = o * s.cap in
+          for j = 0 to left - 1 do
+            let v =
+              match s.ext with
+              | Loops.Constant v ->
+                  v
+              | Loops.Reflect ->
+                  Bigarray.Array1.unsafe_get a (base + left + (left - j))
+              | Loops.Edge ->
+                  Bigarray.Array1.unsafe_get a (base + left)
+            in
+            Bigarray.Array1.unsafe_set a (base + j) v
+          done
+        done ) ;
+  if s.tailed then record_tail s x ;
+  process s cdtype
 
-(* [update_tail s chunk] keeps [tail] equal to the last [right + 1] raw samples
-   across pushes; only small slices are copied. *)
-let update_tail s chunk =
-  let keep = s.right + 1 in
-  let m = last_dim chunk in
-  if m >= keep then s.tail <- Some (Nx.copy (shrink_last chunk (m - keep) m))
-  else
-    let combined =
-      match s.tail with None -> chunk | Some t -> concat_last [t; chunk]
-    in
-    let cm = last_dim combined in
-    let start = Int.max 0 (cm - keep) in
-    s.tail <- Some (Nx.copy (shrink_last combined start cm))
+(* [extend s from] appends positions [[from, right)] of the right extension to
+   the suffix, read from the last [right + 1] raw samples: the end of the
+   suffix, or [tail] when a frame can leave fewer positions behind. Defined only
+   when [started]. *)
+let extend s from =
+  reserve s (s.right - from) ;
+  let stop = s.start + s.len and keep = s.right + 1 in
+  Rig.Buffer.write s.carry Bigarray.float64 (fun a ->
+      for o = 0 to s.planes - 1 do
+        let base = o * s.cap in
+        (* [raw k] is the [k]-th raw sample from the end, [raw 1] the last *)
+        let raw k =
+          if s.tailed then
+            Bigarray.Array1.unsafe_get s.tail ((o * keep) + s.tail_len - k)
+          else Bigarray.Array1.unsafe_get a (base + stop - k)
+        in
+        for i = from to s.right - 1 do
+          let v =
+            match s.ext with
+            | Loops.Constant v ->
+                v
+            | Loops.Reflect ->
+                raw (i + 2)
+            | Loops.Edge ->
+                raw 1
+          in
+          Bigarray.Array1.unsafe_set a (base + stop + i - from) v
+        done
+      done ) ;
+  s.len <- s.len + s.right - from
 
-(* [right_pad s] is the [right]-position right extension computed from the raw
-   tail; defined only when [started] and [right > 0]. *)
-let right_pad s =
-  let tail = Option.get s.tail in
-  let tl = last_dim tail in
-  match s.cfg.Config.pad with
-  | `Constant v ->
-      Nx.full (Nx.dtype tail)
-        (Array.append
-           (Array.sub (Nx.shape tail) 0 (Nx.ndim tail - 1))
-           [|s.right|] )
-        v
-  | `Reflect ->
-      take_last tail (Array.init s.right (fun i -> tl - 2 - i))
-  | `Edge ->
-      take_last tail (Array.make s.right (tl - 1))
+let shape_string shape =
+  String.concat "; " (List.map string_of_int (Array.to_list shape))
 
 let state_step s cdtype chunk =
   if s.drained then
@@ -577,7 +783,14 @@ let state_step s cdtype chunk =
         None
       end
     else begin
-      if s.right > 0 then update_tail s chunk ;
+      let lead = leading_shape chunk in
+      if not (same_shape lead s.lead) then
+        invalid_arg
+          (Printf.sprintf
+             "step: cannot append a chunk of leading shape [%s] to a stream of \
+              leading shape [%s] (the leading axes are fixed until reset)"
+             (shape_string lead) (shape_string s.lead) ) ;
+      if s.tailed then record_tail s chunk ;
       if s.skip >= m then begin
         s.skip <- s.skip - m ;
         None
@@ -585,10 +798,8 @@ let state_step s cdtype chunk =
       else begin
         let dropped = s.skip in
         s.skip <- 0 ;
-        let chunk =
-          if dropped = 0 then chunk else shrink_last chunk dropped m
-        in
-        process s cdtype [chunk] (m - dropped)
+        append s chunk dropped ;
+        process s cdtype
       end
     end
   end
@@ -606,26 +817,25 @@ let state_flush s cdtype =
           let padded = pad_signal s.cfg x in
           s.started <- true ;
           s.prelude_rev <- [] ;
-          process s cdtype [padded] (last_dim padded)
+          layout s (leading_shape padded) (last_dim padded) ;
+          append s padded 0 ;
+          process s cdtype
         end
-      else if s.right > 0 then begin
-        let rp = right_pad s in
-        let r = last_dim rp in
-        if s.skip >= r then begin
-          s.skip <- s.skip - r ;
+      else if s.right > 0 then
+        if s.skip >= s.right then begin
+          s.skip <- s.skip - s.right ;
           None
         end
         else begin
           let dropped = s.skip in
           s.skip <- 0 ;
-          let rp = if dropped = 0 then rp else shrink_last rp dropped r in
-          process s cdtype [rp] (r - dropped)
+          extend s dropped ;
+          process s cdtype
         end
-      end
       else None
     in
-    s.pending_rev <- [] ;
-    s.pending_len <- 0 ;
+    s.start <- 0 ;
+    s.len <- 0 ;
     out
   end
 
@@ -647,7 +857,7 @@ module Kernel = struct
            "prepare: cannot accept blocks of %d samples (max_block must be at \
             least 1)"
            max_block ) ;
-    {state= state_create cfg; cdtype; dtype}
+    {state= state_create cfg ~block:(Some max_block); cdtype; dtype}
 
   let step k chunk = Option.map bins_major (state_step k.state k.cdtype chunk)
 
@@ -1379,7 +1589,9 @@ let stage cdtype c =
     ~reset:(fun s -> state_reset s.state)
     ~concat:(function
       | [] -> Nx.zeros cdtype [|bins; 0|] | parts -> concat_last parts )
-    ~prepare:(fun fmt -> {state= state_create c; bound= threaded_bound c fmt})
+    ~prepare:(fun fmt ->
+      { state= state_create c ~block:(Pipeline.Format.max_items fmt)
+      ; bound= threaded_bound c fmt } )
     ~step:(fun s chunk ->
       Option.map bins_major (state_step s.state cdtype chunk) )
     ()
@@ -1420,7 +1632,9 @@ let power_stage ?(power = 2.) c =
                fixed the element dtype" )
       | parts ->
           concat_last parts )
-    ~prepare:(fun fmt -> {state= state_create c; bound= threaded_bound c fmt})
+    ~prepare:(fun fmt ->
+      { state= state_create c ~block:(Pipeline.Format.max_items fmt)
+      ; bound= threaded_bound c fmt } )
     ~step:(fun s chunk ->
       let dtype = Nx.dtype chunk in
       witness := Some dtype ;
