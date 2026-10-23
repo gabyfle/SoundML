@@ -68,6 +68,7 @@ SUITE_DIRECTORIES = {
     "pvoc": "soundml/test/pvoc/vectors",
     "delta": "soundml/test/delta/vectors",
     "pcen": "soundml/test/pcen/vectors",
+    "trim": "soundml/test/trim/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -3446,6 +3447,90 @@ class PcenVectorGenerator:
         write_suite(self.SUITE, "pcen", self.cases())
 
 
+class TrimVectorGenerator:
+    """Golden vectors for Soundml.Effects.trim and split:
+    librosa.effects.trim / split over piecewise signals, each a run of
+    segments [length, scale] cut from one LCG stream under this suite's seed
+    (scale 0 is silence), mono or [channels; samples] in C order.
+
+    Cases cover the defaults, a smaller geometry, lower thresholds, fixed
+    references, a stereo signal whose channels are loud at different times
+    (librosa's aggregate=np.max), a signal of zeros (kept whole under
+    ref=np.max, the floors cancelling), one shorter than a frame and one
+    entirely below a fixed reference. Every frame's decibels are asserted to
+    lie at least 0.1 dB from the threshold, so neither side's rounding can
+    move a decision; float32 cases quantize the input first.
+    """
+
+    SUITE = "trim"
+
+    SEED = 20261025
+
+    QUIET_SPEECH = [[3000, 0.0], [5000, 0.5], [4000, 1e-4], [3000, 0.3],
+                    [2500, 0.0]]
+
+    # (case key, segments, channels, kwargs, dtypes)
+    CASES = [
+        ("defaults", QUIET_SPEECH, 1, {}, ["float64", "float32"]),
+        ("fl512_hop128", QUIET_SPEECH, 1,
+         {"frame_length": 512, "hop_length": 128}, ["float64"]),
+        ("top_db20", [[2000, 0.01], [3000, 0.6], [3000, 0.02], [2000, 0.5]], 1,
+         {"top_db": 20}, ["float64"]),
+        ("ref1", QUIET_SPEECH, 1, {"ref": 1.0}, ["float64"]),
+        ("ref0.1_top_db30", QUIET_SPEECH, 1, {"ref": 0.1, "top_db": 30},
+         ["float64"]),
+        ("stereo", [[4000, 0.0], [3000, 0.4], [5000, 0.0], [2000, 0.2],
+                    [4000, 0.0], [3000, 0.5]], 2, {}, ["float64"]),
+        ("zeros", [[4000, 0.0]], 1, {}, ["float64"]),
+        ("short", [[300, 0.5]], 1, {}, ["float64"]),
+        ("all_quiet_ref1", [[6000, 1e-5]], 1, {"ref": 1.0}, ["float64"]),
+    ]
+
+    def signal(self, segments, channels):
+        n = sum(length for length, _ in segments)
+        stream = StftVectorGenerator.lcg_signal(channels * n, seed=self.SEED)
+        scales = np.concatenate([np.full(length, scale) for length, scale in segments])
+        y = stream * np.tile(scales, channels)
+        return y.reshape(channels, n) if channels > 1 else y
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def margin(self, y, kwargs):
+        frame_length = kwargs.get("frame_length", 2048)
+        hop_length = kwargs.get("hop_length", 512)
+        top_db = kwargs.get("top_db", 60)
+        mse = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)
+        db = librosa.amplitude_to_db(mse[..., 0, :], ref=kwargs.get("ref", np.max),
+                                     top_db=None)
+        if db.ndim > 1:
+            db = db.max(axis=tuple(range(db.ndim - 1)))
+        return float(np.min(np.abs(db + top_db)))
+
+    def cases(self):
+        cases = []
+        for key, segments, channels, kwargs, dtypes in self.CASES:
+            for dtype in dtypes:
+                y = self.quantize(self.signal(segments, channels), dtype)
+                assert self.margin(y, kwargs) > 0.1, (key, self.margin(y, kwargs))
+                _, index = librosa.effects.trim(y, **kwargs)
+                intervals = librosa.effects.split(y, **kwargs)
+                params = {"segments": segments, "channels": channels, "dtype": dtype}
+                params.update({{"hop_length": "hop", "ref": "reference"}.get(k, k): v
+                               for k, v in kwargs.items()})
+                cases.append({"name": f"trim_{key}_{dtype}", "params": params,
+                              "shape": [2],
+                              "values": [float(v) for v in index]})
+                cases.append({"name": f"split_{key}_{dtype}", "params": params,
+                              "shape": list(intervals.shape),
+                              "values": [float(v) for v in intervals.ravel()]})
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "trim", self.cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -3462,6 +3547,7 @@ GENERATORS = [
     IoVectorGenerator,
     DeltaVectorGenerator,
     PcenVectorGenerator,
+    TrimVectorGenerator,
 ]
 
 if __name__ == "__main__":
