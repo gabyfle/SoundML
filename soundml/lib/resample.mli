@@ -95,9 +95,9 @@ module Config : sig
       prototype filter (float64) and lays each polyphase bank out both
       phase-major and in the executor's row-visit order — kernels pick the
       visit-order copy when their bank outgrows L1, so streaming a large bank
-      reads it sequentially; configs are cheap to share, and one config serves
-      any
-      number of {!apply} calls and prepared kernels. Construction is {e not}
+      reads it sequentially; configs are cheap to share, across domains too,
+      and one config serves any number of {!apply} calls and prepared
+      kernels, concurrently or not. Construction is {e not}
       free, and it dominates short conversions: designing the one long
       prototype of a phase-rich plan measures about 0.3 ms at [`High]
       44.1 → 48 kHz and 0.7 ms at [`High] 44.1 → 16 kHz, spread across
