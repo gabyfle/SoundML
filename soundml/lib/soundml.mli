@@ -1036,6 +1036,275 @@ val hpss_of_stft_stage :
     The real and imaginary parts travel with the magnitude in rings of their
     own, so the state is four arrays of [k_h] floats per row. *)
 
+(** {2:synthesis Synthetic signals}
+
+    Test signals: pure tones, sine sweeps and click tracks. The generators
+    take the dtype of their result first, as {!Window.make} does, and compute
+    every sample in double precision in librosa's order of operations. A tone
+    or chirp sample is a function of its own index alone, never of an
+    accumulated phase, rounded into the dtype once. A generator consumes no
+    stream, so each is an offline function with no {!Pipeline} stage. *)
+
+val tone :
+     (float, 'a) Nx.dtype
+  -> ?length:int
+  -> ?duration:float
+  -> ?phase:float
+  -> sample_rate:int
+  -> float
+  -> (float, 'a) Nx.t
+(** [tone dtype ~sample_rate ~length f] is the pure tone at [f] Hz sampled at
+    [sample_rate], a rank-one tensor of [length] samples, as [librosa.tone]
+    computes it: sample [k] is [cos (2 pi f k / sample_rate + phase)], its
+    argument rounded in that order. [phase] is in radians and defaults to
+    [-pi / 2], which makes the cosine a sine starting at zero.
+
+    The length is [length] when given — it wins over [duration], as in
+    librosa — and otherwise [duration] seconds of samples truncated toward
+    zero, [Float.to_int (duration *. float sample_rate)]: [0.7] seconds at
+    44.1 kHz are [30869] samples, [0.7 *. 44100.] rounding to
+    [30869.999999999996]. A length of zero gives an empty tensor.
+
+    Since every sample is computed from its index, [tone ~length:m] is bit
+    for bit the first [m] samples of [tone ~length:n] for [m <= n], at every
+    dtype. The error of a long tone is therefore not an accumulation but the
+    rounding of each sample's argument, about [2 ** -52] times the argument:
+    against the exact sinusoid, [5e-12] after ten seconds of a 440 Hz tone at
+    22.05 kHz, [2e-9] after an hour, [3e-8] after an hour at 7040 Hz. librosa
+    forms the same argument with the same operations, and the C library
+    reduces it exactly before taking the cosine, so the two share that error
+    rather than adding to it: bit for bit on macOS arm64, where numpy calls
+    the same cosine, and within an ulp per sample under another C library, at
+    any length.
+
+    Raises [Invalid_argument] if [sample_rate] is below [1], if neither
+    [length] nor [duration] is given, if [length] is negative, if [duration]
+    is not finite and non-negative or makes [2 ** 62] samples or more, or if [f]
+    or [phase] is not finite — librosa returns an empty tone for a negative
+    length or duration. *)
+
+val chirp :
+     (float, 'a) Nx.dtype
+  -> ?length:int
+  -> ?duration:float
+  -> ?linear:bool
+  -> ?phase:float
+  -> sample_rate:int
+  -> fmin:float
+  -> fmax:float
+  -> unit
+  -> (float, 'a) Nx.t
+(** [chirp dtype ~sample_rate ~fmin ~fmax ~length ()] is the sine sweep from
+    [fmin] Hz at the first sample towards [fmax] Hz, a rank-one tensor of
+    [length] samples, as [librosa.chirp] computes it through
+    [scipy.signal.chirp]: sample [k] is [cos (p t + phase)] at
+    [t = k / sample_rate], where [p] integrates [2 pi] times the
+    instantaneous frequency over a sweep of [T] seconds,
+
+    {[
+      linear       p t = 2 pi (fmin t + (fmax - fmin) t^2 / (2 T))
+      exponential  p t = 2 pi fmin T ((fmax / fmin) ** (t / T) - 1) / ln (fmax / fmin)
+    ]}
+
+    and [2 pi fmin t] for an exponential sweep with [fmin = fmax]. [linear]
+    defaults to [false], the exponential (geometric) sweep, which spends the
+    same time on every octave; a descending sweep takes [fmin > fmax], and a
+    linear one may start or end at [0] Hz. [phase] is in radians and defaults
+    to [-pi / 2], a sine. librosa hands the phase to scipy in degrees,
+    converted there and back, which moves some phases by an ulp ([0.7]
+    becomes [0.7000000000000001]); the conversion is reproduced. The trailing
+    [unit] lets every other argument be optional.
+
+    With [length], [T] is [(1 / sample_rate) * length] — the sweep would
+    reach [fmax] one sample past the end — and [length] wins over [duration].
+    With [duration] alone, [T] is [duration] and the length is [duration]
+    seconds of samples truncated toward zero, as for {!tone}. [T] depends on
+    the length, so a shorter chirp is not a prefix of a longer one.
+
+    One named deviation: the result holds exactly [length] samples. librosa
+    recounts them as [int ((1 / sr) * length * sr)], which falls below
+    [length] for about one length in a hundred at 22.05 and 44.1 kHz and one
+    in six at 48 kHz and returns a sample fewer — [357] samples at 22.05 kHz
+    give [356], [7] at 48 kHz give [6]. Every sample librosa does return is
+    reproduced, and the last one here is scipy's sweep, on the same [T], at
+    [(length - 1) / sample_rate].
+
+    Parity is bit for bit on macOS arm64. Under another C library the linear
+    sweep agrees within an ulp per sample, while the exponential one
+    multiplies an ulp of its power by the phase swept: it agrees within about
+    [2 ** -52] times the total phase in radians, [4e-12] over a second from
+    20 Hz to 20 kHz.
+
+    Raises [Invalid_argument] if [sample_rate] is below [1], if neither
+    [length] nor [duration] is given, if [length] is negative, if [duration]
+    is not finite and non-negative or makes [2 ** 62] samples or more, if
+    [fmin], [fmax] or [phase] is not finite, or, for an exponential sweep, if
+    [fmin] and [fmax] are not nonzero and of the same sign (scipy's rule,
+    [fmin *. fmax > 0.]). *)
+
+(** Where {!clicks} sounds its clicks, in the order given, duplicates
+    included:
+    - [`Times t] at the times [t], in seconds, each at sample
+      [Float.to_int (t *. float sample_rate)], truncated toward zero as
+      librosa converts them;
+    - [`Frames f] at the frames [f] of a grid advancing [hop] samples, each
+      at sample [f * hop];
+    - [`Samples s] at the sample indices [s], such as the interval bounds
+      {!Effects.split} returns: [`Frames] at a hop of one, which librosa
+      spells that way.
+
+    [`Times] is the one place the library takes seconds where it otherwise
+    deals in frame and sample indices: [librosa.clicks] is most often handed
+    beat times, and the truncation above is the conversion it performs. *)
+type click_positions =
+  [`Frames of int array | `Samples of int array | `Times of float array]
+
+val clicks :
+     (float, 'a) Nx.dtype
+  -> ?hop:int
+  -> ?click:(float, 'a) Nx.t
+  -> ?click_frequency:float
+  -> ?click_duration:float
+  -> ?length:int
+  -> sample_rate:int
+  -> click_positions
+  -> (float, 'a) Nx.t
+(** [clicks dtype ~sample_rate positions] is the click track sounding a click
+    at each of the [positions], as [librosa.clicks] computes it: silence,
+    with the click added at every position in the order given. [hop]
+    defaults to [512] and only [`Frames] reads it.
+
+    The click is [click] when given, its time axis last, and otherwise
+    librosa's default:
+    [m = Float.to_int (float sample_rate *. click_duration)] samples, sample
+    [k] being
+    [2 ** (-10 k / (m - 1)) * sin (2 pi click_frequency k / sample_rate)], a
+    sine at [click_frequency] Hz under an envelope decaying exponentially
+    from [1] to [2 ** -10]. [click_frequency] defaults to [1000.] and
+    [click_duration] to [0.1], 2205 samples at 22.05 kHz.
+
+    The track holds [length] samples when [length] is given: a click running
+    past the end is cut there, and the positions at or past it are dropped.
+    Otherwise it ends where the latest click ends, at the largest position
+    plus the click's length. The result is shaped like the click with its
+    last axis that length: [[length]] for the default click,
+    [[channels; length]] for a [[channels; m]] one.
+
+    The track starts at zero and each click is added in turn, every sum
+    rounded to [dtype] as it is formed, so overlapping clicks round in the
+    order of [positions]. At float32 this is librosa's track, which is
+    always float32, bit for bit wherever the C libraries agree on the default
+    click; at float64 the sum stays in double (a track librosa does not
+    offer), and the narrower dtypes sum in double and round once. The cost
+    is the track's length plus the click's length per position; the samples
+    split across domains, each range adding its clicks in order, which
+    changes no bit.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], if
+    [click_frequency] or [click_duration] is not finite and positive —
+    checked even with [click], which librosa does not — or the click would
+    hold [2 ** 62] samples or more, if [length] is below [1], if there is
+    neither a position nor a [length], if a time is not finite, if a
+    position falls before the first sample (a time at or before
+    [-1 / sample_rate], a negative frame or sample index), or if [click] has
+    rank zero or a sample that is not finite. *)
+
+(** {2:companding Mu-law companding}
+
+    The mu-law maps a sample [x] in [[-1, 1]] to
+    [sign x * ln (1 + mu |x|) / ln (1 + mu)], spending its resolution on
+    quiet samples, and can quantize the result uniformly into
+    [int (1 + mu)] levels: the continuous law, quantized as WaveNet codes
+    its 8-bit sample classes, not the segmented code of ITU-T G.711. Both
+    directions are elementwise and memoryless — any rank, in the shape and
+    dtype of the input, every element computed in double precision and
+    rounded to that dtype once — and each has a stateless {!Pipeline}
+    stage. *)
+
+val mu_compress :
+  ?mu:float -> ?quantize:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [mu_compress x] is the mu-law compression of the samples [x], each in
+    [[-1, 1]], as [librosa.mu_compress] computes it. [mu] defaults to [255.]
+    and [quantize] to [true].
+
+    Without quantization an element is
+    [sign x * log1p (mu |x|) / log1p mu]: [1] and [-1] map to themselves
+    exactly, and both zeros to [0.]. With it, that value [c] becomes the
+    code [count - int (mu + 1) / 2], [count] being the number of points of
+    numpy's [linspace (-1, 1, int (1 + mu))] strictly below [c] — librosa's
+    [digitize (c, linspace (...), right=True)], computed without the table.
+    The codes run from [-(int (mu + 1) / 2)] at [-1] to
+    [int (1 + mu) - 1 - int (mu + 1) / 2] at [1]: [-128] to [127] at
+    [mu = 255.], [-8] to [7] at [mu = 15.]. They are whole numbers in the
+    dtype of [x], exact while it holds them (float32 for [mu] below
+    [2 ** 25]), where librosa returns int64.
+
+    Parity: bit for bit at float64 on macOS arm64, where numpy and the C
+    library compute the same logarithms, and within an ulp or two of each
+    value under another C library; codes agree exactly wherever the
+    compressed value is not within such an error of a level boundary. A
+    float32 input is widened exactly — a named deviation from librosa, whose
+    float32 path takes the logarithm in float32 and divides it by a float64
+    one, compressing [1] to [1.0000000027] and coding it [128], a level past
+    the last.
+
+    Raises [Invalid_argument] if [mu] is not finite and positive, if
+    [quantize] is [true] and [mu] does not lie in [[1, 2 ** 53)] — librosa
+    quantizes a smaller [mu] onto a one-point grid whose codes its own
+    expander rejects — or if an element of [x] does not lie in [[-1, 1]],
+    nan included (librosa lets nan through). *)
+
+val mu_compress_stage :
+     ?mu:float
+  -> ?quantize:bool
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [mu_compress_stage ()] is {!mu_compress} as a memoryless pipeline stage:
+    rate 1:1, latency zero, format-preserving. Every partitioning of a
+    signal yields the bits {!mu_compress} computes on the whole of it.
+
+    Raises [Invalid_argument] for [mu] and [quantize] as {!mu_compress} does
+    when the stage is built, and at the chunk concerned for an element
+    outside [[-1, 1]]. *)
+
+val mu_expand :
+  ?mu:float -> ?quantize:bool -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [mu_expand y] is the mu-law expansion of [y], the inverse of the
+    continuous {!mu_compress}, as [librosa.mu_expand] computes it: an element
+    [v] in [[-1, 1]] maps to [sign v / mu * ((1 + mu) ** |v| - 1)]. [mu]
+    defaults to [255.] and [quantize] to [true]: each element is then a code,
+    first scaled to [v = y * 2 / (1 + mu)], so the codes in
+    [[-(1 + mu) / 2, (1 + mu) / 2]] are accepted, non-integers included.
+    The scaling reads code [c] as the compressed value [2 c / (1 + mu)],
+    librosa's rule, rather than as the middle of the level {!mu_compress}
+    coded: code [127] expands to [0.957] at [mu = 255.], and the quantized
+    round trip [mu_expand (mu_compress x)] errs by up to
+    [0.043] at [mu = 255.] and [0.31] at [mu = 15.], both at full scale. The
+    continuous round trip agrees within [1e-15] at [mu = 255.].
+
+    Parity: bit for bit at float64 on macOS arm64, where numpy and the C
+    library compute the same powers, and within an ulp or two under another
+    C library. A float32 input is widened exactly and expanded in double — a
+    named deviation from librosa, which expands float32 input in float32.
+
+    Raises [Invalid_argument] if [mu] is not finite and positive, if
+    [quantize] is [true] and [mu] does not lie in [[1, 2 ** 53)], or if an
+    element, scaled under [quantize], does not lie in [[-1, 1]], nan
+    included. *)
+
+val mu_expand_stage :
+     ?mu:float
+  -> ?quantize:bool
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [mu_expand_stage ()] is {!mu_expand} as a memoryless pipeline stage:
+    rate 1:1, latency zero, format-preserving. Every partitioning of a
+    stream yields the bits {!mu_expand} computes on the whole of it.
+
+    Raises [Invalid_argument] for [mu] and [quantize] as {!mu_expand} does
+    when the stage is built, and at the chunk concerned for an element
+    {!mu_expand} would refuse. *)
+
 val version : string
 (** [version] is the version of the SoundML distribution this library was built
     from. *)

@@ -70,6 +70,7 @@ SUITE_DIRECTORIES = {
     "pcen": "soundml/test/pcen/vectors",
     "trim": "soundml/test/trim/vectors",
     "defaults": "soundml/test/defaults/vectors",
+    "synthesis": "soundml/test/synthesis/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -3770,6 +3771,414 @@ class DefaultsVectorGenerator:
         write_suite(self.SUITE, "synthesis", self.synthesis_cases())
 
 
+class SynthesisVectorGenerator:
+    """Golden vectors for Soundml.tone, chirp, clicks, mu_compress and
+    mu_expand: librosa.tone, librosa.chirp (over scipy.signal.chirp),
+    librosa.clicks and librosa.mu_compress / mu_expand. Parameters are
+    recorded under the library's names (sample_rate, phase, hop,
+    click_frequency); an absent phase is the default -pi/2.
+
+    Four files:
+
+    - tone: frequencies from 55 Hz to just under Nyquist and a negative one,
+      the default and explicit phases, lengths given directly or as
+      durations (truncated toward zero, and a length winning over a
+      duration), and the last 1024 samples ("tail") of a tone of 2 ** 22
+      samples, whose arguments reach 5e5 radians.
+    - chirp: exponential and linear sweeps, ascending and descending, the
+      exponential sweep's equal-frequency branch, a linear sweep from 0 Hz,
+      a phase whose degree round trip through librosa and scipy moves its
+      bits (asserted), and lengths for which librosa returns one sample
+      fewer than asked. Every length case stores scipy.signal.chirp over all
+      the samples asked for on librosa's sweep time (1 / sr) * length,
+      asserted equal to librosa's output on the samples librosa returns
+      ("reference_length" records how many that is when it falls short).
+      The second-long 20 Hz to 20 kHz sweep keeps its last 2048 samples
+      ("tail"), where its phase, and so its sensitivity to the C library's
+      power, is largest.
+    - clicks: the default click placed at times, frames and sample indices,
+      overlapping clicks in unsorted order with a duplicate, clicks cut by
+      the end of the track and positions past it dropped, a click ending
+      exactly at the length, a shorter, lower click at 16 kHz, and a
+      two-channel click cut from the LCG stream. The float32 cases are
+      librosa's own float32 track; the float64 cases replay librosa's
+      placement loop on a float64 track (librosa has none), the replay
+      asserted bit-identical to librosa when run on a float32 track. A
+      float32 case hands librosa the custom click quantized to float32, the
+      click the library's float32 track adds. Times are (k + 0.5) / sr, half
+      a sample from the truncation's ties.
+    - mu: the continuous compression and expansion over the LCG stream plus
+      the exact points -1, -0, 0, 0.5 and 1, quantized codes at mu 255, 15,
+      100.5 (a non-integer mu: 101 levels), 1 (two levels) and 254 (an odd
+      level count, with a level edge at exactly 0, which sample 0 meets), the
+      expansion of every code at mu 255 and 15, and quantized round trips.
+      Inputs are stored in the params. Every quantized input is kept only
+      when its compressed value lies at least 1e-9 from every level edge or
+      exactly on one by exact arithmetic (the points -1, 0 and 1), so no
+      rounding of the logarithm can move a code.
+
+    float32 cases quantize their input (where there is one) to float32 and
+    compute the reference in float64.
+    """
+
+    SUITE = "synthesis"
+
+    SEED = 20261103
+
+    def lcg(self, n, seed_offset=0):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED + seed_offset)
+
+    @staticmethod
+    def quantize(y, dtype):
+        y = np.asarray(y, dtype=np.float64)
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    # (name, frequency, sample_rate, length, duration, phase, dtypes, tail)
+    TONES = [
+        ("a440_22k", 440.0, 22050, 2048, None, None, ["float64", "float32"], None),
+        ("1k_44k_duration", 1000.0, 44100, None, 0.05, None, ["float64"], None),
+        ("997.3_48k_phase0", 997.3, 48000, 4800, None, 0.0,
+         ["float64", "float32"], None),
+        ("near_nyquist_phase_pi3", 11013.975, 22050, 1000, None, np.pi / 3,
+         ["float64"], None),
+        ("55_16k_duration", 55.0, 16000, None, 0.3, None, ["float64"], None),
+        ("length_wins", 440.0, 22050, 7, 1.0, None, ["float64"], None),
+        ("negative_frequency", -440.0, 22050, 64, None, None, ["float64"], None),
+        ("long_tail", 440.0, 22050, 1 << 22, None, None, ["float64"], 1024),
+    ]
+
+    def tone_cases(self):
+        cases = []
+        for name, f, sr, length, duration, phase, dtypes, tail in self.TONES:
+            kwargs = {"sr": sr}
+            if length is not None:
+                kwargs["length"] = length
+            if duration is not None:
+                kwargs["duration"] = duration
+            if phase is not None:
+                kwargs["phi"] = phase
+            y = librosa.tone(f, **kwargs)
+            assert y.dtype == np.float64
+            expected_len = length if length is not None else int(duration * sr)
+            assert len(y) == expected_len, name
+            if tail is not None:
+                y = y[-tail:]
+            for dtype in dtypes:
+                params = {"frequency": f, "sample_rate": sr, "dtype": dtype}
+                if length is not None:
+                    params["length"] = length
+                if duration is not None:
+                    params["duration"] = duration
+                if phase is not None:
+                    params["phase"] = phase
+                if tail is not None:
+                    params["tail"] = tail
+                cases.append({"name": f"{name}_{dtype}", "params": params,
+                              "shape": list(y.shape), "values": y.tolist()})
+        return cases
+
+    # (name, fmin, fmax, sample_rate, length, duration, linear, phase, dtypes)
+    CHIRPS = [
+        ("exp_up_22k", 110.0, 7040.0, 22050, 4096, None, False, None,
+         ["float64", "float32"]),
+        ("exp_down_22k_duration", 7040.0, 110.0, 22050, None, 0.2, False, None,
+         ["float64"]),
+        ("lin_up_22k", 110.0, 7040.0, 22050, 4096, None, True, None,
+         ["float64", "float32"]),
+        ("lin_down_44k_duration_phase", 8000.0, 50.0, 44100, None, 0.1, True,
+         0.5, ["float64"]),
+        ("exp_equal", 440.0, 440.0, 22050, 1024, None, False, None, ["float64"]),
+        ("lin_from_zero_16k", 0.0, 1000.0, 16000, 1600, None, True, None,
+         ["float64"]),
+        ("exp_wide_48k", 20.0, 20000.0, 48000, 48000, None, False, None,
+         ["float64"]),
+        ("exp_short_48k", 110.0, 880.0, 48000, 49, None, False, None,
+         ["float64"]),
+        ("lin_short_48k", 110.0, 880.0, 48000, 7, None, True, None,
+         ["float64"]),
+        ("exp_357_22k", 110.0, 880.0, 22050, 357, None, False, None,
+         ["float64"]),
+        ("lin_357_22k_phase0.7", 110.0, 880.0, 22050, 357, None, True, 0.7,
+         ["float64"]),
+    ]
+
+    CHIRP_TAILS = {"exp_wide_48k": 2048}
+
+    def chirp_cases(self):
+        cases = []
+        for (name, fmin, fmax, sr, length, duration, linear, phase,
+             dtypes) in self.CHIRPS:
+            kwargs = {"fmin": fmin, "fmax": fmax, "sr": sr, "linear": linear}
+            if length is not None:
+                kwargs["length"] = length
+            if duration is not None:
+                kwargs["duration"] = duration
+            if phase is not None:
+                kwargs["phi"] = phase
+            y = librosa.chirp(**kwargs)
+            assert y.dtype == np.float64
+            phi = -np.pi * 0.5 if phase is None else phase
+            if phase == 0.7:
+                # the degree round trip moves this phase's bits
+                assert np.deg2rad(phi / np.pi * 180) != phi
+            reference_length = None
+            if length is not None:
+                # all the samples asked for, on librosa's sweep time
+                t1 = (1.0 / sr) * length
+                full = scipy.signal.chirp(
+                    np.arange(length) / sr, fmin, t1, fmax,
+                    method="linear" if linear else "logarithmic",
+                    phi=phi / np.pi * 180)
+                assert np.array_equal(full[:len(y)], y), name
+                if len(y) != length:
+                    assert len(y) == length - 1, name
+                    reference_length = len(y)
+                y = full
+            else:
+                assert len(y) == int(duration * sr), name
+            for dtype in dtypes:
+                params = {"fmin": fmin, "fmax": fmax, "sample_rate": sr,
+                          "linear": linear, "dtype": dtype}
+                if length is not None:
+                    params["length"] = length
+                if duration is not None:
+                    params["duration"] = duration
+                if phase is not None:
+                    params["phase"] = phase
+                if reference_length is not None:
+                    params["reference_length"] = reference_length
+                cases.append({"name": f"{name}_{dtype}", "params": params,
+                              "shape": list(y.shape), "values": y.tolist()})
+        for case in cases:
+            tail = self.CHIRP_TAILS.get(case["name"].rsplit("_", 1)[0])
+            if tail is not None:
+                case["params"]["tail"] = tail
+                case["values"] = case["values"][-tail:]
+                case["shape"] = [tail]
+            # the short and 357-sample cases are the ones librosa cuts short
+            meant = "short" in case["name"] or "357" in case["name"]
+            assert meant == ("reference_length" in case["params"]), case["name"]
+        return cases
+
+    @staticmethod
+    def place(click, positions, length, dtype):
+        """librosa.clicks' placement loop on a track of `dtype`."""
+        shape = list(click.shape)
+        shape[-1] = length
+        track = np.zeros(shape, dtype=dtype)
+        for start in positions:
+            end = start + click.shape[-1]
+            if end >= length:
+                track[..., start:] += click[..., : length - start]
+            else:
+                track[..., start:end] += click
+        return track
+
+    @staticmethod
+    def default_click(sr, click_freq, click_duration):
+        """librosa.clicks' default click, as its source computes it."""
+        angular_freq = 2 * np.pi * click_freq / float(sr)
+        click = np.logspace(0, -10, num=int(sr * click_duration), base=2.0)
+        click *= np.sin(angular_freq * np.arange(len(click)))
+        return click
+
+    def custom_click(self, shape):
+        return self.lcg(int(np.prod(shape)), seed_offset=1).reshape(shape)
+
+    def clicks_cases(self):
+        sr = 22050
+
+        def times(samples, rate=sr):
+            return [(k + 0.5) / rate for k in samples]
+
+        both = ["float64", "float32"]
+        # (name, positions {"times"|"frames"|"samples": [...]}, extra params,
+        #  dtypes)
+        specs = [
+            ("times_default", {"times": times([0, 2300, 4410])}, {},
+             ["float64"]),
+            ("frames_default", {"frames": [0, 2, 5]}, {}, ["float32"]),
+            ("samples_overlap_unsorted",
+             {"samples": [1102, 0, 441, 1102]}, {}, both),
+            ("frames_cut_and_dropped", {"frames": [0, 3, 5, 9]},
+             {"length": 3000}, both),
+            ("times_end_at_length", {"times": times([0])}, {"length": 2205},
+             ["float32"]),
+            ("frames_880hz_16k", {"frames": [0, 2, 5]},
+             {"sample_rate": 16000, "hop": 160, "click_frequency": 880.0,
+              "click_duration": 0.05}, both),
+            ("custom_stereo", {"samples": [0, 16, 40]},
+             {"length": 100, "click_shape": [2, 64]}, both),
+            ("custom_stereo_overlap_end", {"samples": [60, 0, 30, 60]},
+             {"length": 100, "click_shape": [2, 64]}, both),
+        ]
+        cases = []
+        for name, where, extra, dtypes in specs:
+            rate = extra.get("sample_rate", sr)
+            hop = extra.get("hop", 512)
+            kwargs = {"sr": rate, "hop_length": hop}
+            if "click_frequency" in extra:
+                kwargs["click_freq"] = extra["click_frequency"]
+            if "click_duration" in extra:
+                kwargs["click_duration"] = extra["click_duration"]
+            if "length" in extra:
+                kwargs["length"] = extra["length"]
+            # positions as librosa computes them
+            if "times" in where:
+                kwargs["times"] = np.asarray(where["times"])
+                positions = (kwargs["times"] * rate).astype(int)
+            elif "frames" in where:
+                kwargs["frames"] = np.asarray(where["frames"])
+                positions = kwargs["frames"] * hop
+            else:
+                # librosa takes sample indices as frames of a one-sample hop
+                kwargs["frames"] = np.asarray(where["samples"])
+                kwargs["hop_length"] = 1
+                positions = kwargs["frames"]
+            if "times" in where:
+                # every time sits half a sample past its sample
+                frac = kwargs["times"] * rate - positions
+                assert (np.abs(frac - 0.5) < 1e-6).all(), name
+            for dtype in dtypes:
+                if "click_shape" in extra:
+                    # the library adds a click of the track's own dtype
+                    click = self.custom_click(extra["click_shape"])
+                    if dtype == "float32":
+                        click = click.astype(np.float32)
+                    y32 = librosa.clicks(click=click, **kwargs)
+                else:
+                    click = self.default_click(
+                        rate, kwargs.get("click_freq", 1000.0),
+                        kwargs.get("click_duration", 0.1))
+                    y32 = librosa.clicks(**kwargs)
+                assert y32.dtype == np.float32
+                if "length" in kwargs:
+                    length = kwargs["length"]
+                    kept = positions[positions < length]
+                else:
+                    length = positions.max() + click.shape[-1]
+                    kept = positions
+                replay32 = self.place(click, kept, length, np.float32)
+                assert np.array_equal(
+                    replay32.view(np.uint32), y32.view(np.uint32)), name
+                if dtype == "float32":
+                    expected = y32.astype(np.float64)
+                else:
+                    expected = self.place(click, kept, length, np.float64)
+                params = {"sample_rate": rate, "dtype": dtype}
+                params.update(where)
+                params.update({k: v for k, v in extra.items()
+                               if k != "sample_rate"})
+                if "hop" not in params and "frames" in where:
+                    params["hop"] = hop
+                cases.append({"name": f"{name}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    # the least distance from a compressed value to a level edge
+    MARGIN = 1e-9
+
+    @staticmethod
+    def compressed(x, mu):
+        return np.sign(x) * np.log1p(mu * np.abs(x)) / np.log1p(mu)
+
+    def keeps_margin(self, x, mu):
+        """Whether the code of each x is safe from any rounding of the
+        logarithm: its compressed value lies MARGIN or more from every level
+        edge, or x is one of the exact points -1, 0, 1."""
+        edges = np.linspace(-1, 1, num=int(1 + mu), endpoint=True)
+        c = self.compressed(x, mu)
+        gap = np.min(np.abs(c[:, None] - edges[None, :]), axis=1)
+        exact = np.isin(x, [-1.0, 0.0, 1.0])
+        return (gap >= self.MARGIN) | exact
+
+    def mu_inputs(self, n, seed_offset, dtype, mu=None):
+        x = self.quantize(self.lcg(n, seed_offset=seed_offset), dtype)
+        specials = self.quantize([-1.0, -0.5, -0.0, 0.0, 0.5, 1.0], dtype)
+        x = np.concatenate([x, specials])
+        if mu is not None:
+            x = x[self.keeps_margin(x, mu)]
+        return x
+
+    def mu_case(self, name, op, mu, quantize, x, dtype, shape=None, compute=None):
+        x = np.asarray(x, dtype=np.float64)
+        if shape is not None:
+            x = x.reshape(shape)
+        if compute is None:
+            if op == "compress":
+                y = librosa.mu_compress(x, mu=mu, quantize=quantize)
+            else:
+                y = librosa.mu_expand(x, mu=mu, quantize=quantize)
+        else:
+            y = compute(x)
+        y = np.asarray(y)
+        assert y.shape == x.shape
+        if op == "compress" and quantize:
+            assert y.dtype == np.int64
+        y = y.astype(np.float64)
+        assert np.isfinite(y).all(), name
+        return {"name": f"{name}_{dtype}",
+                "params": {"op": op, "mu": mu, "quantize": quantize,
+                           "dtype": dtype, "input_shape": list(x.shape),
+                           "input": x.ravel().tolist()},
+                "shape": list(y.shape), "values": y.ravel().tolist()}
+
+    def mu_cases(self):
+        cases = []
+        # continuous compression
+        for mu, dtypes, shape in [(255.0, ["float64", "float32"], [2, 259]),
+                                  (15.0, ["float64"], None)]:
+            for dtype in dtypes:
+                x = self.mu_inputs(512, 2, dtype)
+                cases.append(self.mu_case(f"compress_mu{mu:g}", "compress", mu,
+                                          False, x, dtype, shape=shape))
+        # quantized codes
+        for mu, dtypes in [(255.0, ["float64", "float32"]), (15.0, ["float64"]),
+                           (100.5, ["float64"]), (1.0, ["float64"]),
+                           (254.0, ["float64"])]:
+            for dtype in dtypes:
+                x = self.mu_inputs(512, 3, dtype, mu=mu)
+                assert len(x) > 400, (mu, len(x))
+                case = self.mu_case(f"codes_mu{mu:g}", "compress", mu, True, x,
+                                    dtype)
+                values = np.asarray(case["values"])
+                offset = int(mu + 1) // 2
+                assert values.min() == -offset
+                assert values.max() == int(1 + mu) - 1 - offset
+                if mu == 254.0:
+                    # the level edge at exactly 0: sample 0 sits on it
+                    assert np.linspace(-1, 1, num=255)[127] == 0.0
+                    assert values[np.asarray(case["params"]["input"]) == 0.0][0] == 0
+                cases.append(case)
+        # continuous expansion
+        for dtype in ["float64", "float32"]:
+            x = self.mu_inputs(512, 4, dtype)
+            cases.append(self.mu_case("expand_mu255", "expand", 255.0, False, x,
+                                      dtype))
+        # every code, expanded
+        for mu, top, dtypes in [(255.0, 128, ["float64", "float32"]),
+                                (15.0, 8, ["float64"])]:
+            codes = np.arange(-top, top + 1, dtype=np.float64)
+            for dtype in dtypes:
+                cases.append(self.mu_case(f"expand_codes_mu{mu:g}", "expand", mu,
+                                          True, codes, dtype))
+        # quantized round trips
+        for mu in [255.0, 15.0]:
+            x = self.mu_inputs(512, 5, "float64", mu=mu)
+            cases.append(self.mu_case(
+                f"roundtrip_mu{mu:g}", "roundtrip", mu, True, x, "float64",
+                compute=lambda v, mu=mu: librosa.mu_expand(
+                    librosa.mu_compress(v, mu=mu), mu=mu)))
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "tone", self.tone_cases())
+        write_suite(self.SUITE, "chirp", self.chirp_cases())
+        write_suite(self.SUITE, "clicks", self.clicks_cases())
+        write_suite(self.SUITE, "mu", self.mu_cases())
+
+
 GENERATORS = [
     WindowVectorGenerator,
     StftVectorGenerator,
@@ -3788,6 +4197,7 @@ GENERATORS = [
     PcenVectorGenerator,
     TrimVectorGenerator,
     DefaultsVectorGenerator,
+    SynthesisVectorGenerator,
 ]
 
 if __name__ == "__main__":

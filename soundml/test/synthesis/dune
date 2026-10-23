@@ -1,0 +1,7 @@
+(test
+ (name test_synthesis)
+ (package soundml)
+ (modules synthesis_goldens synthesis_law test_synthesis)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
