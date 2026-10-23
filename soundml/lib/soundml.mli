@@ -638,6 +638,242 @@ val pcen_stage :
     the chunk concerned, for a chunk {!pcen} would refuse or one whose
     leading shape differs from the first chunk's. *)
 
+(** {2:features_pitch Fundamental frequency}
+
+    YIN and probabilistic YIN: the fundamental frequency of raw audio, frame
+    by frame from each frame's cumulative mean normalized difference — YIN's
+    estimate with its {!Pipeline} stage, and pYIN's voiced pitch track,
+    decoded over the whole signal. *)
+
+val yin :
+     ?frame_length:int
+  -> ?hop:int
+  -> ?trough_threshold:float
+  -> ?alignment:[`Centered | `Left]
+  -> ?pad:[`Constant of float | `Edge | `Reflect]
+  -> fmin:float
+  -> fmax:float
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [yin ~fmin ~fmax ~sample_rate x] is the fundamental frequency, in hertz,
+    of each frame of the audio [x], shaped [[...; frames]] — the time axis
+    replaced by the frame axis, as [librosa.yin] returns it — by the YIN
+    estimator (de Cheveigné and Kawahara, {e YIN, a fundamental frequency
+    estimator for speech and music}, JASA 2002). Leading axes broadcast, so
+    a batch of clips is one call. {!Convert.frames_to_time} gives each
+    frame's time: its centre's when frames are centered, its first sample's
+    otherwise.
+
+    Each frame of [frame_length] samples [y 0 .. y (W - 1)] yields its
+    difference function over the candidate periods, from
+    [floor (sample_rate / fmax)] to [ceil (sample_rate / fmin)] samples,
+
+    {[
+      d t = 2 (r 0 - r t) - (y 0 ^ 2 + ... + y (t - 1) ^ 2)
+      d' t = d t / ((d 1 + ... + d t) / t)
+    ]}
+
+    [r] being the frame's autocorrelation and [d'] the cumulative mean
+    normalized difference. The estimate is the shortest period at a trough
+    of [d'] below [trough_threshold] — or, when no trough reaches it, the
+    global minimum of [d'] — refined by the vertex of the parabola through
+    [d'] there and at its two neighbours (none at the ends of the range, or
+    where the vertex lies a full period away), and returned as
+    [sample_rate / period]. A trough is a value below its left neighbour and
+    not above its right one; the two ends compare with their one neighbour.
+
+    [frame_length] defaults to [2048], [hop] to [frame_length / 4],
+    [trough_threshold] to [0.1], [alignment] to [`Centered] and [pad] to
+    [`Constant 0.], librosa's constant padding; [`Centered] and [`Left]
+    are librosa's [center=True] and [center=False], as for
+    {!Stft.Config.create}. Centered frame [p] is
+    centered at sample [p * hop], the signal extended by [frame_length / 2]
+    positions on each side: the constant, copies of the end sample
+    ([`Edge]), or the signal mirrored about its end sample ([`Reflect]), as
+    many times as a short signal needs. Uncentered frame [p] starts at sample
+    [p * hop]. librosa accepts any of numpy's pad modes, with zero as its
+    only constant; these three are offered, the constant at any finite
+    value. The pitch range must satisfy
+    [0 < fmin < fmax <= sample_rate / 2], and a period of [fmin] must fit in
+    a frame: [sample_rate / fmin < frame_length - 1]. librosa warns when
+    fewer than two periods fit; this function does not.
+
+    Parity: librosa's difference function is reproduced as it is computed,
+    including its lag-1 term, which lacks [y 0 ^ 2] — librosa zeroes the
+    first energy term before reading it, and every cumulative mean carries
+    the error — and its interpolation through [d'], where the paper
+    interpolates [d]. The autocorrelation is a zero-padded real FFT of every
+    frame at the length scipy picks, the least 5-smooth integer at least
+    [2 * frame_length - 1], and the estimates agree with librosa's within a
+    few ulps ([4e-15] relative over the test suite's signals). The trough,
+    threshold and minimum tests and the parabola's branch are decided on
+    these values, so a frame whose decision lies within that much of a tie
+    can resolve it the other way.
+
+    The interior runs in double precision and the estimates are rounded to
+    the dtype of [x] once — librosa computes float32 input in single
+    precision and returns float64. An empty signal, or an uncentered one
+    shorter than a frame, produces no frames, [[...; 0]] — a deviation:
+    librosa pads an all-zero frame for an empty signal at even frame lengths
+    and rejects the other cases. A frame of zeros has no trough; its
+    estimate is [sample_rate / floor (sample_rate / fmax)].
+
+    Each frame costs two real FFTs of that 5-smooth length and one pass over
+    the candidate periods.
+
+    Raises [Invalid_argument] if [sample_rate], [frame_length] or [hop] is
+    below [1], if [fmin] or [fmax] is not finite or the pitch range breaks
+    the conditions above (naming an [fmin] and a [frame_length] that would
+    satisfy them), if [trough_threshold] or a [`Constant] padding value is
+    not finite, if [x] has rank zero, or if a sample of [x] is not finite
+    (librosa's audio check). *)
+
+val yin_stage :
+     ?frame_length:int
+  -> ?hop:int
+  -> ?trough_threshold:float
+  -> ?alignment:[`Centered | `Left]
+  -> ?pad:[`Constant of float | `Edge | `Reflect]
+  -> fmin:float
+  -> fmax:float
+  -> sample_rate:int
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [yin_stage ~fmin ~fmax ~sample_rate ()] is {!yin} as a causal pipeline
+    stage: audio chunks [[...; samples]] in, estimates [[...; frames]] out,
+    rate [1/hop] and dtype-preserving. Each estimate depends on its own frame
+    alone, so the stage emits it once the frame's last sample has arrived,
+    and every partitioning of a signal yields the bits {!yin} computes on the
+    whole of it.
+
+    A centered frame reaches [frame_length / 2] samples past its centre, so
+    the stage declares that latency; [`Reflect] holds its first frames until
+    [frame_length / 2 + 1] samples have arrived, which adds nothing, and a
+    stream shorter than that is framed at the flush, reflected as {!yin}
+    reflects it. An uncentered frame reaches [frame_length - 1] samples past
+    its start, the latency the stage then declares. The flush emits the
+    frames the right border completes. The state is the unconsumed part of
+    the last frame and the last [frame_length / 2 + 1] samples.
+
+    Raises [Invalid_argument] for the parameters as {!yin} does, when the
+    stage is built; at prepare time if the stream does not flow at
+    [sample_rate] items per second; and, at the chunk concerned, for a chunk
+    of rank zero, with a zero-size leading axis, of a leading shape other
+    than the first chunk's or holding a non-finite sample, or pushed after
+    the flush — reset the stream before reusing it. *)
+
+(** The result of {!pyin}, three tensors shaped [[...; frames]]. *)
+type 'a pyin =
+  { f0: (float, 'a) Nx.t
+        (** The decoded fundamental frequency of each frame, in hertz, on
+            the pitch grid; the fill value where the frame is unvoiced. *)
+  ; voiced: (bool, Nx.bool_elt) Nx.t
+        (** Whether the decoded state of each frame is voiced. *)
+  ; voiced_probability: (float, 'a) Nx.t
+        (** The probability, in [[0, 1]], that each frame is voiced: the sum
+            of its candidates' probabilities. *)
+  }
+
+val pyin :
+     ?frame_length:int
+  -> ?hop:int
+  -> ?n_thresholds:int
+  -> ?beta_parameters:float * float
+  -> ?boltzmann_parameter:float
+  -> ?resolution:float
+  -> ?max_transition_rate:float
+  -> ?switch_prob:float
+  -> ?no_trough_prob:float
+  -> ?fill:[`Value of float | `Decoded]
+  -> ?alignment:[`Centered | `Left]
+  -> ?pad:[`Constant of float | `Edge | `Reflect]
+  -> ?transition_min_prob:float
+  -> fmin:float
+  -> fmax:float
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> 'a pyin
+(** [pyin ~fmin ~fmax ~sample_rate x] is the fundamental frequency of the
+    audio [x] with its voicing, by probabilistic YIN (Mauch and Dixon,
+    {e pYIN: a fundamental frequency estimator using probabilistic threshold
+    distributions}, ICASSP 2014) as [librosa.pyin] computes it: each tensor
+    of the result is shaped [[...; frames]], over {!yin}'s frames. Leading
+    axes broadcast; each signal is decoded on its own.
+
+    Each frame's cumulative mean normalized difference [d'] is {!yin}'s. In
+    place of YIN's single threshold, [n_thresholds] thresholds
+    [1 / n_thresholds, 2 / n_thresholds, .., 1] carry the mass of a beta
+    distribution of shapes [beta_parameters] between consecutive thresholds.
+    Each threshold spreads its mass over the [m] troughs of [d'] below it,
+    the trough of the [k]-th shortest period (counted from zero) weighted by
+    the truncated Boltzmann law [(1 - e^-l) e^(-l k) / (1 - e^(-l m))], [l]
+    the [boltzmann_parameter]; the mass of the thresholds no trough falls below,
+    times [no_trough_prob], goes to the global minimum. Every trough left
+    with a probability is a candidate at its frequency, refined as {!yin}
+    refines it, on a grid of [1 / resolution] bins per semitone (rounded up)
+    from [fmin] to [fmax]: candidates are rounded to the nearest bin, ties to
+    even, a later (longer-period) candidate replacing an earlier one in its
+    bin and a candidate past the top bin dropped, as librosa does. A frame's
+    voiced probability is the sum of its candidates', clamped to [[0, 1]].
+
+    A hidden Markov model over the pitch bins, each voiced or unvoiced, then
+    decodes the most likely path by Viterbi: voiced states observe their
+    bin's candidate probability, unvoiced states share one minus the voiced
+    probability equally, the initial distribution is uniform over every
+    state, a frame switches voicing with probability [switch_prob], and the
+    pitch moves by a triangular law over at most
+    [max_transition_rate * 12 * hop / sample_rate] semitones per frame
+    (rounded half to even). Transitions below [transition_min_prob] are
+    pruned from the search, as librosa prunes them; [0.] searches every
+    transition (librosa's [None]). This follows the official pYIN software
+    rather than the paper, as librosa does: the Boltzmann prior replaces the
+    first trough below each threshold, and the observations are not halved.
+
+    [frame_length] defaults to [2048], [hop] to [frame_length / 4],
+    [n_thresholds] to [100], [beta_parameters] to [(2., 18.)],
+    [boltzmann_parameter] to [2.], [resolution] to [0.1],
+    [max_transition_rate] to [35.92] octaves per second, [switch_prob] and
+    [no_trough_prob] to [0.01], [transition_min_prob] to [1e-4], [alignment]
+    and [pad] to {!yin}'s, and [fill] to [`Value nan]: the frequency of an
+    unvoiced frame is [nan], while [`Decoded] keeps the pitch of the decoded
+    unvoiced state (librosa's [fill_na=None]). The voiced flag is exact; the
+    frequencies are grid values [fmin * 2 ** (k / (12 * bins per
+    semitone))].
+
+    pyin has no stage: the Viterbi path of a frame depends on every later
+    frame. The candidates agree with librosa's as {!yin}'s estimates do, and
+    the voiced probabilities to about [1e-15]; the Viterbi decisions follow
+    from them, with ties broken toward the first state as librosa breaks
+    them. Every sum runs in a fixed order — the threshold masses in ascending
+    order, the voiced probability in ascending bin order, the transition
+    rows and the no-trough mass in numpy's pairwise order — so a frame's
+    values do not depend on the frames around it; librosa sums the voiced
+    probability of a one-frame signal pairwise instead, which can differ in
+    the last place. The interior runs in double precision, and the
+    frequencies and probabilities are rounded to the dtype of [x] once. An
+    empty signal, or an uncentered one shorter than a frame, produces no
+    frames. librosa rejects a candidate probability that rounds above [1];
+    this function decodes it.
+
+    Decoding costs, per frame and state, one step per predecessor: about
+    twice the transition band's width, or every state of the grid when
+    [transition_min_prob] is [0.], which makes the exact search quadratic in
+    the grid. Back-pointers take two bytes per state and frame while the
+    states fit in sixteen bits (librosa's own storage, which overflows
+    beyond them), four bytes beyond; the transitions are kept as their band,
+    never as the dense matrix librosa builds.
+
+    Raises [Invalid_argument] for the parameters {!yin} shares, as {!yin}
+    does, if [n_thresholds] is below [1], if a beta parameter,
+    [boltzmann_parameter] or [resolution] is not finite and positive, if
+    [max_transition_rate] or [transition_min_prob] is not finite and
+    non-negative, if [switch_prob] or [no_trough_prob] does not lie in
+    [[0, 1]], if the grid holds fewer than two bins, if the transition band
+    is wider than the grid (librosa's own limit), if [transition_min_prob]
+    prunes every transition into some state, if [x] has rank zero, or if a
+    sample of [x] is not finite. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each

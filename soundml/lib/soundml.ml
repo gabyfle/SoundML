@@ -273,5 +273,17 @@ let mu_compress_stage = Synthesis.mu_compress_stage
 let mu_expand = Synthesis.mu_expand
 
 let mu_expand_stage = Synthesis.mu_expand_stage
+(* Fundamental frequency: flat delegations to the private [F0] module. *)
+
+type 'a pyin = 'a F0.pyin =
+  { f0: (float, 'a) Nx.t
+  ; voiced: (bool, Nx.bool_elt) Nx.t
+  ; voiced_probability: (float, 'a) Nx.t }
+
+let yin = F0.yin
+
+let yin_stage = F0.stage
+
+let pyin = F0.pyin
 
 let version = "0.1.0-dev"

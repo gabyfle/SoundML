@@ -22,6 +22,7 @@
   onset
   hpss
   synthesis
+  f0
   ordered
   par
   loops
