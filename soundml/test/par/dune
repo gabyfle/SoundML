@@ -1,0 +1,7 @@
+(copy_files# ../../lib/par.{ml,mli})
+
+(test
+ (name test_par)
+ (package soundml)
+ (modules par test_par)
+ (libraries windtrap))

@@ -29,10 +29,25 @@
    reservations never exceed the target. Each new worker spawns the next one
    before it starts claiming, while its job still has unclaimed chunks, which
    keeps the calling domain out of the serialized domain creation after the
-   first spawn. A worker that sees no new job spins for [linger] relaxations and
-   exits: long enough to catch a kernel issued right after the last one, short
-   enough that spinning workers never compete with the cores nx's own pool is
-   about to use. Spawned domains are never joined, as nothing waits for their
+   first spawn. A worker that sees no new job spins for [linger] relaxations:
+   long enough to catch a kernel issued right after the last one, short enough
+   that spinning workers never compete with the cores nx's own pool is about to
+   use. It then parks on [wake] until the next job. The publisher only takes
+   [lock] to wake the pool when [parked] counts a sleeper: a worker counts
+   itself before it reads [current] under the lock, and the publisher writes
+   [current] before it reads [parked], so with sequentially consistent atomics
+   either the worker sees the job or the publisher sees the worker.
+
+   A parked domain still makes every minor collection stop for it, so the pool
+   retires. The first publisher sets a GC alarm, and when a whole major cycle
+   has passed without a new job id the alarm moves [epoch] on: every worker
+   spawned in an older epoch exits, parked ones as soon as they are woken and
+   spinning ones at their next look, all together, so that the collections their
+   exits force mostly merge. The alarm never blocks on [lock]: when the lock is
+   taken it tries again at the next cycle. It runs on the domain that set it and
+   ends with that domain, which then retires the pool and leaves the alarm to
+   the next publisher, unless it is the main domain, whose exit ends the
+   program. Spawned domains are never joined, as nothing waits for their
    result. *)
 
 type job =
@@ -48,6 +63,19 @@ let current : job option Atomic.t = Atomic.make None
 let alive = Atomic.make 0
 
 let ids = Atomic.make 0
+
+(* Workers asleep on [wake], and the generation they belong to: a worker exits
+   once [epoch] has moved past the one it was spawned in. *)
+let parked = Atomic.make 0
+
+let epoch = Atomic.make 0
+
+let lock = Mutex.create ()
+
+let wake = Condition.create ()
+
+(* Whether a domain's alarm watches the pool. *)
+let watched = Atomic.make false
 
 (* Workers beyond the calling domain. *)
 let capacity = Int.max 0 (Domain.recommended_domain_count () - 1)
@@ -76,25 +104,69 @@ let rec reserve target =
 
 let pending job = Atomic.get job.next < job.chunks
 
+let fresh last =
+  match Atomic.get current with Some job -> job.id <> last | None -> false
+
 let rec spawn job target =
   if pending job && reserve target then
-    match Domain.spawn (fun () -> spawn job target ; idle (-1) 0) with
+    match
+      Domain.spawn (fun () ->
+          let era = Atomic.get epoch in
+          spawn job target ; idle era (-1) 0 )
+    with
     | (_ : unit Domain.t) ->
         ()
     | exception _ ->
         (* The runtime refused another domain: work with those running. *)
         Atomic.decr alive
 
-and idle last spins =
+and idle era last spins =
   match Atomic.get current with
   | Some job when job.id <> last ->
-      claim job ; idle job.id 0
+      claim job ; idle era job.id 0
   | Some _ | None ->
-      if spins < linger then begin
+      if Atomic.get epoch <> era then Atomic.decr alive
+      else if spins < linger then begin
         Domain.cpu_relax () ;
-        idle last (spins + 1)
+        idle era last (spins + 1)
       end
-      else Atomic.decr alive
+      else park era last
+
+and park era last =
+  Atomic.incr parked ;
+  Mutex.lock lock ;
+  while (not (fresh last)) && Atomic.get epoch = era do
+    Condition.wait wake lock
+  done ;
+  Mutex.unlock lock ;
+  Atomic.decr parked ;
+  idle era last 0
+
+(* Under [lock]: every worker alive belongs to an older epoch from now on. *)
+let retire () = Atomic.incr epoch ; Condition.broadcast wake
+
+let watch () =
+  if Atomic.compare_and_set watched false true then begin
+    let seen = ref (-1) in
+    let alarm () =
+      let id = Atomic.get ids in
+      if id <> !seen then seen := id
+      else if
+        Option.is_none (Atomic.get current)
+        && Atomic.get alive > 0
+        && Mutex.try_lock lock
+      then begin
+        retire () ; Mutex.unlock lock
+      end
+    in
+    ignore (Gc.create_alarm alarm : Gc.alarm) ;
+    if not (Domain.is_main_domain ()) then
+      Domain.at_exit (fun () ->
+          Atomic.set watched false ;
+          Mutex.lock lock ;
+          retire () ;
+          Mutex.unlock lock )
+  end
 
 let sequential ~chunks f =
   for i = 0 to chunks - 1 do
@@ -115,6 +187,10 @@ let run ~chunks f =
     if not (Atomic.compare_and_set current None (Some job)) then
       sequential ~chunks f
     else begin
+      if not (Atomic.get watched) then watch () ;
+      if Atomic.get parked > 0 then begin
+        Mutex.lock lock ; Condition.broadcast wake ; Mutex.unlock lock
+      end ;
       spawn job (Int.min capacity (chunks - 1)) ;
       claim job ;
       while Atomic.get job.finished < chunks do
