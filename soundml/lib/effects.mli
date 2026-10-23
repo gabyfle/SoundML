@@ -35,13 +35,17 @@
     equal temperament. The analysis geometry is an {!Stft.Config.t}, used
     whole: the window, its length, the hop, the transform size, the alignment
     and the normalisation are the analysis's, and the padding mode is the
-    boundary extension it reads.
+    boundary extension it reads. Each of the three streams as a {!Pipeline}
+    stage — {!phase_vocoder_stage}, {!time_stretch_stage},
+    {!pitch_shift_stage} — of which it is the one-chunk instance, bit for bit
+    (see the pipeline stages below).
 
-    The four modification entry points are dtype-preserving — complex to complex, float to
-    float — and never expose a complex dtype the caller did not already hold:
-    the interior is float64 throughout and rounds once, at the boundary, into
-    the dtype of the argument. The time or frame axis is the last axis; leading
-    axes broadcast, so a batch of clips is one call.
+    The modification entry points and their stages are dtype-preserving —
+    complex to complex, float to float — and never expose a complex dtype the
+    caller did not already hold: the interior is float64 throughout and rounds
+    once, at the boundary, into the dtype of the argument. The time or frame
+    axis is the last axis; leading axes broadcast, so a batch of clips is one
+    call.
 
     {2 Phase locking}
 
@@ -108,6 +112,14 @@
     - {!phase_vocoder} of a spectrum with a single frame holds that frame, its
       magnitudes and its phases, over every output frame — the zero-slope
       limit of the extrapolation below; the reference returns NaN there.
+    - {!phase_vocoder} at a rate whose last position [i * rate] lands on the
+      frame count itself — [ceil (frames / rate)] positions, the last of them
+      [frames] exactly in floating point, as 21 frames at [0.7] give with
+      [30 * 0.7 = 21.0] — extrapolates that output frame a whole frame past
+      the last analysis frame, at [alpha = 1], where the reference raises
+      because its positions have left [\[0, frames)]. {!time_stretch} and
+      {!pitch_shift} inherit it: 1300 samples stretched by [0.7] at
+      [fft_size 256], [hop 64] are such a case.
     - {!pitch_shift} resamples through this library's {!Resample} rather than
       through the reference's soxr binding, at the exact rational ratio
       {!semitones} names — where the reference converts between a float rate
@@ -267,6 +279,191 @@ val semitones : ?bins_per_octave:int -> float -> Pipeline.Rate.t
     Raises [Invalid_argument] if [bins_per_octave < 1], if [n] is not finite,
     or if the resulting ratio is beyond the cap — nine octaves from unity,
     where no admissible rational approximates it. *)
+
+(** {1:stages Pipeline stages}
+
+    The three modifications stream, each as a causal {!Pipeline} stage whose
+    offline function is its one-chunk instance: the same traversal of the
+    output frames, the same synthesis and conversion kernels, the same final
+    length. A stream chunked any way at all — one sample at a time, chunks
+    shorter than a frame, one chunk — returns the offline result bit for bit,
+    at both dtypes and in both phase modes:
+
+    {[
+      Pipeline.run ~source (time_stretch_stage c ~rate:{num; den}) x
+      = time_stretch c ~rate:(Float.of_int num /. Float.of_int den) x
+    ]}
+
+    and likewise {!phase_vocoder_stage} against {!phase_vocoder} and
+    {!pitch_shift_stage} against {!pitch_shift}. A stage takes its rate as an
+    exact {!Pipeline.Rate.t}, because the item rate of a stream and the
+    accounting of its latency are exact rationals; it computes with the double
+    [num / den], correctly rounded — so [{num = 137; den = 100}] stretches by
+    the same double as the literal [1.37] — and the law holds at that double.
+    A rate known only as a float has no rational short of the one its binary
+    expansion spells, whose terms overflow that accounting. {!pitch_shift}
+    itself derives its stretch from an exact ratio, so its stage reproduces it
+    at every ratio.
+
+    Output frame [i] of the vocoder reads the analysis frames on either side
+    of position [i * rate], so it is final the moment the second of them
+    arrives, and the drain owes only the frames past the last analysis frame,
+    which read the last two: the vocoder withholds one analysis frame, and its
+    state is the accumulator, the last two analysis frames and two counters,
+    whatever the length of the stream. Each step emits the pending output
+    frames whose position — the float product the traversal itself computes —
+    lies below the last frame received. On any stream of fewer than
+    [2{^51} / den] analysis frames that test admits every output frame the
+    exact position [i * num / den] admits, so the declared lookahead holds.
+    [`Locked] reads the same two frames and adds no lookahead.
+
+    The two signal stages are not plain compositions, because the final length
+    is a function of the input's, which only the first stage of a chain sees.
+    Each drives the kernels of the chain in turn — {!Stft.Kernel}, the
+    vocoder, {!Stft.Synthesis} and, for pitch, {!Resample.Kernel} — counts the
+    input, never releases a sample past the length the input so far maps to,
+    and ends the stream at flush exactly where the offline function ends its
+    result, which past the default length of the synthesis means the positions
+    {!Stft.Synthesis.flush}[ ~length] produces rather than zeros. Each declares
+    the lookahead of the chain it drives — the pitch stage's rounded up to a
+    whole sample — each end on the side it acts on.
+
+    Every stage raises [Invalid_argument] on a chunk whose leading shape
+    differs from the stream's first, and on a chunk fed after its flush until
+    the stream is reset; the bin axis and the leading axes are checked at each
+    chunk rather than at [prepare], because a stream format carries
+    neither. *)
+
+val phase_vocoder_stage :
+     ?phase:[`Independent | `Locked]
+  -> Stft.Config.t
+  -> rate:Pipeline.Rate.t
+  -> ((Complex.t, 'c) Nx.t, (Complex.t, 'c) Nx.t, 'k) Pipeline.t
+(** [phase_vocoder_stage c ~rate] is {!phase_vocoder} as a pipeline stage
+    over the spectral frames {!Stft.stage} emits on the geometry of [c]:
+    causal, rate [den / num] — the output frame rate is the analysis frame
+    rate divided by the stretch — and one analysis frame of latency. After
+    [R] analysis frames it has emitted every output frame whose position lies
+    below [R - 1], at least [ceil ((R - 1) * den / num)] of them, and its
+    flush emits the rest, up to [ceil (frames / rate)]. Run on a whole
+    spectrum it is [phase_vocoder c ~rate:(num / den)], bit for bit, at every
+    partitioning of the frame axis.
+
+    Chunks are spectra shaped [[...; bins; frames]] in either complex dtype;
+    the interior is float64, as {!phase_vocoder}'s, and each emitted chunk is
+    rounded once into the dtype of the chunks fed. Composed as
+    [Stft.stage Nx.complex64 c >> phase_vocoder_stage c ~rate >>
+    Stft.synthesis_stage dtype c], the spectrum is rounded to complex64
+    between the stages, where {!time_stretch} keeps it at complex128 —
+    {!time_stretch_stage} is the stage that reproduces {!time_stretch}.
+    Chunks are joined along the frame axis, and joining none gives a spectrum
+    with no frames in the leading shape and dtype of the chunks fed.
+
+    Each step costs the magnitudes and arguments of the frames it reads — up
+    to two frames of the previous step among them, read again — and the bins
+    of every output frame it emits, as {!phase_vocoder} does. The threaded
+    format scales the frame rate by [den / num] and bounds a chunk at
+    [ceil ((bound + 1) * den / num) + 2] frames, which covers every step and
+    the flush.
+
+    Raises [Invalid_argument] if either term of [rate] is below [1], and, at
+    a chunk, under the conditions of {!phase_vocoder}. *)
+
+val time_stretch_stage :
+     ?phase:[`Independent | `Locked]
+  -> Stft.Config.t
+  -> rate:Pipeline.Rate.t
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [time_stretch_stage c ~rate] is {!time_stretch} as a pipeline stage:
+    causal, rate [den / num] samples per sample, and dtype-preserving. Run on
+    a whole signal it is [time_stretch c ~rate:(num / den)], bit for bit, at
+    every partitioning of the signal, and its output totals
+    [round (n / (num / den))] samples for an input of [n] — ties to even, the
+    float expression {!time_stretch} evaluates.
+
+    Its lookahead is that of the chain it drives,
+
+    {[
+      latency (time_stretch_stage c ~rate)
+      = latency (Stft.stage Nx.complex128 c >> phase_vocoder_stage c ~rate
+                 >> Stft.synthesis_stage dtype c)
+    ]}
+
+    declared as the latency of {!Stft.stage} plus one hop — the analysis frame
+    the vocoder withholds — on the input side, and
+    {!Stft.Config.synthesis_latency} on the output side: [1024 + 512] input
+    samples and [1024] output samples at the default [2048]/[512] centered
+    geometry. Under [`Centered] and [`Right] frames the declaration bounds
+    the samples by which the stage's emission actually trails its input, and
+    under [`Left] it inherits the under-report of the analysis
+    {!Stft.synthesis_stage} documents. The stage never releases a sample past
+    [round (seen / (num / den))] for the [seen] samples it has been given, a
+    bound that only grows and never exceeds the final length: under
+    [`Centered] frames the synthesis never runs ahead of it, while under
+    [`Left], and under [`Right] with a hop as long as the transform, it can
+    hold samples back until more input arrives.
+
+    At flush the stream ends where {!Stft.invert}[ ~length] ends the offline
+    result: when the stretched length passes the default length of the
+    synthesis, the positions the last frame reaches past the trailing trim
+    come first — up to half a frame under [`Centered] — and zeros after them.
+    The analysis runs at complex128 whatever the dtype of the audio, as
+    {!time_stretch}'s does.
+
+    Per analysis frame the stage costs one forward transform and the
+    magnitudes and arguments of its bins; per output frame, the phasors of its
+    bins, one inverse transform and an overlap-add, so the synthesis side
+    scales with the [den / num] output frames each analysis frame yields.
+    [`Locked] adds the peak picking and the region locking of each output
+    frame, sequential per channel. The state is the analysis carry, the
+    vocoder's accumulator and two frames, the synthesis history
+    ({!Stft.Synthesis} bounds it) and whatever the length bound holds back —
+    per channel and independent of the stream's length.
+
+    Chunks are joined along the time axis, and joining none gives an empty
+    signal in the leading shape and dtype of the chunks fed.
+
+    Raises [Invalid_argument] if either term of [rate] is below [1] or if [c]
+    is not invertible, under the condition {!Stft.invert} states; and, at a
+    chunk, if it has rank zero or a zero-size leading axis — where
+    {!time_stretch} returns an empty batch, the stage, like {!Stft.stage},
+    refuses a stream with no signal in it. *)
+
+val pitch_shift_stage :
+     ?phase:[`Independent | `Locked]
+  -> ?quality:Resample.quality
+  -> Stft.Config.t
+  -> ratio:Pipeline.Rate.t
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [pitch_shift_stage c ~ratio] is {!pitch_shift} as a pipeline stage:
+    causal, rate [1] and dtype-preserving — {!time_stretch_stage} at
+    [{num = den; den = num}], then the {!Resample.Kernel} converting from
+    [num] to [den] hertz, whose configuration is designed here, at
+    construction, and is the one {!pitch_shift} keeps for the same ratio and
+    preset. Run on a whole
+    signal it is [pitch_shift c ~ratio], bit for bit, at every partitioning,
+    and its output totals the input's length exactly: nothing past the samples
+    seen is released, and the flush cuts or zero-extends the converted stream
+    to the input's length, as {!pitch_shift} does.
+
+    Its lookahead is that of the stretch followed by the conversion,
+    [latency (time_stretch_stage c ~rate) + K * den / num] for the latency [K]
+    of the conversion, which is in general not a whole sample: the stage
+    declares it rounded up — {!time_stretch_stage}'s input side, and
+    [ceil ((synthesis_latency c + K) * den / num)] samples on the output side —
+    less than one sample above the composition's. A conversion the planner
+    executes by blocks or by matrix products emits in bursts
+    ({!Resample.Kernel.step}), and the stage inherits that cadence.
+
+    The cost is {!time_stretch_stage}'s at the stretch [den / num] plus the
+    conversion of its output, whose terms, not its value, set the size of the
+    polyphase bank ({!pitch_shift}).
+
+    Raises [Invalid_argument] if either term of [ratio] is below [1], if [c]
+    is not invertible, under the conditions of {!Resample.Config.create} for
+    the ratio and preset given, at [prepare] if the stream does not carry
+    float32 or float64 samples, and at a chunk as {!time_stretch_stage}
+    does. *)
 
 (** {1 Silence}
 

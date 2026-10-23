@@ -135,13 +135,24 @@ let check_rank op t =
    computation runs over the whole matrix at once; without, the fused traversal
    further below computes the same values band by band. The traversal is
    frame-major — the frame axis is outermost — so every row it reads and writes
-   is contiguous. *)
+   is contiguous.
+
+   Both traversals are resumable: they compute any run [[lo, hi)] of output
+   frames from the analysis frames that run reads and the accumulator of its
+   first frame, and leave the accumulator of the frame after it behind. Output
+   frame [i] depends on nothing else — its position is [i * r] recomputed by
+   multiplication, never a running sum — so cutting the output axis anywhere and
+   resuming there computes every frame from the same operands in the same order,
+   and the offline traversal, one run over every output frame, is the streaming
+   traversal's one-chunk instance. *)
 
 (* Flat float64 storage. The kind is named rather than inferred: a polymorphic
    Bigarray element type turns every access in the traversal below into a
    dispatch. *)
 type doubles =
   (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+let doubles n = Bigarray.Array1.create Bigarray.float64 Bigarray.c_layout n
 
 (* [reading t f] is [f] applied to the elements of [t] in C order, read in
    place: valid only during the call, and never written. *)
@@ -188,29 +199,33 @@ let lock (phi : doubles) po (ang : doubles) ao bins peaks n =
     start := stop
   done
 
-(* [propagate] is one signal's traversal: [mag] and [ang] hold its magnitudes
-   and arguments over [frames] rows of [bins], and [amp] and [phi] receive the
-   interpolated magnitudes and the accumulated phases over [count] rows. The
-   accumulator starts at the argument of the first analysis frame. Over the
-   final interval, from the last analysis frame on, the magnitudes extrapolate
-   the line through the last two frames and the accumulator holds; a single
-   frame is held as it is. *)
-let propagate ~locked ~bins ~frames ~rate ~count ~omega ~(mag : doubles) ~mb
-    ~(ang : doubles) ~ab ~(amp : doubles) ~qb ~(phi : doubles) ~pb =
+(* [propagate] is one signal's traversal over output frames [[lo, hi)]: [mag]
+   and [ang] hold its magnitudes and arguments over the analysis frames [base]
+   to [last], rows of [bins], and [amp] and [phi] receive the interpolated
+   magnitudes and the accumulated phases, one row per output frame. The
+   accumulator of output frame [lo] is read from [state] — from the argument of
+   analysis frame [0] when [lo = 0] — and [state] receives the accumulator of
+   output frame [hi]. Over the final interval, from the last analysis frame on,
+   the magnitudes extrapolate the line through the last two frames and the
+   accumulator holds; a single frame is held as it is. *)
+let propagate ~locked ~bins ~base ~last ~rate ~lo ~hi ~omega ~(mag : doubles)
+    ~mb ~(ang : doubles) ~ab ~(amp : doubles) ~qb ~(phi : doubles) ~pb
+    ~(state : doubles) ~sb =
   let peaks = if locked then Array.make bins 0 else [||] in
-  let last = frames - 1 in
+  let first = if lo = 0 then ang else state
+  and fo = if lo = 0 then ab else sb in
   for k = 0 to bins - 1 do
     Bigarray.Array1.unsafe_set phi (pb + k)
-      (Bigarray.Array1.unsafe_get ang (ab + k))
+      (Bigarray.Array1.unsafe_get first (fo + k))
   done ;
-  for i = 0 to count - 1 do
+  for i = lo to hi - 1 do
     let position = Float.of_int i *. rate in
     let i0 = Int.min (Float.to_int position) last in
     let alpha = position -. Float.of_int i0 in
-    let m0 = mb + (i0 * bins) in
-    let a0 = ab + (i0 * bins) in
-    let po = pb + (i * bins) in
-    let qo = qb + (i * bins) in
+    let m0 = mb + ((i0 - base) * bins) in
+    let a0 = ab + ((i0 - base) * bins) in
+    let po = pb + ((i - lo) * bins) in
+    let qo = qb + ((i - lo) * bins) in
     if i0 < last then begin
       let m1 = m0 + bins in
       for k = 0 to bins - 1 do
@@ -236,67 +251,71 @@ let propagate ~locked ~bins ~frames ~rate ~count ~omega ~(mag : doubles) ~mb
       let n = peaks_of mag m0 bins peaks in
       if n > 0 then lock phi po ang a0 bins peaks n
     end ;
-    if i + 1 < count then begin
-      let pn = po + bins in
-      if i0 < last then begin
-        let a1 = a0 + bins in
-        for k = 0 to bins - 1 do
-          let om = Array.unsafe_get omega k in
-          let x =
-            Bigarray.Array1.unsafe_get ang (a1 + k)
-            -. Bigarray.Array1.unsafe_get ang (a0 + k)
-            -. om
-          in
-          (* the principal value [x - 2 pi round_half_even (x / 2 pi)], written
-             out so that no float is boxed *)
-          let q = x /. two_pi in
-          let r =
-            if Float.abs q >= 0x1p52 then q
-            else if q >= 0. then q +. 0x1p52 -. 0x1p52
-            else q -. 0x1p52 +. 0x1p52
-          in
-          let t = two_pi *. r in
-          let deviation = x -. t in
-          Bigarray.Array1.unsafe_set phi (pn + k)
-            (Bigarray.Array1.unsafe_get phi (po + k) +. (om +. deviation))
-        done
-      end
-      else
-        for k = 0 to bins - 1 do
-          Bigarray.Array1.unsafe_set phi (pn + k)
-            (Bigarray.Array1.unsafe_get phi (po + k))
-        done
+    (* the next output frame's accumulator: its own row, or [state] past the
+       last row of the run *)
+    let next = if i + 1 < hi then phi else state in
+    let pn = if i + 1 < hi then po + bins else sb in
+    if i0 < last then begin
+      let a1 = a0 + bins in
+      for k = 0 to bins - 1 do
+        let om = Array.unsafe_get omega k in
+        let x =
+          Bigarray.Array1.unsafe_get ang (a1 + k)
+          -. Bigarray.Array1.unsafe_get ang (a0 + k)
+          -. om
+        in
+        (* the principal value [x - 2 pi round_half_even (x / 2 pi)], written
+           out so that no float is boxed *)
+        let q = x /. two_pi in
+        let r =
+          if Float.abs q >= 0x1p52 then q
+          else if q >= 0. then q +. 0x1p52 -. 0x1p52
+          else q -. 0x1p52 +. 0x1p52
+        in
+        let t = two_pi *. r in
+        let deviation = x -. t in
+        Bigarray.Array1.unsafe_set next (pn + k)
+          (Bigarray.Array1.unsafe_get phi (po + k) +. (om +. deviation))
+      done
     end
+    else
+      for k = 0 to bins - 1 do
+        Bigarray.Array1.unsafe_set next (pn + k)
+          (Bigarray.Array1.unsafe_get phi (po + k))
+      done
   done
 
 (* {1 The independent traversal, fused}
 
    Without phase locking every bin evolves alone, so the traversal splits into
-   bands of [band] bins, each carried through every output frame by one parallel
-   unit ({!Par}) that computes everything on the way: the magnitudes and
-   arguments of the analysis frames it reaches (each once, into two slots
-   indexed by the frame's parity, which keep the two frames an interval reads
-   apart), the interpolated magnitude, the phasor, written straight into the
-   complex result, and the accumulator. The values are those of {!propagate} and
-   the whole-matrix phasor, operation for operation: [hypot] and [atan2] as
-   [Nx.magnitude] and [Nx.angle] take them, each product bound to a name before
-   it is added so no platform contracts the pair, and the principal value with
-   [round_half_even] written out. *)
+   bands of [band] bins, each carried through every output frame of the run by
+   one parallel unit ({!Par}) that computes everything on the way: the
+   magnitudes and arguments of the analysis frames it reaches (each once, into
+   two slots indexed by the frame's parity, which keep the two frames an
+   interval reads apart), the interpolated magnitude, the phasor, written
+   straight into the complex result, and the accumulator, carried in the unit's
+   own memory and read from and written back to the band's slice of [state] at
+   the ends of the run, so no two domains write one cache line while it runs.
+   The values are those of {!propagate} and the whole-matrix phasor, operation
+   for operation: [hypot] and [atan2] as [Nx.magnitude] and [Nx.angle] take
+   them, each product bound to a name before it is added so no platform
+   contracts the pair, and the principal value with [round_half_even] written
+   out. *)
 
 let band = 32
 
-let vocode_band ~bins ~frames ~rate ~count ~omega (src : doubles)
-    (dst : doubles) s b0 b1 mags angs amps phis loaded =
+let vocode_band ~bins ~base ~frames ~last ~rate ~lo ~hi ~omega (src : doubles)
+    (dst : doubles) (state : doubles) s b0 b1 mags angs amps phis loaded =
   let w = b1 - b0 in
-  let last = frames - 1 in
-  let sbase = s * frames * bins and dbase = s * count * bins in
+  let sbase = s * frames * bins and dbase = s * (hi - lo) * bins in
+  let pb = (s * bins) + b0 in
   Array.unsafe_set loaded 0 (-1) ;
   Array.unsafe_set loaded 1 (-1) ;
   let load f =
     let slot = f land 1 in
     if Array.unsafe_get loaded slot <> f then begin
       Array.unsafe_set loaded slot f ;
-      let row = 2 * (sbase + (f * bins) + b0) and o = slot * w in
+      let row = 2 * (sbase + ((f - base) * bins) + b0) and o = slot * w in
       for k = 0 to w - 1 do
         let re = Bigarray.Array1.unsafe_get src (row + (2 * k))
         and im = Bigarray.Array1.unsafe_get src (row + (2 * k) + 1) in
@@ -305,17 +324,23 @@ let vocode_band ~bins ~frames ~rate ~count ~omega (src : doubles)
       done
     end
   in
-  load 0 ;
-  for k = 0 to w - 1 do
-    Float.Array.unsafe_set phis k (Float.Array.unsafe_get angs k)
-  done ;
-  for i = 0 to count - 1 do
+  if lo = 0 then begin
+    load 0 ;
+    for k = 0 to w - 1 do
+      Float.Array.unsafe_set phis k (Float.Array.unsafe_get angs k)
+    done
+  end
+  else
+    for k = 0 to w - 1 do
+      Float.Array.unsafe_set phis k (Bigarray.Array1.unsafe_get state (pb + k))
+    done ;
+  for i = lo to hi - 1 do
     let position = Float.of_int i *. rate in
     let i0 = Int.min (Float.to_int position) last in
     let alpha = position -. Float.of_int i0 in
     load i0 ;
     let o0 = i0 land 1 * w and o1 = (1 - (i0 land 1)) * w in
-    let out = 2 * (dbase + (i * bins) + b0) in
+    let out = 2 * (dbase + ((i - lo) * bins) + b0) in
     (* the interpolated magnitudes go to [amps], then become phasors *)
     if i0 < last then begin
       load (i0 + 1) ;
@@ -343,7 +368,7 @@ let vocode_band ~bins ~frames ~rate ~count ~omega (src : doubles)
       Bigarray.Array1.unsafe_set dst (out + (2 * k)) (amp *. Float.cos ph) ;
       Bigarray.Array1.unsafe_set dst (out + (2 * k) + 1) (amp *. Float.sin ph)
     done ;
-    if i + 1 < count && i0 < last then
+    if i0 < last then
       for k = 0 to w - 1 do
         let om = Array.unsafe_get omega (b0 + k) in
         let x =
@@ -362,49 +387,48 @@ let vocode_band ~bins ~frames ~rate ~count ~omega (src : doubles)
         Float.Array.unsafe_set phis k
           (Float.Array.unsafe_get phis k +. (om +. deviation))
       done
+  done ;
+  for k = 0 to w - 1 do
+    Bigarray.Array1.unsafe_set state (pb + k) (Float.Array.unsafe_get phis k)
   done
 
-(* [vocode_independent c ~rate z] is [vocode c ~locked:false ~rate z], over
-   [signals] signals of [frames] frames, [count] output frames. *)
-let vocode_independent (c : Stft.Config.t) ~rate ~signals ~frames ~count ~out z
+(* [traverse ~locked ~rate ~batch ~base ~last ~lo ~hi ~state framed] is output
+   frames [[lo, hi)] of the stretched spectrum, frames-major ([[...; hi - lo;
+   bins]]) at complex128, in float64 arithmetic. [framed] holds the analysis
+   frames [base] to [last] of [batch]-shaped signals, frames-major at
+   complex128, and they must cover every frame the run reads; [state] holds one
+   accumulator per signal and bin, that of output frame [lo] on entry — unless
+   [lo = 0], when analysis frame [0] gives it — and that of output frame [hi] on
+   return. *)
+let traverse ~bins ~omega ~locked ~rate ~batch ~base ~last ~lo ~hi ~state framed
     =
-  let bins = Stft.Config.bins c in
-  let omega = advance c in
-  let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
-  let bands = (bins + band - 1) / band in
-  Nx.swapaxes (-1) (-2)
-    (Store.make_c128 out (fun dst ->
-         Store.read_parts64 framed (fun src ->
-             Par.ranges ~n:(signals * bands) ~grain:1 (fun lo hi ->
-                 let mags = Float.Array.make (2 * band) 0.
-                 and angs = Float.Array.make (2 * band) 0.
-                 and amps = Float.Array.make band 0.
-                 and phis = Float.Array.make band 0.
-                 and loaded = Array.make 2 (-1) in
-                 for u = lo to hi - 1 do
-                   let s = u / bands and b = u mod bands in
-                   vocode_band ~bins ~frames ~rate ~count ~omega src dst s
-                     (b * band)
-                     (Int.min bins ((b + 1) * band))
-                     mags angs amps phis loaded
-                 done ) ) ) )
-
-(* [vocode c ~locked ~rate z] is the stretched spectrum of the complex128
-   spectrum [z], in float64 arithmetic and shaped [[...; bins; count]]. *)
-let vocode (c : Stft.Config.t) ~locked ~rate z =
-  let bins = Stft.Config.bins c in
-  let rank = Nx.ndim z in
-  let frames = Nx.dim (rank - 1) z in
-  let count = out_frames ~frames ~rate in
-  let batch = Array.sub (Nx.shape z) 0 (rank - 2) in
   let signals = Array.fold_left ( * ) 1 batch in
+  let count = hi - lo in
+  let frames = last + 1 - base in
   let out = Array.append batch [|count; bins|] in
-  if signals = 0 || count = 0 then
-    Nx.swapaxes (-1) (-2) (Nx.zeros Nx.complex128 out)
-  else if not locked then
-    vocode_independent c ~rate ~signals ~frames ~count ~out z
+  if signals = 0 || count = 0 then Nx.zeros Nx.complex128 out
+  else if not locked then begin
+    let bands = (bins + band - 1) / band in
+    (* a unit costs [count * band] phasors: a run of a frame or two, as a stream
+       pushes, gathers its bands into few chunks *)
+    let grain = Int.max 1 (1024 / (count * band)) in
+    Store.make_c128 out (fun dst ->
+        Store.read_parts64 framed (fun src ->
+            Par.ranges ~n:(signals * bands) ~grain (fun l h ->
+                let mags = Float.Array.make (2 * band) 0.
+                and angs = Float.Array.make (2 * band) 0.
+                and amps = Float.Array.make band 0.
+                and phis = Float.Array.make band 0.
+                and loaded = Array.make 2 (-1) in
+                for u = l to h - 1 do
+                  let s = u / bands and b = u mod bands in
+                  vocode_band ~bins ~base ~frames ~last ~rate ~lo ~hi ~omega src
+                    dst state s (b * band)
+                    (Int.min bins ((b + 1) * band))
+                    mags angs amps phis loaded
+                done ) ) )
+  end
   else begin
-    let framed = Nx.contiguous (Nx.swapaxes (-1) (-2) z) in
     let span = frames * bins in
     let stride = count * bins in
     (* the magnitudes and arguments, [hypot] and [atan2] of every component pair
@@ -412,43 +436,55 @@ let vocode (c : Stft.Config.t) ~locked ~rate z =
     let magnitudes, arguments =
       Store.make64_pair (Nx.shape framed) (fun mag ang ->
           Store.read_parts64 framed (fun src ->
-              Par.ranges ~n:(signals * span) ~grain:8192 (fun lo hi ->
-                  for i = lo to hi - 1 do
+              Par.ranges ~n:(signals * span) ~grain:8192 (fun l h ->
+                  for i = l to h - 1 do
                     let re = Bigarray.Array1.unsafe_get src (2 * i)
                     and im = Bigarray.Array1.unsafe_get src ((2 * i) + 1) in
                     Bigarray.Array1.unsafe_set mag i (Float.hypot re im) ;
                     Bigarray.Array1.unsafe_set ang i (Float.atan2 im re)
                   done ) ) )
     in
-    let omega = advance c in
     (* every element of both is written by the traversal *)
     let amplitudes, phases =
       Store.make64_pair out (fun amp phi ->
           reading magnitudes (fun mag ->
               reading arguments (fun ang ->
                   for s = 0 to signals - 1 do
-                    propagate ~locked ~bins ~frames ~rate ~count ~omega ~mag
-                      ~mb:(s * span) ~ang ~ab:(s * span) ~amp ~qb:(s * stride)
-                      ~phi ~pb:(s * stride)
+                    propagate ~locked ~bins ~base ~last ~rate ~lo ~hi ~omega
+                      ~mag ~mb:(s * span) ~ang ~ab:(s * span) ~amp
+                      ~qb:(s * stride) ~phi ~pb:(s * stride) ~state
+                      ~sb:(s * bins)
                   done ) ) )
     in
     (* the phasor, as the whole-matrix [mul amp (cos phi)] and [mul amp (sin
        phi)] compute it, written straight into the complex result *)
-    Nx.swapaxes (-1) (-2)
-      (Store.make_c128 out (fun dst ->
-           reading amplitudes (fun amp ->
-               reading phases (fun phi ->
-                   Par.ranges ~n:(signals * stride) ~grain:8192 (fun lo hi ->
-                       for i = lo to hi - 1 do
-                         let a = Bigarray.Array1.unsafe_get amp i
-                         and ph = Bigarray.Array1.unsafe_get phi i in
-                         Bigarray.Array1.unsafe_set dst (2 * i)
-                           (a *. Float.cos ph) ;
-                         Bigarray.Array1.unsafe_set dst
-                           ((2 * i) + 1)
-                           (a *. Float.sin ph)
-                       done ) ) ) ) )
+    Store.make_c128 out (fun dst ->
+        reading amplitudes (fun amp ->
+            reading phases (fun phi ->
+                Par.ranges ~n:(signals * stride) ~grain:8192 (fun l h ->
+                    for i = l to h - 1 do
+                      let a = Bigarray.Array1.unsafe_get amp i
+                      and ph = Bigarray.Array1.unsafe_get phi i in
+                      Bigarray.Array1.unsafe_set dst (2 * i) (a *. Float.cos ph) ;
+                      Bigarray.Array1.unsafe_set dst
+                        ((2 * i) + 1)
+                        (a *. Float.sin ph)
+                    done ) ) ) )
   end
+
+(* [vocode c ~locked ~rate z] is the stretched spectrum of the complex128
+   spectrum [z], in float64 arithmetic and shaped [[...; bins; count]]: one run
+   over every output frame. *)
+let vocode (c : Stft.Config.t) ~locked ~rate z =
+  let bins = Stft.Config.bins c in
+  let rank = Nx.ndim z in
+  let frames = Nx.dim (rank - 1) z in
+  let batch = Array.sub (Nx.shape z) 0 (rank - 2) in
+  let state = doubles (Array.fold_left ( * ) 1 batch * bins) in
+  Nx.swapaxes (-1) (-2)
+    (traverse ~bins ~omega:(advance c) ~locked ~rate ~batch ~base:0
+       ~last:(frames - 1) ~lo:0 ~hi:(out_frames ~frames ~rate) ~state
+       (Nx.contiguous (Nx.swapaxes (-1) (-2) z)) )
 
 let to_complex128 : type c.
     (Complex.t, c) Nx.t -> (Complex.t, Nx.complex64_elt) Nx.t =
@@ -560,6 +596,670 @@ let semitones ?(bins_per_octave = 12) n =
   | Some (_, num, den) ->
       let d = gcd num den in
       {Pipeline.Rate.num= num / d; den= den / d}
+
+(* {1 Streaming}
+
+   The vocoder as a Mealy kernel over analysis frames. Output frame [i] reads
+   analysis frames [floor (i * r)] and the one after it, so it is final the
+   moment that second frame arrives: a step that brings the stream to [R] frames
+   emits every pending output whose position [i * r] lies below [R - 1] —
+   compared as the same float product the traversal computes — and runs the
+   traversal over exactly those, with the frames it has. The drain emits the
+   rest, up to [ceil (M / r)] for the [M] frames of the whole stream: every one
+   of them sits on the final interval and reads the last two frames. Positions
+   are monotone in [i], so the cut between the two never reorders anything, and
+   a run read on the interior during a step is read on the interior offline too,
+   where the last frame lies at least as far. The state is the accumulator, the
+   last two frames the extrapolation may still read, kept as copies, and the two
+   counters.
+
+   A run's first output reads frames from the last one the previous step
+   received on, because it was not emitted then; the drain reads the last two.
+   No frame further back is ever read again. *)
+
+let ceil_div a b = (a + b - 1) / b
+
+let last_dim t = Nx.dim (Nx.ndim t - 1) t
+
+let leading_shape t =
+  let shape = Nx.shape t in
+  Array.sub shape 0 (Array.length shape - 1)
+
+let shrink_last t start stop =
+  let nd = Nx.ndim t in
+  Nx.slice
+    (List.init nd (fun i -> if i = nd - 1 then Nx.R (start, stop) else Nx.A))
+    t
+
+let concat_last parts = Nx.concatenate ~axis:(-1) parts
+
+let shape_string shape =
+  String.concat "; " (List.map string_of_int (Array.to_list shape))
+
+(* [continue op held lead] fixes the leading shape of a stream at its first
+   chunk and holds every later chunk to it. *)
+let continue op held lead =
+  match !held with
+  | None ->
+      held := Some lead
+  | Some l when l = lead ->
+      ()
+  | Some l ->
+      invalid_arg
+        (Printf.sprintf
+           "%s: cannot continue a stream of leading shape [%s] with a chunk of \
+            leading shape [%s]"
+           op (shape_string l) (shape_string lead) )
+
+let drained op =
+  invalid_arg
+    (Printf.sprintf
+       "%s: cannot feed a drained stream (flush consumed the tail; reset \
+        before reusing)"
+       op )
+
+let check_stage_rate op (rate : Pipeline.Rate.t) =
+  if rate.num < 1 || rate.den < 1 then
+    invalid_arg
+      (Printf.sprintf
+         "%s: cannot stretch by a rate of %d/%d (both terms must be at least 1)"
+         op rate.num rate.den )
+
+(* [quotient rate] is the double a stage stretches by: [num / den] correctly
+   rounded, the double the decimal literal of the same value denotes. *)
+let quotient (rate : Pipeline.Rate.t) =
+  Float.of_int rate.num /. Float.of_int rate.den
+
+(* [join a b] is the concatenation of two optional runs of samples or frames
+   along the last axis. *)
+let join a b =
+  match (a, b) with
+  | None, r | r, None ->
+      r
+  | Some a, Some b ->
+      Some (concat_last [a; b])
+
+type vocoder =
+  { vbins: int
+  ; vrate: float
+  ; vlocked: bool
+  ; vomega: float array
+  ; vlead: int array option ref
+  ; mutable vstate: doubles
+        (* the accumulator of output frame [vemitted], signals by bins *)
+  ; mutable vhist: (Complex.t, Nx.complex64_elt) Nx.t option
+        (* the last two frames received, frames-major *)
+  ; mutable vreceived: int
+  ; mutable vemitted: int
+  ; mutable vdrained: bool }
+
+let vocoder_create ~bins ~rate ~locked ~omega =
+  { vbins= bins
+  ; vrate= rate
+  ; vlocked= locked
+  ; vomega= omega
+  ; vlead= ref None
+  ; vstate= doubles 0
+  ; vhist= None
+  ; vreceived= 0
+  ; vemitted= 0
+  ; vdrained= false }
+
+let vocoder_reset v =
+  v.vlead := None ;
+  v.vhist <- None ;
+  v.vreceived <- 0 ;
+  v.vemitted <- 0 ;
+  v.vdrained <- false
+
+let vocoder_run v ~batch ~base ~hi framed =
+  let lo = v.vemitted in
+  v.vemitted <- hi ;
+  Nx.swapaxes (-1) (-2)
+    (traverse ~bins:v.vbins ~omega:v.vomega ~locked:v.vlocked ~rate:v.vrate
+       ~batch ~base ~last:(v.vreceived - 1) ~lo ~hi ~state:v.vstate framed )
+
+(* [vocoder_step v op z] feeds the complex128 frames [z], shaped [[...; bins;
+   frames]], and is the output frames they completed, if any. *)
+let vocoder_step v op z =
+  if v.vdrained then drained op ;
+  let rank = Nx.ndim z in
+  let batch = Array.sub (Nx.shape z) 0 (rank - 2) in
+  if Option.is_none !(v.vlead) then
+    v.vstate <- doubles (Array.fold_left ( * ) 1 batch * v.vbins) ;
+  continue op v.vlead batch ;
+  let k = Nx.dim (rank - 1) z in
+  if k = 0 then None
+  else begin
+    let rows = Nx.swapaxes (-1) (-2) z in
+    let framed, kept =
+      match v.vhist with
+      | None ->
+          (rows, 0)
+      | Some h ->
+          (Nx.concatenate ~axis:(-2) [h; rows], Nx.dim (rank - 2) h)
+    in
+    let base = v.vreceived - kept in
+    v.vreceived <- v.vreceived + k ;
+    let total = kept + k in
+    v.vhist <-
+      Some
+        (Nx.copy
+           (Nx.slice
+              (List.init rank (fun i ->
+                   if i = rank - 2 then Nx.R (total - Int.min 2 total, total)
+                   else Nx.A ) )
+              framed ) ) ;
+    let last = Float.of_int (v.vreceived - 1) in
+    let hi = ref v.vemitted in
+    while Float.of_int !hi *. v.vrate < last do
+      incr hi
+    done ;
+    if !hi = v.vemitted then None
+    else Some (vocoder_run v ~batch ~base ~hi:!hi framed)
+  end
+
+(* [vocoder_flush v] drains [v]: the output frames on the final interval. *)
+let vocoder_flush v =
+  if v.vdrained then None
+  else begin
+    v.vdrained <- true ;
+    match (v.vhist, !(v.vlead)) with
+    | Some h, Some batch ->
+        v.vhist <- None ;
+        let frames = v.vreceived in
+        let count = out_frames ~frames ~rate:v.vrate in
+        if count <= v.vemitted then None
+        else
+          Some
+            (vocoder_run v ~batch
+               ~base:(frames - Nx.dim (Nx.ndim h - 2) h)
+               ~hi:count h )
+    | _ ->
+        None
+  end
+
+(* [vocoder_bound rate b] dominates the output frames one step over [b] frames,
+   or the drain, emits: the step moves the emission limit [b] frames on, and a
+   run of [b] frames holds at most [ceil (b * den / num)] positions, the float
+   product one more; the drain's final interval is one frame long, which the [b
+   + 1] covers at every [b]. *)
+let vocoder_bound (rate : Pipeline.Rate.t) b =
+  ceil_div ((b + 1) * rate.den) rate.num + 2
+
+let check_lead_axes op lead =
+  if Array.exists (fun d -> d = 0) lead then
+    invalid_arg
+      (Printf.sprintf
+         "%s: cannot stretch a chunk with a zero-size leading axis (channels \
+          must be at least 1)"
+         op )
+
+let phase_vocoder_stage ?(phase = `Independent) c ~(rate : Pipeline.Rate.t) =
+  let op = "phase_vocoder_stage" in
+  check_stage_rate op rate ;
+  let bins = Stft.Config.bins c and omega = advance c in
+  let locked = locked_of_phase phase and rf = quotient rate in
+  let frame_rate = {Pipeline.Rate.num= rate.den; den= rate.num} in
+  let out_format fmt =
+    let ips =
+      Pipeline.Rate.(Pipeline.Format.items_per_second fmt * frame_rate)
+    in
+    fmt
+    |> Pipeline.Format.with_items_per_second ips
+    |> Pipeline.Format.with_max_items
+         (Option.map (vocoder_bound rate) (Pipeline.Format.max_items fmt))
+  in
+  (* The element dtype and the leading axes are only witnessed by incoming
+     chunks; [step] records them so [concat []] and [flush] can build and cast.
+     One stage value is monomorphic in its element type, so the shared cell is
+     coherent across prepares. *)
+  let witness = ref None in
+  Pipeline.kernel ~latency:1 ~rate:frame_rate ~out_format
+    ~flush:(fun v ->
+      match (vocoder_flush v, !witness) with
+      | Some y, Some (dtype, _) ->
+          [Nx.cast dtype y]
+      | _ ->
+          [] )
+    ~reset:vocoder_reset
+    ~concat:(function
+      | [] -> (
+        match !witness with
+        | Some (dtype, lead) ->
+            Nx.zeros dtype (Array.append lead [|bins; 0|])
+        | None ->
+            invalid_arg
+              "phase_vocoder_stage: cannot concatenate zero chunks before any \
+               chunk fixed the element dtype" )
+      | parts ->
+          concat_last parts )
+    ~prepare:(fun _ -> vocoder_create ~bins ~rate:rf ~locked ~omega)
+    ~step:(fun v z ->
+      check_spectrum op c z ;
+      let rank = Nx.ndim z in
+      witness := Some (Nx.dtype z, Array.sub (Nx.shape z) 0 (rank - 2)) ;
+      Option.map (Nx.cast (Nx.dtype z)) (vocoder_step v op (to_complex128 z)) )
+    ()
+
+(* {2 Time stretching}
+
+   The stretch drives the analysis kernel, the vocoder and the synthesis kernel
+   in turn, each step feeding what the one before it completed to the next — the
+   composition [Stft.stage >> phase_vocoder_stage >> Stft.synthesis_stage] — and
+   adds the one thing a composition cannot know: the length. The offline result
+   has [round (n / r)] samples for [n] input samples, a length the synthesis
+   stream alone does not end at, so the stretch never releases a sample past
+   [round (seen / r)] for the [seen] samples it has been given — a bound that
+   only grows and never passes the final length — and holds the rest back until
+   more input moves the bound or the drain ends the stream exactly where
+   {!Stft.invert}[ ~length] ends it, through {!Stft.Synthesis.flush}[ ~length].
+   Under centered frames the synthesis never gets ahead of the bound and nothing
+   is held. *)
+
+type 'a stretch =
+  { tcfg: Stft.Config.t
+  ; trate: float
+  ; tvoc: vocoder
+  ; tchannels: int
+  ; tblock: int option (* the most samples a chunk holds *)
+  ; tframes: int option (* the most frames the vocoder emits at once *)
+  ; tlead: int array option ref
+  ; mutable tdtype: (float, 'a) Nx.dtype option
+  ; mutable tanalysis: ('a, Nx.complex64_elt) Stft.Kernel.t option
+  ; mutable tsynthesis: ('a, Nx.complex64_elt) Stft.Synthesis.t option
+  ; mutable tseen: int
+  ; mutable temitted: int
+  ; mutable theld: (float, 'a) Nx.t option
+  ; mutable tdrained: bool }
+
+(* [analysis_latency c] is the latency {!Stft.stage} declares, in samples. *)
+let analysis_latency c = (Pipeline.latency (Stft.stage Nx.complex128 c)).num
+
+(* [frame_bound c ~lst b] is the most frames the analysis emits for a chunk of
+   [b] samples, the bound {!Stft.stage} threads. *)
+let frame_bound c ~lst b = ceil_div (b + lst) (Stft.Config.hop c) + 1
+
+(* [stretch_bound c rate ~lst b] dominates the samples one step of the stretch
+   releases for a chunk of [b] samples: the synthesis of every frame the vocoder
+   emits, or, when samples were held, the growth of the length bound. *)
+let stretch_bound c (rate : Pipeline.Rate.t) ~lst b =
+  let frames = vocoder_bound rate (frame_bound c ~lst b) in
+  Int.max (frames * Stft.Config.hop c) (ceil_div (b * rate.den) rate.num + 2)
+
+let stretch_create c ~rate ~locked ~omega ~frames fmt =
+  { tcfg= c
+  ; trate= quotient rate
+  ; tvoc=
+      vocoder_create ~bins:(Stft.Config.bins c) ~rate:(quotient rate) ~locked
+        ~omega
+  ; tchannels= Pipeline.Format.channels fmt
+  ; tblock= Pipeline.Format.max_items fmt
+  ; tframes= Option.map frames (Pipeline.Format.max_items fmt)
+  ; tlead= ref None
+  ; tdtype= None
+  ; tanalysis= None
+  ; tsynthesis= None
+  ; tseen= 0
+  ; temitted= 0
+  ; theld= None
+  ; tdrained= false }
+
+let stretch_reset st =
+  Option.iter Stft.Kernel.reset st.tanalysis ;
+  vocoder_reset st.tvoc ;
+  Option.iter Stft.Synthesis.reset st.tsynthesis ;
+  st.tlead := None ;
+  st.tseen <- 0 ;
+  st.temitted <- 0 ;
+  st.theld <- None ;
+  st.tdrained <- false
+
+(* [stretch_length st] is the length the input so far stretches to — the
+   expression {!time_stretch} computes. *)
+let stretch_length st =
+  Float.to_int (round_half_even (Float.of_int st.tseen /. st.trate))
+
+(* [stretch_synthesise st frames] feeds the vocoded [frames] to the synthesis
+   kernel, prepared at the first of them, and is the samples they completed. *)
+let stretch_synthesise st = function
+  | None ->
+      None
+  | Some z ->
+      let k =
+        match st.tsynthesis with
+        | Some k ->
+            k
+        | None ->
+            let max_block = Option.value st.tframes ~default:(last_dim z) in
+            let k =
+              Stft.Synthesis.prepare (Option.get st.tdtype) st.tcfg
+                Nx.complex128 ~channels:st.tchannels
+                ~max_block:(Int.max 1 max_block)
+            in
+            st.tsynthesis <- Some k ;
+            k
+      in
+      Stft.Synthesis.step k z
+
+(* [capped ~allowed held samples] is the part of [held] then [samples] that may
+   be released, [allowed] samples at most, and the part that must be held. *)
+let capped ~allowed held samples =
+  match join held samples with
+  | None ->
+      (None, None)
+  | Some p ->
+      let have = last_dim p in
+      if have <= allowed then (Some p, None)
+      else
+        ( (if allowed = 0 then None else Some (shrink_last p 0 allowed))
+        , Some (Nx.copy (shrink_last p allowed have)) )
+
+(* [fit dtype lead want pending] is [pending] cut or zero-extended to exactly
+   [want] samples, or [None] when [want] is [0]. *)
+let fit dtype lead want pending =
+  if want = 0 then None
+  else
+    match pending with
+    | None ->
+        Some (Nx.zeros dtype (Array.append lead [|want|]))
+    | Some p ->
+        let have = last_dim p in
+        if have = want then Some p
+        else if have > want then Some (shrink_last p 0 want)
+        else
+          Some
+            (concat_last
+               [p; Nx.zeros dtype (Array.append lead [|want - have|])] )
+
+let stretch_step st op chunk =
+  if st.tdrained then drained op ;
+  check_rank op chunk ;
+  let lead = leading_shape chunk in
+  continue op st.tlead lead ;
+  check_lead_axes op lead ;
+  st.tdtype <- Some (Nx.dtype chunk) ;
+  st.tseen <- st.tseen + last_dim chunk ;
+  let analysis =
+    match st.tanalysis with
+    | Some k ->
+        k
+    | None ->
+        let max_block = Option.value st.tblock ~default:(last_dim chunk) in
+        let k =
+          Stft.Kernel.prepare Nx.complex128 st.tcfg (Nx.dtype chunk)
+            ~channels:st.tchannels ~max_block:(Int.max 1 max_block)
+        in
+        st.tanalysis <- Some k ;
+        k
+  in
+  let samples =
+    stretch_synthesise st
+      (Option.bind (Stft.Kernel.step analysis chunk) (vocoder_step st.tvoc op))
+  in
+  let released, held =
+    capped ~allowed:(stretch_length st - st.temitted) st.theld samples
+  in
+  st.theld <- held ;
+  Option.iter (fun r -> st.temitted <- st.temitted + last_dim r) released ;
+  released
+
+(* [stretch_flush st op] drains [st] to exactly the length of its input
+   stretched, as one run. *)
+let stretch_flush st op =
+  if st.tdrained then None
+  else begin
+    st.tdrained <- true ;
+    match (st.tdtype, !(st.tlead)) with
+    | Some dtype, Some lead ->
+        let length = stretch_length st in
+        let frames =
+          Option.bind
+            (Option.bind st.tanalysis Stft.Kernel.flush)
+            (vocoder_step st.tvoc op)
+        in
+        let s1 = stretch_synthesise st frames in
+        let s2 = stretch_synthesise st (vocoder_flush st.tvoc) in
+        let s3 =
+          Option.bind st.tsynthesis (fun k -> Stft.Synthesis.flush ~length k)
+        in
+        let pending = List.fold_left join st.theld [s1; s2; s3] in
+        let want = length - st.temitted in
+        st.theld <- None ;
+        st.temitted <- length ;
+        fit dtype lead want pending
+    | _ ->
+        None
+  end
+
+(* [split bound t] is [t] cut along its last axis into chunks of at most [bound]
+   samples. *)
+let split bound t =
+  match bound with
+  | None ->
+      [t]
+  | Some bound ->
+      let total = last_dim t in
+      if total <= bound then [t]
+      else
+        let rec go start acc =
+          if start >= total then List.rev acc
+          else
+            let stop = Int.min total (start + bound) in
+            go stop (shrink_last t start stop :: acc)
+        in
+        go 0 []
+
+let concat_samples op witness = function
+  | [] -> (
+    match !witness with
+    | Some (dtype, lead) ->
+        Nx.zeros dtype (Array.append lead [|0|])
+    | None ->
+        invalid_arg
+          (Printf.sprintf
+             "%s: cannot concatenate zero chunks before any chunk fixed the \
+              element dtype"
+             op ) )
+  | parts ->
+      concat_last parts
+
+type 'a bounded = {run: 'a; bound: int option}
+
+let time_stretch_stage ?(phase = `Independent) c ~(rate : Pipeline.Rate.t) =
+  let op = "time_stretch_stage" in
+  check_stage_rate op rate ;
+  Stft.check_invertible op c ;
+  let lst = analysis_latency c in
+  let locked = locked_of_phase phase and omega = advance c in
+  let out_rate = {Pipeline.Rate.num= rate.den; den= rate.num} in
+  let bound fmt =
+    Option.map (stretch_bound c rate ~lst) (Pipeline.Format.max_items fmt)
+  in
+  let out_format fmt =
+    let ips = Pipeline.Rate.(Pipeline.Format.items_per_second fmt * out_rate) in
+    fmt
+    |> Pipeline.Format.with_items_per_second ips
+    |> Pipeline.Format.with_max_items (bound fmt)
+  in
+  let frames b = vocoder_bound rate (frame_bound c ~lst b) in
+  let witness = ref None in
+  Pipeline.kernel
+    ~latency:(lst + Stft.Config.hop c)
+    ~output_latency:(Stft.Config.synthesis_latency c)
+    ~rate:out_rate ~out_format
+    ~flush:(fun s ->
+      match stretch_flush s.run op with None -> [] | Some y -> split s.bound y )
+    ~reset:(fun s -> stretch_reset s.run)
+    ~concat:(concat_samples op witness)
+    ~prepare:(fun fmt ->
+      {run= stretch_create c ~rate ~locked ~omega ~frames fmt; bound= bound fmt} )
+    ~step:(fun s chunk ->
+      check_rank op chunk ;
+      witness := Some (Nx.dtype chunk, leading_shape chunk) ;
+      stretch_step s.run op chunk )
+    ()
+
+(* {2 Pitch shifting}
+
+   The stretch at [den / num], its released samples fed to the resampler from
+   [num] to [den] in pieces no longer than the kernel was prepared for — the
+   partition law of {!Resample.Kernel} makes the pieces invisible — and the same
+   length discipline as the stretch's, the bound now the input length itself:
+   nothing past the samples seen is released, and the drain cuts or zero-extends
+   the converted stream to exactly the input's length. *)
+
+type 'a pitch =
+  { pstretch: 'a stretch
+  ; pcfg: Resample.Config.t
+  ; pblock: int option (* the most samples one step of the stretch releases *)
+  ; mutable presampler: ('a Resample.Kernel.t * int) option
+  ; mutable pemitted: int
+  ; mutable pheld: (float, 'a) Nx.t option }
+
+let pitch_reset p =
+  stretch_reset p.pstretch ;
+  Option.iter (fun (k, _) -> Resample.Kernel.reset k) p.presampler ;
+  p.pemitted <- 0 ;
+  p.pheld <- None
+
+(* [pitch_resample p x] feeds [x] to the resampler, prepared at the first
+   samples it is given, and is what it emitted. Offline the stretch releases its
+   whole result at once, and the pieces are then as long as that run, or 4096
+   samples if it is shorter. *)
+let pitch_resample p x =
+  let k, block =
+    match p.presampler with
+    | Some kb ->
+        kb
+    | None ->
+        let block =
+          match p.pblock with
+          | Some b ->
+              Int.max 1 b
+          | None ->
+              Int.max 4096 (last_dim x)
+        in
+        let channels = Array.fold_left ( * ) 1 (leading_shape x) in
+        let k =
+          Resample.Kernel.prepare p.pcfg (Nx.dtype x) ~channels ~max_block:block
+        in
+        p.presampler <- Some (k, block) ;
+        (k, block)
+  in
+  let n = last_dim x in
+  let rec go start acc =
+    if start >= n then acc
+    else
+      let stop = Int.min n (start + block) in
+      go stop
+        ( match Resample.Kernel.step k (shrink_last x start stop) with
+        | None ->
+            acc
+        | Some y ->
+            y :: acc )
+  in
+  match go 0 [] with
+  | [] ->
+      None
+  | [y] ->
+      Some y
+  | ys ->
+      Some (concat_last (List.rev ys))
+
+let pitch_step p op chunk =
+  let st = p.pstretch in
+  let resampled = Option.bind (stretch_step st op chunk) (pitch_resample p) in
+  let released, held =
+    capped ~allowed:(st.tseen - p.pemitted) p.pheld resampled
+  in
+  p.pheld <- held ;
+  Option.iter (fun r -> p.pemitted <- p.pemitted + last_dim r) released ;
+  released
+
+let pitch_flush p op =
+  let st = p.pstretch in
+  if st.tdrained then None
+  else
+    let tail = Option.bind (stretch_flush st op) (pitch_resample p) in
+    match (st.tdtype, !(st.tlead)) with
+    | Some dtype, Some lead ->
+        let drained =
+          Option.bind p.presampler (fun (k, _) -> Resample.Kernel.flush k)
+        in
+        let pending = join (join p.pheld tail) drained in
+        let want = st.tseen - p.pemitted in
+        p.pheld <- None ;
+        p.pemitted <- st.tseen ;
+        fit dtype lead want pending
+    | _ ->
+        None
+
+let check_resampled_dtype op fmt =
+  match Pipeline.Format.dtype fmt with
+  | Pipeline.Format.Dtype Nx.Float32 | Pipeline.Format.Dtype Nx.Float64 ->
+      ()
+  | Pipeline.Format.Dtype dt ->
+      invalid_arg
+        (Stdlib.Format.asprintf
+           "%s: cannot shift %a audio (the resampler carries float32 and \
+            float64)"
+           op Nx.pp_dtype dt )
+
+let pitch_shift_stage ?(phase = `Independent) ?quality c
+    ~(ratio : Pipeline.Rate.t) =
+  let op = "pitch_shift_stage" in
+  check_ratio op ratio ;
+  Stft.check_invertible op c ;
+  let rate = {Pipeline.Rate.num= ratio.den; den= ratio.num} in
+  let resampler =
+    Resample.Config.cached ?quality ~sample_rate:ratio.num ~target:ratio.den ()
+  in
+  let lst = analysis_latency c in
+  let locked = locked_of_phase phase and omega = advance c in
+  (* what the synthesis and the conversion withhold, in output samples of the
+     stretch, carried back to the input's rate and rounded up to a sample *)
+  let held =
+    ceil_div
+      ( (Stft.Config.synthesis_latency c + Resample.Config.latency resampler)
+      * ratio.den )
+      ratio.num
+  in
+  let stretched fmt =
+    Option.map (stretch_bound c rate ~lst) (Pipeline.Format.max_items fmt)
+  in
+  let bound fmt =
+    Option.map
+      (fun b ->
+        Int.max b
+          (Resample.output_bound resampler ~n:(stretch_bound c rate ~lst b)) )
+      (Pipeline.Format.max_items fmt)
+  in
+  let frames b = vocoder_bound rate (frame_bound c ~lst b) in
+  let witness = ref None in
+  Pipeline.kernel
+    ~latency:(lst + Stft.Config.hop c)
+    ~output_latency:held
+    ~out_format:(fun fmt -> Pipeline.Format.with_max_items (bound fmt) fmt)
+    ~flush:(fun s ->
+      match pitch_flush s.run op with None -> [] | Some y -> split s.bound y )
+    ~reset:(fun s -> pitch_reset s.run)
+    ~concat:(concat_samples op witness)
+    ~prepare:(fun fmt ->
+      check_resampled_dtype op fmt ;
+      { run=
+          { pstretch= stretch_create c ~rate ~locked ~omega ~frames fmt
+          ; pcfg= resampler
+          ; pblock= stretched fmt
+          ; presampler= None
+          ; pemitted= 0
+          ; pheld= None }
+      ; bound= bound fmt } )
+    ~step:(fun s chunk ->
+      check_rank op chunk ;
+      witness := Some (Nx.dtype chunk, leading_shape chunk) ;
+      pitch_step s.run op chunk )
+    ()
 
 (* {1 Silence}
 

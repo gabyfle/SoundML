@@ -1292,6 +1292,9 @@ type synthesis_state =
            blocks: [[...; sblocks - 1; sblocks * hop]] *)
   ; mutable scarry: (float, Nx.float64_elt) Nx.t option
         (* the [shold] quotients not yet releasable *)
+  ; mutable slead: int array option
+        (* the leading axes of the last batch given, for a drain to a length
+           that no frame reaches *)
   ; mutable sfed: int
   ; mutable sdrop: int
   ; mutable sdrained: bool }
@@ -1311,6 +1314,7 @@ let synthesis_state_create (c : Config.t) =
   ; speriod_t= Nx.create Nx.float64 [|hop|] period
   ; shist= None
   ; scarry= None
+  ; slead= None
   ; sfed= 0
   ; sdrop= left_width c
   ; sdrained= false }
@@ -1318,6 +1322,7 @@ let synthesis_state_create (c : Config.t) =
 let synthesis_reset s =
   s.shist <- None ;
   s.scarry <- None ;
+  s.slead <- None ;
   s.sfed <- 0 ;
   s.sdrop <- s.sleft ;
   s.sdrained <- false
@@ -1405,6 +1410,7 @@ let synthesis_step s z =
     invalid_arg
       "step: cannot synthesise frames with a zero-size leading axis (channels \
        must be at least 1)" ;
+  s.slead <- Some (batch_shape z) ;
   let k = last_dim z in
   if k = 0 then None
   else begin
@@ -1459,42 +1465,86 @@ let synthesis_step s z =
     synthesis_release s stream release
   end
 
-let synthesis_flush s =
+(* [synthesis_tail s width] is the quotients at the [width] padded positions
+   from [frames * hop] on, the ones the last frame reaches past the hop grid:
+   the blocks the held frames still owe, the frames after them absent, over the
+   envelope of the frames that reach each position. Requires a fed kernel and [0
+   < width <= fft_size - hop]. *)
+let synthesis_tail s width =
+  let c = s.scfg in
+  let hop = Config.hop c and b = s.sblocks in
+  let hist = Option.get s.shist in
+  let local =
+    Nx.concatenate
+      ~axis:(Nx.ndim hist - 2)
+      [ hist
+      ; Nx.zeros Nx.float64 (Array.append (batch_shape hist) [|b - 1; b * hop|])
+      ]
+  in
+  let start = s.sfed * hop in
+  Nx.div
+    (shrink_last
+       (synthesis_blocks s local ~frames:(2 * (b - 1)) ~count:(b - 1))
+       0 width )
+    (Nx.create Nx.float64 [|width|]
+       (Array.init width (fun t ->
+            partial_envelope c s.swindow ~last:(s.sfed - 1) (start + t) ) ) )
+
+let synthesis_flush ?length s =
   if s.sdrained then None
   else begin
     s.sdrained <- true ;
     let c = s.scfg in
     let fft = Config.fft_size c and hop = Config.hop c in
-    let b = s.sblocks in
-    (* what the last frame still owes: the padded positions past [frames * hop]
-       that the trailing trim keeps. The holdback is exactly the overshoot of
-       one hop past that trim, so at most one of the two is ever nonzero and a
-       held tail is a tail the trim discards. *)
-    let cut = Int.max 0 (fft - hop - right_width c) in
+    let carry = s.scarry in
     s.scarry <- None ;
-    if s.sfed = 0 || cut = 0 then None
-    else begin
-      let hist = Option.get s.shist in
-      let local =
-        Nx.concatenate
-          ~axis:(Nx.ndim hist - 2)
-          [ hist
-          ; Nx.zeros Nx.float64
-              (Array.append (batch_shape hist) [|b - 1; b * hop|]) ]
-      in
-      let start = s.sfed * hop in
-      let quotients =
-        Nx.div
-          (shrink_last
-             (synthesis_blocks s local ~frames:(2 * (b - 1)) ~count:(b - 1))
-             0 cut )
-          (Nx.create Nx.float64 [|cut|]
-             (Array.init cut (fun t ->
-                  partial_envelope c s.swindow ~last:(s.sfed - 1) (start + t) )
-             ) )
-      in
-      synthesis_release s quotients cut
-    end
+    match length with
+    | None ->
+        (* what the last frame still owes: the padded positions past [frames *
+           hop] that the trailing trim keeps. The holdback is exactly the
+           overshoot of one hop past that trim, so at most one of the two is
+           ever nonzero and a held tail is a tail the trim discards. *)
+        let cut = Int.max 0 (fft - hop - right_width c) in
+        if s.sfed = 0 || cut = 0 then None
+        else synthesis_release s (synthesis_tail s cut) cut
+    | Some n when s.sfed = 0 ->
+        (* no frame reaches any position: the signal is zeros *)
+        if n = 0 then None
+        else
+          Some
+            (Nx.zeros Nx.float64
+               (Array.append (Option.value s.slead ~default:[||]) [|n|]) )
+    | Some n ->
+        (* the stream runs on to padded position [left + n], where [invert
+           ~length:n] ends: the held quotients, which the default length trims,
+           then the positions the last frame reaches past the hop grid up to its
+           span, the trailing trim's included, then zeros. A length the steps
+           already passed ends nothing. *)
+        let start = s.sfed * hop in
+        let released = start - s.shold in
+        let stop = s.sleft + n in
+        if stop <= released then None
+        else begin
+          let span = start + fft - hop in
+          let reach = Int.min span stop in
+          let parts =
+            Option.to_list carry
+            @ (if reach > start then [synthesis_tail s (reach - start)] else [])
+            @
+            if stop > span then
+              [ Nx.zeros Nx.float64
+                  (Array.append (Option.get s.slead) [|stop - span|]) ]
+            else []
+          in
+          let count = stop - released in
+          let stream =
+            match parts with [one] -> one | parts -> concat_last parts
+          in
+          synthesis_release s
+            ( if last_dim stream > count then shrink_last stream 0 count
+              else stream )
+            count
+        end
   end
 
 module Synthesis = struct
@@ -1521,7 +1571,9 @@ module Synthesis = struct
 
   let step k z = Option.map (Nx.cast k.sdtype) (synthesis_step k.sstate z)
 
-  let flush k = Option.map (Nx.cast k.sdtype) (synthesis_flush k.sstate)
+  let flush ?length k =
+    check_out_length "flush" length ;
+    Option.map (Nx.cast k.sdtype) (synthesis_flush ?length k.sstate)
 
   let reset k = synthesis_reset k.sstate
 end

@@ -2355,6 +2355,8 @@ let stage_bound cfg b =
   | _ ->
       assert false
 
+let output_bound cfg ~n = if is_identity cfg then n else stage_bound cfg n
+
 let stage cfg =
   let witness = ref None in
   let concat = function
