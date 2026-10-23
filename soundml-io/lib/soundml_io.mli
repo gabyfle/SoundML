@@ -21,7 +21,8 @@
 
 (** Audio-file input and output.
 
-    [Soundml_io] decodes and encodes audio through libsndfile. Sample-rate
+    [Soundml_io] decodes and encodes audio through libsndfile, from and to a
+    path or bytes held in memory ({!Memory}: the same faces). Sample-rate
     conversion — including load-time conversion — is {!Soundml.Resample}, fed
     at decode time: {!read}[ ~sample_rate] drives the same kernel every other
     face of the library drives, and is bit-identical to decoding at the
@@ -45,7 +46,9 @@ type 'a audio = {data: (float, 'a) Nx.t; sample_rate: int}
 (** {1 Errors} *)
 
 (** The type for I/O failures. Every constructor is reachable from an actual
-    filesystem or file condition and is exercised by the test suite. *)
+    filesystem or file condition and is exercised by the test suite. [path]
+    is the path the face was given, or ["<memory>"] for the {!Memory}
+    faces. *)
 type error =
   | Not_found of {path: string}
       (** The path does not exist (or, on {!write}, its directory). *)
@@ -547,4 +550,109 @@ ffmpeg -f avfoundation -i :0 -ac 1 -ar 16000 -f f32le - | ./kws
       ([Sys.set_signal Sys.sigpipe Sys.Signal_ignore]) gets the error.
 
       Raises [Invalid_argument] as {!encode} does. *)
+end
+
+(** {1 In memory} *)
+
+(** The faces above over encoded bytes instead of a path — an HTTP body, an
+    archive member, the result of {!Memory.write}.
+
+    Each function is its path counterpart, option for option and law for
+    law: decoding a file's bytes from memory is bit-identical to decoding
+    the file from its path, through every face, and {!Memory.write}
+    produces the bytes {!write} puts in a file. Preconditions raise the same
+    [Invalid_argument]s, named after the memory face.
+
+    One exception, libsndfile's: bytes have no name. When a stream's header
+    names no container, libsndfile falls back on the file — its extension
+    names headerless μ-law ([.au], [.snd]), VOX ADPCM ([.vox], [.vox8],
+    [.vox6]), GSM 6.10 ([.gsm]) and an MP3 stream that does not open on a
+    frame sync after any ID3v2 tag ([.mp3]), and a resource fork makes it
+    SD2 — and from memory there is no file: these streams are
+    {!Unrecognized_format}. The resource-fork probe still runs, and from
+    memory it looks in the process's current directory, for [._] and
+    [.AppleDouble/]: where either exists, such bytes are {!Io} (["open"])
+    instead, and so is an MP3 without an ID3v2 tag, whose frame sync
+    libsndfile checks only after the probe. A stream whose header names its
+    container — every format {!write} produces among them — meets neither
+    fallback.
+
+    The input is a [string], copied once at open into memory the decoder
+    owns and frees. The copy is not optional: the decoder runs with the
+    runtime lock released, when the GC is free to move an OCaml string.
+    Nothing reads the caller's string after the call returns, so it may die
+    or change from then on, and a [bytes] buffer is passed safely as
+    [Bytes.unsafe_to_string b]. The cost is the copy — measured ~17 µs per
+    MB on warm memory, {!Memory.info} included, where the path probe reads
+    a header only — and one encoded size of memory per open source, held
+    by a reader until it is closed. A reader's copy counts toward the GC's
+    pace, so one left to the finalizer is reclaimed under the pressure it
+    exerts; the faces that close before returning charge the GC nothing.
+
+    Errors keep their constructors and carry the path ["<memory>"].
+    {!Not_found} and {!Permission_denied} name filesystem conditions and are
+    unreachable; every other outcome is the path face's verdict on the same
+    bytes, but for the nameless fallbacks above. *)
+module Memory : sig
+  val info : string -> (Info.t, error) result
+  (** [info bytes] is {!Soundml_io.info} over [bytes], short of the
+      fallbacks only a file has (above): bytes libsndfile identifies by a
+      file's extension or resource fork are {!Unrecognized_format} here. *)
+
+  val read :
+       ?sample_rate:int
+    -> ?quality:Soundml.Resample.quality
+    -> ?mono:bool
+    -> (float, 'a) Nx.dtype
+    -> string
+    -> ('a audio, error) result
+  (** [read dt bytes] is {!Soundml_io.read} over [bytes]: the same decode,
+      resampling and downmix, and the same parallel decode of large
+      uncompressed streams. The allocation guard weighs a header's claim
+      against [String.length bytes]. As for {!info}, bytes libsndfile
+      identifies by a file's extension or resource fork (above) are
+      {!Unrecognized_format} here — a headerless [.vox] decodes from its
+      path and not from memory. *)
+
+  val fold :
+       ?block:int
+    -> ?sample_rate:int
+    -> ?quality:Soundml.Resample.quality
+    -> ?mono:bool
+    -> (float, 'a) Nx.dtype
+    -> string
+    -> init:'acc
+    -> f:('acc -> (float, 'a) Nx.t -> 'acc)
+    -> ('acc, error) result
+  (** [fold dt bytes ~init ~f] is {!Soundml_io.fold} over [bytes]. *)
+
+  val open_reader :
+       ?sample_rate:int
+    -> ?quality:Soundml.Resample.quality
+    -> ?mono:bool
+    -> (float, 'a) Nx.dtype
+    -> string
+    -> ('a Reader.t, error) result
+  (** [open_reader dt bytes] is {!Reader.open_} over [bytes]: an ordinary
+      reader — {!Reader.read}, {!Reader.seek}, {!Reader.close} and the rest
+      as documented there — decoding the copy taken at open, never the
+      caller's string. *)
+
+  val write : format:Format.t -> 'a audio -> (string, error) result
+  (** [write ~format a] is the stream {!Soundml_io.write} encodes, as a
+      string. [format] is required: there is no extension to default from.
+      The input forms, clipping policy, call cap and refusals are
+      {!Soundml_io.write}'s own, and so is its upstream asymmetry: a 0-frame
+      FLAC encodes to [""], which {!read} reports as
+      {!Unrecognized_format}.
+
+      The bytes are those of the file {!Soundml_io.write} produces, with
+      one exception: libsndfile draws an Ogg stream's serial number at
+      random, so two Ogg/Vorbis encodes of the same audio differ in those
+      bytes — and decode identically.
+
+      The stream grows in memory while it is encoded — to at most twice its
+      final size, or 64 KB if that is larger — and is copied once into the
+      result. A stream the allocator cannot grow is {!Io} (["write"] or
+      ["close"]), never a truncated [Ok]. *)
 end

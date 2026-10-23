@@ -320,6 +320,24 @@ external stub_seek : handle -> int -> int * string = "soundml_io_seek"
 
 external stub_close : handle -> int * string = "soundml_io_close"
 
+(* The memory faces' seam: an open over encoded bytes (copied by the stub before
+   it releases the runtime lock; the flag says whether the handle outlives the
+   call, which alone charges the copy to the GC), an open over an empty growable
+   sink, and the sink's close, which hands back the encoded stream. *)
+
+external stub_open_read_memory :
+     string
+  -> bool
+  -> (handle * int * int * int * int * bool, int * int * string) result
+  = "soundml_io_open_read_memory"
+
+external stub_open_write_memory :
+  int -> int -> int -> (handle, int * int * string) result
+  = "soundml_io_open_write_memory"
+
+external stub_close_memory : handle -> int * string * string
+  = "soundml_io_close_memory"
+
 external stub_format_check : int -> int -> int -> bool
   = "soundml_io_format_check"
 
@@ -327,8 +345,13 @@ external stub_format_name : int -> string = "soundml_io_format_name"
 
 (* {1 Error mapping} *)
 
+(* The [path] of every error a memory face reports: there is no path to name,
+   and the caller knows which bytes it passed. *)
+let memory_name = "<memory>"
+
 (* A failed read open: filesystem conditions first (probed with open(2) by the
-   stub), then libsndfile's own verdict on the bytes. *)
+   stub; never set for a memory open, which has no filesystem to probe), then
+   libsndfile's own verdict on the bytes. *)
 let read_open_error path (fs, sf_err, details) =
   if fs = fs_noent then Not_found {path}
   else if fs = fs_acces then Permission_denied {path}
@@ -429,6 +452,34 @@ let lent kind n =
 
 let lent_chunk dt l shape = Nx.of_buffer dt shape l.buf
 
+(* {1 Sources}
+
+   Every reading face runs over a source: a path, or encoded bytes held in
+   memory. A face passes its source as separate values — the opener, the name
+   its errors carry, the source itself and, where the allocation guard needs it,
+   its byte length — rather than as a variant, which would allocate on every
+   call of the path faces (the io alloc gates are word-exact). The openers and
+   lengths are closed top-level functions, so passing them allocates nothing
+   either. *)
+
+let open_path path = stub_open_read path
+
+(* A reader's handle outlives its open, so its copy is charged to the GC; every
+   other face closes before returning, and its copy is gone before any
+   collection could reclaim it. *)
+let open_bytes bytes = stub_open_read_memory bytes false
+
+let open_bytes_reader bytes = stub_open_read_memory bytes true
+
+let path_length path =
+  match In_channel.with_open_bin path In_channel.length with
+  | n ->
+      Int64.to_int n
+  | exception Sys_error _ ->
+      0
+
+let bytes_length bytes = String.length bytes
+
 (* {1 Probing} *)
 
 let info_of_header ~frames ~channels ~sample_rate ~code =
@@ -438,14 +489,16 @@ let info_of_header ~frames ~channels ~sample_rate ~code =
   ; format= Format.of_code code
   ; format_name= stub_format_name code }
 
-let info path =
-  match stub_open_read path with
+(* The header probe over a source's open outcome; [name] labels the error. *)
+let probe name = function
   | Error e ->
-      Error (read_open_error path e)
+      Error (read_open_error name e)
   | Ok (h, frames, channels, sample_rate, code, _seekable) ->
       (* A close error on a read-only probe puts no data at risk. *)
       let (_ : int * string) = stub_close h in
       Ok (info_of_header ~frames ~channels ~sample_rate ~code)
+
+let info path = probe path (stub_open_read path)
 
 (* {1 Reading} *)
 
@@ -455,14 +508,16 @@ let info path =
    anything near 4096x (PCM is at most 8x, FLAC and Vorbis far below); a header
    whose destination would exceed that bound against the file's byte size — or
    overflow the size arithmetic — is malformed by construction. The floor keeps
-   small legitimate files unaffected. *)
+   small legitimate files unaffected. The byte size is the source's [length]
+   ([path_length] or [bytes_length]), consulted only past the floor, so the same
+   bytes get the same verdict from a path and from memory. *)
 let alloc_guard_floor_bytes = 1 lsl 26 (* 64 MB *)
 
 let alloc_guard_ratio = 4096
 
 let mul_no_overflow a b = a = 0 || b = 0 || a <= max_int / b
 
-let destination_admissible ~path ~frames ~channels ~elt =
+let destination_admissible ~length ~source ~frames ~channels ~elt =
   if
     (not (mul_no_overflow frames channels))
     || not (mul_no_overflow (frames * channels) elt)
@@ -471,13 +526,7 @@ let destination_admissible ~path ~frames ~channels ~elt =
     let need = frames * channels * elt in
     need <= alloc_guard_floor_bytes
     ||
-    let bytes =
-      match In_channel.with_open_bin path In_channel.length with
-      | n ->
-          Int64.to_int n
-      | exception Sys_error _ ->
-          0
-    in
+    let bytes = length source in
     mul_no_overflow bytes alloc_guard_ratio && need <= bytes * alloc_guard_ratio
 
 let read_mode ~mono ~channels =
@@ -566,7 +615,7 @@ type 'a resampler =
 
 type 'a state =
   { handle: handle
-  ; path: string
+  ; path: string (* what errors name: the path, or [memory_name] *)
   ; dt: (float, 'a) Nx.dtype
   ; kind: (float, 'a) Bigarray.kind
   ; native: Info.t
@@ -688,15 +737,15 @@ let make_state (type a) (dt : (float, a) Nx.dtype) path h ~frames ~channels
   | exception Open_refused e ->
       Error e
 
-let open_state op ?sample_rate ?quality ?(mono = false) dt path =
+let open_state op ~open_ ~name ?sample_rate ?quality ?(mono = false) dt source =
   check_dtype op dt ;
   check_sample_rate op sample_rate ;
   check_quality op quality sample_rate ;
-  match stub_open_read path with
+  match open_ source with
   | Error e ->
-      Error (read_open_error path e)
+      Error (read_open_error name e)
   | Ok (h, frames, channels, native_rate, code, _seekable) ->
-      make_state dt path h ~frames ~channels ~sample_rate:native_rate ~code
+      make_state dt name h ~frames ~channels ~sample_rate:native_rate ~code
         ~mono ~target:sample_rate ~quality
 
 (* {2 The carry} *)
@@ -1031,11 +1080,14 @@ let seek_state st ~frame =
               st.finished <- false ;
               advance () ) )
 
-(* {1 Reading} *)
+(* {1 Reading}
 
-let read (type a) ?sample_rate ?quality ?(mono = false)
-    (dt : (float, a) Nx.dtype) path : (a audio, error) result =
-  match open_state "Soundml_io.read" ?sample_rate ?quality ~mono dt path with
+   The faces over a source; the path faces and {!Memory} are their instances. *)
+
+let read_source (type a) op ~open_ ~length ~name ?sample_rate ?quality
+    ?(mono = false) (dt : (float, a) Nx.dtype) source : (a audio, error) result
+    =
+  match open_state op ~open_ ~name ?sample_rate ?quality ~mono dt source with
   | Error e ->
       Error e
   | Ok st -> (
@@ -1044,7 +1096,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
       let liar () =
         Error
           (Io
-             { path
+             { path= name
              ; op= "read"
              ; details=
                  Printf.sprintf
@@ -1062,7 +1114,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                 ~channels_out:st.channels_out
             with
             | Error details ->
-                finish (Error (Io {path; op= "read"; details}))
+                finish (Error (Io {path= name; op= "read"; details}))
             | Ok (dst, total) ->
                 finish
                   (Ok
@@ -1070,7 +1122,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
                      ; sample_rate= st.target_rate } )
           else if
             not
-              (destination_admissible ~path ~frames:advertised
+              (destination_admissible ~length ~source ~frames:advertised
                  ~channels:st.channels_out ~elt )
           then finish (liar ())
           else
@@ -1117,7 +1169,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
           end
           else if
             not
-              (destination_admissible ~path ~frames:advertised
+              (destination_admissible ~length ~source ~frames:advertised
                  ~channels:st.channels_out ~elt )
           then finish (liar ())
           else begin
@@ -1131,7 +1183,7 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
               in
               if
                 not
-                  (destination_admissible ~path ~frames:total_out
+                  (destination_admissible ~length ~source ~frames:total_out
                      ~channels:st.channels_out ~elt )
               then finish (liar ())
               else begin
@@ -1173,14 +1225,13 @@ let read (type a) ?sample_rate ?quality ?(mono = false)
             end
           end )
 
-let fold ?(block = 65536) ?sample_rate ?quality ?(mono = false) dt path ~init ~f
-    =
+let fold_source op ~open_ ~name ?(block = 65536) ?sample_rate ?quality
+    ?(mono = false) dt source ~init ~f =
   if block < 1 then
     invalid_arg
-      (Printf.sprintf
-         "Soundml_io.fold: cannot fold %d-frame blocks (block must be positive)"
-         block ) ;
-  match open_state "Soundml_io.fold" ?sample_rate ?quality ~mono dt path with
+      (Printf.sprintf "%s: cannot fold %d-frame blocks (block must be positive)"
+         op block ) ;
+  match open_state op ~open_ ~name ?sample_rate ?quality ~mono dt source with
   | Error e ->
       Error e
   | Ok st ->
@@ -1200,11 +1251,20 @@ let fold ?(block = 65536) ?sample_rate ?quality ?(mono = false) dt path ~init ~f
           in
           loop init )
 
+let read ?sample_rate ?quality ?mono dt path =
+  read_source "Soundml_io.read" ~open_:open_path ~length:path_length ~name:path
+    ?sample_rate ?quality ?mono dt path
+
+let fold ?block ?sample_rate ?quality ?mono dt path ~init ~f =
+  fold_source "Soundml_io.fold" ~open_:open_path ~name:path ?block ?sample_rate
+    ?quality ?mono dt path ~init ~f
+
 module Reader = struct
   type 'a t = 'a state
 
   let open_ ?sample_rate ?quality ?mono dt path =
-    open_state "Soundml_io.Reader.open_" ?sample_rate ?quality ?mono dt path
+    open_state "Soundml_io.Reader.open_" ~open_:open_path ~name:path
+      ?sample_rate ?quality ?mono dt path
 
   let info st =
     ensure_open st "Soundml_io.Reader.info" ;
@@ -1222,29 +1282,64 @@ module Reader = struct
   let close = close_state
 end
 
-(* {1 Writing} *)
+(* {1 Writing}
 
-let write ?format path (a : 'a audio) =
-  check_dtype "Soundml_io.write" (Nx.dtype a.data) ;
+   Two faces, one encode: [write] opens a file, [Memory.write] a growable sink.
+   They share the preconditions, the refusals knowable before any sf_open and
+   the capped encode loop, through helpers that allocate nothing of their own
+   (the io alloc gates are word-exact). *)
+
+(* The writing preconditions; [a]'s shape once validated — [[|frames|]] or
+   [[|channels; frames|]], read once since [Nx.shape] copies. *)
+let encode_shape op (a : _ audio) =
+  check_dtype op (Nx.dtype a.data) ;
   if a.sample_rate < 1 then
     invalid_arg
-      (Printf.sprintf
-         "Soundml_io.write: sample_rate %d is not positive (a signal has a \
-          rate)"
-         a.sample_rate ) ;
-  let channels, frames =
-    match Nx.shape a.data with
-    | [|frames|] ->
-        (1, frames)
-    | [|channels; frames|] ->
-        (channels, frames)
-    | shape ->
-        invalid_arg
-          (Printf.sprintf
-             "Soundml_io.write: rank-%d audio (writable audio is [channels; \
-              frames] or rank-one mono)"
-             (Array.length shape) )
-  in
+      (Printf.sprintf "%s: sample_rate %d is not positive (a signal has a rate)"
+         op a.sample_rate ) ;
+  match Nx.shape a.data with
+  | ([|_|] | [|_; _|]) as shape ->
+      shape
+  | shape ->
+      invalid_arg
+        (Printf.sprintf
+           "%s: rank-%d audio (writable audio is [channels; frames] or \
+            rank-one mono)"
+           op (Array.length shape) )
+
+let shape_channels shape = if Array.length shape = 1 then 1 else shape.(0)
+
+let shape_frames shape = shape.(Array.length shape - 1)
+
+let refusal fmt ~channels ~sample_rate =
+  Stdlib.Format.asprintf "%a refuses %d channel%s at %d Hz" Format.pp fmt
+    channels
+    (if channels = 1 then "" else "s")
+    sample_rate
+
+(* Vorbis carries at most 255 channels (an 8-bit header field); libsndfile
+   1.2.2's sf_format_check does not enforce the bound and its Ogg writer
+   segfaults past it (measured: 256 channels crash, 255 encode fine), so the
+   refusal must happen here, before any sf_open. *)
+let encode_refused fmt ~code ~channels ~sample_rate =
+  (Format.encoding fmt = `Vorbis && channels > 255)
+  || not (stub_format_check code channels sample_rate)
+
+(* Every frame of [a] through the open handle [h], in the stub's capped calls:
+   [(written, err, details)]. *)
+let encode_frames h (a : _ audio) ~channels ~frames =
+  let mode = if channels = 1 then mode_direct else mode_planar in
+  Rig.Buffer.read (Nx.to_buffer a.data)
+    (kind_of_dtype (Nx.dtype a.data))
+    (fun ba -> stub_writef h ba mode 0 frames frames channels)
+
+let short_write ~written ~frames details =
+  if details = "" then Printf.sprintf "wrote %d of %d frames" written frames
+  else details
+
+let write ?format path (a : 'a audio) =
+  let shape = encode_shape "Soundml_io.write" a in
+  let channels = shape_channels shape and frames = shape_frames shape in
   let format_result =
     match format with Some f -> Ok f | None -> Format.of_path path
   in
@@ -1253,41 +1348,22 @@ let write ?format path (a : 'a audio) =
       Error e
   | Ok fmt -> (
       let code = Format.code fmt in
-      let unsupported =
-        Stdlib.Format.asprintf "%a refuses %d channel%s at %d Hz" Format.pp fmt
-          channels
-          (if channels = 1 then "" else "s")
-          a.sample_rate
-      in
-      (* Vorbis carries at most 255 channels (an 8-bit header field); libsndfile
-         1.2.2's sf_format_check does not enforce the bound and its Ogg writer
-         segfaults past it (measured: 256 channels crash, 255 encode fine), so
-         the refusal must happen here, before any sf_open. *)
-      if Format.encoding fmt = `Vorbis && channels > 255 then
-        Error (Unsupported {path; details= unsupported})
-      else if not (stub_format_check code channels a.sample_rate) then
+      let unsupported = refusal fmt ~channels ~sample_rate:a.sample_rate in
+      if encode_refused fmt ~code ~channels ~sample_rate:a.sample_rate then
         Error (Unsupported {path; details= unsupported})
       else
         match stub_open_write path code channels a.sample_rate with
         | Error e ->
             Error (write_open_error path ~unsupported e)
         | Ok h -> (
-            let mode = if channels = 1 then mode_direct else mode_planar in
-            let written, _err, details =
-              Rig.Buffer.read (Nx.to_buffer a.data)
-                (kind_of_dtype (Nx.dtype a.data))
-                (fun ba -> stub_writef h ba mode 0 frames frames channels)
-            in
+            let written, _err, details = encode_frames h a ~channels ~frames in
             let close_code, close_details = stub_close h in
             if written < frames then
               Error
                 (Io
                    { path
                    ; op= "write"
-                   ; details=
-                       ( if details = "" then
-                           Printf.sprintf "wrote %d of %d frames" written frames
-                         else details ) } )
+                   ; details= short_write ~written ~frames details } )
             else
               match close_code with
               | 0 ->
@@ -1591,4 +1667,48 @@ module Raw = struct
         Error (Io {path= name; op= "write"; details})
     | exception Sys_blocked_io ->
         Error (Io {path= name; op= "write"; details= not_ready})
+end
+
+(* {1 In memory} *)
+
+module Memory = struct
+  let info bytes = probe memory_name (open_bytes bytes)
+
+  let read ?sample_rate ?quality ?mono dt bytes =
+    read_source "Soundml_io.Memory.read" ~open_:open_bytes ~length:bytes_length
+      ~name:memory_name ?sample_rate ?quality ?mono dt bytes
+
+  let fold ?block ?sample_rate ?quality ?mono dt bytes ~init ~f =
+    fold_source "Soundml_io.Memory.fold" ~open_:open_bytes ~name:memory_name
+      ?block ?sample_rate ?quality ?mono dt bytes ~init ~f
+
+  let open_reader ?sample_rate ?quality ?mono dt bytes =
+    open_state "Soundml_io.Memory.open_reader" ~open_:open_bytes_reader
+      ~name:memory_name ?sample_rate ?quality ?mono dt bytes
+
+  let write ~format (a : 'a audio) =
+    let shape = encode_shape "Soundml_io.Memory.write" a in
+    let channels = shape_channels shape and frames = shape_frames shape in
+    let code = Format.code format in
+    let unsupported = refusal format ~channels ~sample_rate:a.sample_rate in
+    if encode_refused format ~code ~channels ~sample_rate:a.sample_rate then
+      Error (Unsupported {path= memory_name; details= unsupported})
+    else
+      match stub_open_write_memory code channels a.sample_rate with
+      | Error e ->
+          Error (write_open_error memory_name ~unsupported e)
+      | Ok h ->
+          let written, _err, details = encode_frames h a ~channels ~frames in
+          (* the close completes the stream — header rewrite, STREAMINFO — and
+             hands it back *)
+          let close_code, close_details, bytes = stub_close_memory h in
+          if written < frames then
+            Error
+              (Io
+                 { path= memory_name
+                 ; op= "write"
+                 ; details= short_write ~written ~frames details } )
+          else if close_code <> 0 then
+            Error (Io {path= memory_name; op= "close"; details= close_details})
+          else Ok bytes
 end

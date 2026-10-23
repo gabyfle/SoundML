@@ -3,7 +3,8 @@
 Audio-file input and output for {{:../soundml/index.html}SoundML}, on
 libsndfile: decode any supported container to an [Nx] tensor, encode one
 back, stream through a bounded-memory {!Soundml_io.Reader}, and fuse
-resampling into the read. Headerless PCM — a microphone piped from sox or
+resampling into the read — from a file or from bytes held in memory
+({!Soundml_io.Memory}). Headerless PCM — a microphone piped from sox or
 ffmpeg — decodes and encodes through {!Soundml_io.Raw}, chunk by chunk into a
 pipeline stream.
 
