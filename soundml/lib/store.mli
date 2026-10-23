@@ -67,6 +67,12 @@ val make64_pair :
 (** [make64_pair shape fill] is two float64 tensors of [shape] that one call
     of [fill] wrote, in the order given. *)
 
+val make32_pair :
+     int array
+  -> (f32 -> f32 -> unit)
+  -> (float, Nx.float32_elt) Nx.t * (float, Nx.float32_elt) Nx.t
+(** [make32_pair] is {!make64_pair} at float32. *)
+
 val read32 : (float, Nx.float32_elt) Nx.t -> (f32 -> 'r) -> 'r
 (** [read32 x f] is [f a] with [a] [x]'s elements in C order — [x]'s own
     storage when it holds them so, a copy otherwise — lent for the duration

@@ -41,6 +41,7 @@ import json
 import os
 import platform
 import struct
+import warnings
 
 import librosa
 import numpy as np
@@ -73,6 +74,7 @@ SUITE_DIRECTORIES = {
     "defaults": "soundml/test/defaults/vectors",
     "synthesis": "soundml/test/synthesis/vectors",
     "f0": "soundml/test/f0/vectors",
+    "tuning": "soundml/test/tuning/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -4968,6 +4970,455 @@ class F0VectorGenerator:
         out = self.cases()
         write_suite(self.SUITE, "yin", out["yin"])
         write_suite(self.SUITE, "pyin", out["pyin"])
+class TuningVectorGenerator:
+    """Golden vectors for Soundml.piptrack, pitch_tuning, estimate_tuning and
+    estimate_tuning_of_spectrogram (librosa.piptrack, pitch_tuning and
+    estimate_tuning).
+
+    Three files:
+
+    - piptrack: librosa.piptrack(S=...) over |LCG| spectrograms under this
+      suite's seed, reshaped in C order (reproduced bit-exactly on the OCaml
+      side), and over STFT magnitude and power spectrograms of tones. The
+      LCG cases cover the defaults, thresholds 0 and 0.5, a scalar ref (which
+      librosa does not scale by the threshold), the band clamped to [0,
+      Nyquist), a negative fmin (clamped), an empty band, a batched rank-4
+      input, an odd n_fft passed explicitly (whose top bin can peak), the
+      edges of a 16 kHz, 512-point grid (bin 5 at exactly fmin, bin 128 at
+      fmax excluded), band edges where rfftfreq's k * (1 / (n * (1 / sr)))
+      and k * sr / n fall on opposite sides (at 12345 Hz, and the Nyquist
+      bin of a 30-point grid at 22050 Hz, which rfftfreq puts in the band),
+      quantised plateaus (exact ties), two bins (the Nyquist bin excluded,
+      and the top bin of a 3-point grid) and one frame. Results are stored
+      sparse: one row [C-order flat index, pitch, magnitude] per peak, shape
+      [peaks; 3].
+    - pitch_tuning: librosa.pitch_tuning over frequency sets stored in the
+      params: semitone ladders at mid-bin detunings, the 0.001 and 0.03
+      resolutions (34 bins), 36, 24 and 7 bins per octave, both wraps at
+      half a bin, a majority, an exact count tie (the lowest bin wins),
+      non-positive entries, frequencies below 27.5 Hz, the empty set and
+      log-uniform sets at several resolutions.
+    - estimate_tuning: librosa.estimate_tuning(y=...) over tones at known
+      detunings (A4 at 440 * 2 ** (c / 1200) for several c), a harmonic
+      note, a four-tone mixture, noise, a tone in noise, the resolution,
+      bins_per_octave, band, threshold and ref options, a stereo signal
+      (pooled into one estimate), a 16 kHz geometry and silence; and
+      estimate_tuning(S=...) over the power spectrogram, chroma_stft's
+      default path. The partials' exact frequencies are stored in the params.
+
+    float32 cases quantize the input (the spectrogram, or the audio) to
+    float32 and compute the reference in float64. Every decision the STFT
+    cases make is asserted to sit away from its tie: the threshold, local
+    maximum and shift comparisons by at least 1e-7 of the frame maximum, the
+    residuals by 1e-7 from every histogram edge, and the support and the
+    estimate unchanged when the spectrogram is perturbed by 1e-12 relative
+    noise or when the detections within 1e-9 of the median are all kept or
+    all dropped -- many orders of magnitude above the rounding by which two
+    FFTs or two libms differ.
+    """
+
+    SUITE = "tuning"
+
+    SEED = 20261107
+
+    SR = 22050
+
+    # 0.5 * 0.7 ** h, the harmonic note's partial amplitudes
+    HARMONIC_AMPS = [0.5 * 0.7**h for h in range(8)]
+
+    @staticmethod
+    def cents(f, c):
+        return f * 2.0 ** (c / 1200.0)
+
+    def lcg(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def audio(self, spec):
+        """spec: {"n", "sample_rate", "channels": [{"partials": [[f, a], ...],
+        "noise": level}, ...]}; the partials are summed in order, each
+        a * sin(2 * pi * f * t) with t = arange(n) / sample_rate, then the
+        noise, level times the LCG stream."""
+        n, sr = spec["n"], spec["sample_rate"]
+        t = np.arange(n) / sr
+        rows = []
+        for channel in spec["channels"]:
+            y = np.zeros(n)
+            for f, a in channel["partials"]:
+                y = y + a * np.sin(2 * np.pi * f * t)
+            if channel["noise"] != 0.0:
+                y = y + channel["noise"] * self.lcg(n)
+            rows.append(y)
+        return rows[0] if len(rows) == 1 else np.stack(rows)
+
+    def tones(self, partials, n=None, sample_rate=None, noise=0.0):
+        return {"n": self.SR if n is None else n,
+                "sample_rate": self.SR if sample_rate is None else sample_rate,
+                "channels": [{"partials": [[float(f), float(a)] for f, a in partials],
+                              "noise": noise}]}
+
+    @staticmethod
+    def stft_magnitude(y, fft_size, hop):
+        return np.abs(librosa.stft(y, n_fft=fft_size, hop_length=hop, window="hann",
+                                   center=True, pad_mode="constant",
+                                   dtype=np.complex128))
+
+    # ---- robustness of the discrete decisions --------------------------------
+
+    @staticmethod
+    def decision_margin(S, threshold, ref):
+        """The smallest margin, relative to its frame's maximum, of the
+        threshold comparisons, the local-maximum comparisons between bins
+        above the threshold, and the |b| >= |a| shift test at each peak."""
+        frames = np.moveaxis(S, -2, -1).reshape(-1, S.shape[-2])
+        worst = np.inf
+        for col in frames:
+            mx = col.max()
+            if mx == 0.0:
+                continue
+            rv = threshold * mx if ref is None else abs(ref)
+            worst = min(worst, float(np.min(np.abs(col - rv)) / mx))
+            above = col > rv
+            both = above[1:] & above[:-1]
+            if both.any():
+                worst = min(worst, float(np.min(np.abs(np.diff(col))[both]) / mx))
+            z = np.where(above, col, 0.0)
+            peak = np.zeros(len(col), dtype=bool)
+            peak[1:-1] = (z[1:-1] > z[:-2]) & (z[1:-1] >= z[2:])
+            for k in np.nonzero(peak)[0]:
+                a = (col[k + 1] + col[k - 1]) - 2.0 * col[k]
+                b = (col[k + 1] - col[k - 1]) / 2.0
+                worst = min(worst, float((abs(a) - abs(b)) / mx))
+        return worst
+
+    @staticmethod
+    def residuals(freqs, bins_per_octave):
+        r = np.mod(bins_per_octave * librosa.hz_to_octs(freqs), 1.0)
+        r[r >= 0.5] -= 1.0
+        return r
+
+    def edge_margin(self, freqs, resolution, bins_per_octave):
+        freqs = np.asarray(freqs, dtype=np.float64)
+        freqs = freqs[freqs > 0]
+        if freqs.size == 0:
+            return np.inf
+        r = self.residuals(freqs, bins_per_octave)
+        edges = np.linspace(-0.5, 0.5, int(np.ceil(1.0 / resolution)) + 1)
+        return float(np.min(np.abs(r[:, None] - edges[None, :])))
+
+    def assert_robust_piptrack(self, key, S, sr, fft_size, kwargs):
+        margin = self.decision_margin(S, kwargs.get("threshold", 0.1), kwargs.get("ref"))
+        assert margin > 1e-7, (key, margin)
+        P, _ = librosa.piptrack(S=S, sr=sr, n_fft=fft_size, **kwargs)
+        rng = np.random.default_rng(self.SEED)
+        for _ in range(4):
+            Sp = S * (1.0 + 1e-12 * rng.uniform(-1.0, 1.0, S.shape))
+            Pp, _ = librosa.piptrack(S=Sp, sr=sr, n_fft=fft_size, **kwargs)
+            assert np.array_equal(P > 0, Pp > 0), key
+        return margin
+
+    def assert_robust_estimate(self, key, S, sr, fft_size, resolution, bins_per_octave,
+                               kwargs):
+        """The estimate of S, asserted stable; returns (estimate, margins)."""
+        def estimate(S):
+            return librosa.estimate_tuning(S=S, sr=sr, n_fft=fft_size,
+                                           resolution=resolution,
+                                           bins_per_octave=bins_per_octave, **kwargs)
+
+        expected = estimate(S)
+        margin = self.assert_robust_piptrack(key, S, sr, fft_size, kwargs)
+        P, M = librosa.piptrack(S=S, sr=sr, n_fft=fft_size, **kwargs)
+        mask = P > 0
+        edge = self.edge_margin(P[mask], resolution, bins_per_octave)
+        assert edge > 1e-7, (key, edge)
+        if mask.any():
+            thr = np.median(M[mask])
+            near = mask & (np.abs(M - thr) <= 1e-9 * thr)
+            chosen = mask & (M >= thr)
+            pt = lambda f: librosa.pitch_tuning(f, resolution=resolution,
+                                                bins_per_octave=bins_per_octave)
+            assert pt(P[chosen | near]) == expected, key
+            if (chosen & ~near).any():
+                assert pt(P[chosen & ~near]) == expected, key
+        rng = np.random.default_rng(self.SEED + 1)
+        for _ in range(4):
+            Sp = S * (1.0 + 1e-12 * rng.uniform(-1.0, 1.0, S.shape))
+            assert estimate(Sp) == expected, key
+        return expected, margin, edge
+
+    # ---- piptrack ------------------------------------------------------------
+
+    # (case key, source, shape, sample rate, n_fft passed or None, kwargs, dtypes)
+    PIPTRACK_LCG = [
+        ("lcg_129x12_defaults", "lcg", [129, 12], 22050, None, {},
+         ["float64", "float32"]),
+        ("lcg_129x12_threshold0", "lcg", [129, 12], 22050, None,
+         {"threshold": 0.0}, ["float64"]),
+        ("lcg_129x12_threshold0.5", "lcg", [129, 12], 22050, None,
+         {"threshold": 0.5}, ["float64", "float32"]),
+        ("lcg_129x12_ref0.3_threshold0.9", "lcg", [129, 12], 22050, None,
+         {"ref": 0.3, "threshold": 0.9}, ["float64"]),
+        ("lcg_129x12_fmin0_fmax1e9", "lcg", [129, 12], 22050, None,
+         {"fmin": 0.0, "fmax": 1e9}, ["float64"]),
+        ("lcg_129x12_fmin-5_fmax2000", "lcg", [129, 12], 22050, None,
+         {"fmin": -5.0, "fmax": 2000.0}, ["float64"]),
+        ("lcg_129x12_empty_band", "lcg", [129, 12], 22050, None,
+         {"fmin": 2000.0, "fmax": 1000.0}, ["float64"]),
+        ("lcg_2x3x65x6_batched", "lcg", [2, 3, 65, 6], 8000, None, {},
+         ["float64", "float32"]),
+        ("lcg_128x12_fft255_fmax1e9", "lcg", [128, 12], 22050, 255,
+         {"fmax": 1e9}, ["float64"]),
+        ("lcg_257x8_sr16000_fmin156.25", "lcg", [257, 8], 16000, 512,
+         {"fmin": 156.25}, ["float64"]),
+        ("lcg_33x30_sr12345_rfftfreq_edges", "lcg", [33, 30], 12345, None,
+         {"fmin": 192.890625, "fmax": 1928.90625}, ["float64"]),
+        ("lcg_16x40_fft30_nyquist_in_band", "lcg", [16, 40], 22050, None,
+         {"fmin": 0.0, "fmax": 1e9}, ["float64"]),
+        ("plateau_65x9_threshold0.2", "plateau", [65, 9], 8000, None,
+         {"threshold": 0.2}, ["float64"]),
+        ("lcg_2x5_two_bins_nyquist", "lcg", [2, 5], 8000, None,
+         {"fmin": 0.0, "fmax": 1e9}, ["float64"]),
+        ("lcg_2x5_two_bins_fft3", "lcg", [2, 5], 8000, 3,
+         {"fmin": 0.0, "fmax": 1e9}, ["float64"]),
+        ("lcg_33x1_one_frame", "lcg", [33, 1], 8000, None, {"fmin": 0.0},
+         ["float64"]),
+    ]
+
+    def lcg_spectrogram(self, source, shape):
+        S = np.abs(self.lcg(int(np.prod(shape)))).reshape(shape)
+        return np.floor(S * 4.0) / 4.0 if source == "plateau" else S
+
+    @staticmethod
+    def sparse(P, M):
+        flat = np.nonzero(P.ravel() > 0)[0]
+        assert np.array_equal(flat, np.nonzero(M.ravel() > 0)[0])
+        rows = np.stack([flat.astype(np.float64), P.ravel()[flat], M.ravel()[flat]],
+                        axis=1)
+        return [len(flat), 3], rows.ravel().tolist()
+
+    @staticmethod
+    def kwargs_params(kwargs):
+        return {{"ref": "reference"}.get(k, k): v for k, v in kwargs.items()}
+
+    def piptrack_cases(self):
+        cases = []
+        for key, source, shape, sr, n_fft, kwargs, dtypes in self.PIPTRACK_LCG:
+            for dtype in dtypes:
+                S = self.quantize(self.lcg_spectrogram(source, shape), dtype)
+                P, M = librosa.piptrack(S=S, sr=sr, n_fft=n_fft or 2048, **kwargs)
+                if n_fft is not None:
+                    assert n_fft // 2 + 1 == shape[-2], key
+                assert P.dtype == np.float64
+                # these cases pin rfftfreq's arithmetic: the band edges fall
+                # between it and k * sr / n_fft, on bins that do peak
+                if key == "lcg_33x30_sr12345_rfftfreq_edges":
+                    assert 1 * (12345 / 64) == kwargs["fmin"]
+                    assert 10 * (12345 / 64) == kwargs["fmax"]
+                    assert not P[1].any() and P[10].any(), key
+                    P0, _ = librosa.piptrack(S=S, sr=sr, fmin=0.0, fmax=1e9)
+                    assert P0[1].any() and P0[10].any(), key
+                if key == "lcg_16x40_fft30_nyquist_in_band":
+                    assert P[15].any(), key
+                shape_out, values = self.sparse(P, M)
+                params = {"source": source, "input_shape": shape, "sample_rate": sr,
+                          "dtype": dtype}
+                if n_fft is not None:
+                    params["fft_size"] = n_fft
+                params.update(self.kwargs_params(kwargs))
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": shape_out, "values": values})
+        a4 = 440.0
+        mixture4 = [(self.cents(a4, 17.0), 0.5), (self.cents(554.365, 17.0), 0.4),
+                    (self.cents(659.255, -31.0), 0.2), (self.cents(196.0, 40.0), 0.1)]
+        harmonic = [(self.cents(196.0 * (h + 1), 17.0), amp)
+                    for h, amp in enumerate(self.HARMONIC_AMPS)]
+        stft_cases = [
+            ("tones_mixture4", self.tones(mixture4), 2048, 512, 1, {},
+             ["float64", "float32"]),
+            ("tones_harmonic_power", self.tones(harmonic), 2048, 512, 2, {},
+             ["float64"]),
+            ("tones_16k_fft512", self.tones([(4000.0, 0.5), (self.cents(a4, 27.0), 0.3)],
+                                            n=16000, sample_rate=16000),
+             512, 128, 1, {}, ["float64"]),
+            ("tones_mixture4_ref20_fmin300", self.tones(mixture4, noise=0.02), 2048,
+             512, 1, {"ref": 20.0, "fmin": 300.0}, ["float64"]),
+        ]
+        for key, spec, fft_size, hop, power, kwargs, dtypes in stft_cases:
+            sr = spec["sample_rate"]
+            S64 = self.stft_magnitude(self.audio(spec), fft_size, hop) ** power
+            for dtype in dtypes:
+                S = self.quantize(S64, dtype)
+                margin = self.assert_robust_piptrack(key, S, sr, fft_size, kwargs)
+                P, M = librosa.piptrack(S=S, sr=sr, n_fft=fft_size, **kwargs)
+                shape_out, values = self.sparse(P, M)
+                params = {"source": "stft", "signal": spec, "fft_size": fft_size,
+                          "hop": hop, "power": power, "sample_rate": sr,
+                          "dtype": dtype, "margin": margin}
+                params.update(self.kwargs_params(kwargs))
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": shape_out, "values": values})
+        return cases
+
+    # ---- pitch_tuning --------------------------------------------------------
+
+    def pitch_tuning_cases(self):
+        def ladder(f0, cents, count, bpo=12):
+            return [f0 * 2.0 ** (i / bpo + cents / (100.0 * bpo)) for i in range(count)]
+
+        lcg = (self.lcg(400) + 1.0) / 2.0  # [0, 1)
+        spread = 27.5 * 2.0 ** (lcg * 11.0 - 2.0)
+
+        def loguniform(resolution, bpo):
+            """The log-uniform set without the frequencies whose residual lies
+            within 1e-6 of a histogram edge."""
+            r = self.residuals(spread, bpo)
+            edges = np.linspace(-0.5, 0.5, int(np.ceil(1.0 / resolution)) + 1)
+            far = np.min(np.abs(r[:, None] - edges[None, :]), axis=1) > 1e-6
+            return spread[far].tolist()
+
+        # (case key, frequencies, resolution, bins_per_octave, dtypes)
+        cases_spec = [
+            ("ladder_+25.5c", ladder(55.0, 25.5, 24), 0.01, 12, ["float64", "float32"]),
+            ("ladder_-13.55c_res0.001", ladder(55.0, -13.55, 24), 0.001, 12, ["float64"]),
+            ("ladder_+16.18c_res0.03", ladder(110.0, 100.0 * (22.5 / 34.0 - 0.5), 24),
+             0.03, 12, ["float64"]),
+            ("ladder_bpo36", ladder(55.0, 31.5, 72, bpo=36), 0.01, 36, ["float64"]),
+            ("ladder_bpo24", ladder(55.0, -27.5, 48, bpo=24), 0.01, 24, ["float64"]),
+            ("ladder_bpo7", ladder(55.0, 8.5, 14, bpo=7), 0.01, 7, ["float64"]),
+            ("ladder_+49.5c", ladder(55.0, 49.5, 12), 0.01, 12, ["float64"]),
+            ("ladder_-49.5c", ladder(55.0, -49.5, 12), 0.01, 12, ["float64"]),
+            ("majority", ladder(220.0, 12.5, 7) + ladder(98.0, -30.5, 5), 0.01, 12,
+             ["float64"]),
+            ("count_tie", ladder(220.0, 30.5, 4) + ladder(98.0, -20.5, 4), 0.01, 12,
+             ["float64"]),
+            ("non_positive_skipped", [0.0, -440.0] + ladder(110.0, 7.5, 5) + [0.0, -3.0],
+             0.01, 12, ["float64"]),
+            ("below_27.5Hz", ladder(3.4375, -36.5, 30), 0.01, 12, ["float64"]),
+            ("all_zeros", [0.0, 0.0, 0.0], 0.01, 12, ["float64"]),
+            ("loguniform_res0.01", loguniform(0.01, 12), 0.01, 12, ["float64", "float32"]),
+            ("loguniform_res0.001_bpo36", loguniform(0.001, 36), 0.001, 36, ["float64"]),
+            ("loguniform_res0.03_bpo24", loguniform(0.03, 24), 0.03, 24, ["float64"]),
+            ("loguniform_res0.3_bpo7", loguniform(0.3, 7), 0.3, 7, ["float64"]),
+        ]
+        cases = []
+        for key, freqs, resolution, bpo, dtypes in cases_spec:
+            for dtype in dtypes:
+                f = self.quantize(np.asarray(freqs, dtype=np.float64), dtype)
+                margin = self.edge_margin(f, resolution, bpo)
+                assert margin > 1e-7, (key, margin)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    expected = librosa.pitch_tuning(f, resolution=resolution,
+                                                    bins_per_octave=bpo)
+                params = {"frequencies": f.tolist(), "resolution": resolution,
+                          "bins_per_octave": bpo, "dtype": dtype}
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": [1], "values": [float(expected)]})
+        return cases
+
+    # ---- estimate_tuning -----------------------------------------------------
+
+    def estimate_tuning_cases(self):
+        finite_or_none = lambda v: v if v is not None and np.isfinite(v) else None
+        a4 = 440.0
+        mixture4 = [(self.cents(a4, 17.0), 0.5), (self.cents(554.365, 17.0), 0.4),
+                    (self.cents(659.255, -31.0), 0.2), (self.cents(196.0, 40.0), 0.1)]
+        harmonic = [(self.cents(196.0 * (h + 1), 17.0), amp)
+                    for h, amp in enumerate(self.HARMONIC_AMPS)]
+        tone = lambda c, **kw: self.tones([(self.cents(a4, c), 0.5)], **kw)
+        stereo = {"n": self.SR, "sample_rate": self.SR,
+                  "channels": [{"partials": [[self.cents(a4, 23.0), 0.5]], "noise": 0.0},
+                               {"partials": [[self.cents(329.628, -14.0), 0.3]],
+                                "noise": 0.0}]}
+        # (case key, signal, fft_size, hop, power (spectrogram face) or None
+        #  (audio face), resolution, bins_per_octave, kwargs, dtypes)
+        cases_spec = []
+        for c in [-40.3, -23.0, -7.5, 0.0, 12.5, 31.7, 45.0]:
+            cases_spec.append((f"a4_{c:+g}c", tone(c), 2048, 512, None, 0.01, 12, {},
+                               ["float64", "float32"] if c in (-23.0, 31.7)
+                               else ["float64"]))
+        cases_spec += [
+            ("harmonic_g3_+17c", self.tones(harmonic), 2048, 512, None, 0.01, 12, {},
+             ["float64", "float32"]),
+            ("mixture4", self.tones(mixture4), 2048, 512, None, 0.01, 12, {},
+             ["float64"]),
+            ("noise", self.tones([], noise=0.3), 2048, 512, None, 0.01, 12, {},
+             ["float64", "float32"]),
+            ("a4_-18.5c_in_noise", self.tones([(self.cents(a4, -18.5), 0.5)], noise=0.02),
+             2048, 512, None, 0.01, 12, {}, ["float64"]),
+            ("a4_+21c_res0.001", tone(21.0), 2048, 512, None, 0.001, 12, {},
+             ["float64"]),
+            ("a4_+21c_res0.03", tone(21.0), 2048, 512, None, 0.03, 12, {}, ["float64"]),
+            ("a4_+21c_bpo36", tone(21.0), 2048, 512, None, 0.01, 36, {}, ["float64"]),
+            ("mixture4_threshold0.5_fmin300_fmax1000", self.tones(mixture4), 2048, 512,
+             None, 0.01, 12, {"threshold": 0.5, "fmin": 300.0, "fmax": 1000.0},
+             ["float64"]),
+            ("a4_-12c_in_noise_ref5", self.tones([(self.cents(a4, -12.0), 0.5)],
+                                                 noise=0.02),
+             2048, 512, None, 0.01, 12, {"ref": 5.0}, ["float64"]),
+            ("stereo_pooled", stereo, 2048, 512, None, 0.01, 12, {}, ["float64"]),
+            ("a4_+8.5c_fft1024_hop256", tone(8.5), 1024, 256, None, 0.01, 12, {},
+             ["float64"]),
+            ("sr16000_fft512", self.tones([(4000.0, 0.5), (self.cents(a4, 27.0), 0.3)],
+                                          n=16000, sample_rate=16000),
+             512, 128, None, 0.01, 12, {}, ["float64"]),
+            ("zeros", self.tones([], n=4096), 2048, 512, None, 0.01, 12, {},
+             ["float64"]),
+            ("power_harmonic_g3_+17c", self.tones(harmonic), 2048, 512, 2, 0.01, 12, {},
+             ["float64", "float32"]),
+            ("power_mixture4_bpo12", self.tones(mixture4), 2048, 512, 2, 0.01, 12, {},
+             ["float64"]),
+        ]
+        cases = []
+        for key, spec, fft_size, hop, power, resolution, bpo, kwargs, dtypes in cases_spec:
+            sr = spec["sample_rate"]
+            for dtype in dtypes:
+                # the audio face quantizes the audio, the spectrogram face the
+                # spectrogram
+                if power is None:
+                    y = self.quantize(self.audio(spec), dtype)
+                    S = self.stft_magnitude(y, fft_size, hop)
+                else:
+                    y = self.audio(spec)
+                    S = self.quantize(self.stft_magnitude(y, fft_size, hop) ** power,
+                                      dtype)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    if power is None:
+                        expected = librosa.estimate_tuning(
+                            y=y, sr=sr, n_fft=fft_size, hop_length=hop,
+                            resolution=resolution, bins_per_octave=bpo, **kwargs)
+                    else:
+                        expected = librosa.estimate_tuning(
+                            S=S, sr=sr, resolution=resolution,
+                            bins_per_octave=bpo, **kwargs)
+                    if np.any(S > 0):
+                        robust, margin, edge = self.assert_robust_estimate(
+                            key, S, sr, fft_size, resolution, bpo, kwargs)
+                        assert robust == expected, key
+                    else:
+                        margin, edge = None, None
+                params = {"signal": spec, "fft_size": fft_size, "hop": hop,
+                          "face": "audio" if power is None else "spectrogram",
+                          "resolution": resolution, "bins_per_octave": bpo,
+                          "sample_rate": sr, "dtype": dtype,
+                          "margin": finite_or_none(margin),
+                          "edge_margin": finite_or_none(edge)}
+                if power is not None:
+                    params["power"] = power
+                params.update(self.kwargs_params(kwargs))
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": [1], "values": [float(expected)]})
+                print(f"  {key}_{dtype}: {expected!r} margin={margin} edge={edge}")
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "piptrack", self.piptrack_cases())
+        write_suite(self.SUITE, "pitch_tuning", self.pitch_tuning_cases())
+        write_suite(self.SUITE, "estimate_tuning", self.estimate_tuning_cases())
 
 
 GENERATORS = [
@@ -4991,6 +5442,7 @@ GENERATORS = [
     DefaultsVectorGenerator,
     SynthesisVectorGenerator,
     F0VectorGenerator,
+    TuningVectorGenerator,
 ]
 
 if __name__ == "__main__":

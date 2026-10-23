@@ -87,7 +87,11 @@ module Config : sig
 
       [n_chroma] defaults to [12], one band per semitone. [tuning] shifts the
       reference pitch by that many bands ([0.] by default, A440); it is always
-      explicit and never estimated from the signal.
+      explicit and never estimated from the signal, since an estimate needs
+      the whole signal:
+      [Soundml.estimate_tuning_of_spectrogram ~bins_per_octave:n_chroma
+      ~sample_rate (Stft.power_spectrum c x)] is the one
+      [librosa.feature.chroma_stft] makes when its [tuning] is [None].
 
       [ctroct] and [octwidth] describe the octave-dominance envelope that damps
       bins far from the centre of the useful range: [ctroct] is the centre in

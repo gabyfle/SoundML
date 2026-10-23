@@ -50,9 +50,10 @@
     ({!power_spectrum}) is dtype-preserving and never exposes a complex dtype.
 
     Inverse transforms, invertible non-stationary Gabor frames, the hybrid and
-    pseudo constant-Q approximations, tuning estimation, sparsified filter
-    bases, intervals other than equal temperament and a {!Pipeline} stage for
-    the kernel are all deliberately outside this module. So is the sliced
+    pseudo constant-Q approximations, tuning estimation (a whole-signal
+    reduction, [Soundml.estimate_tuning]), sparsified filter bases, intervals
+    other than equal temperament and a {!Pipeline} stage for the kernel are
+    all deliberately outside this module. So is the sliced
     real-time constant-Q transform of Holighaus, Doerfler, Velasco & Grill
     2013: it buys low latency by analysing overlapping slices of the signal —
     a different transform with different coefficients, not a lower-latency
@@ -106,7 +107,9 @@ module Config : sig
       to [32.70319566257483] (C1); [bins_per_octave] defaults to [12], one bin
       per equal-tempered semitone. [tuning] shifts the whole ladder by that
       many bins ([0.] by default) and is always explicit — it is never
-      estimated from the signal, see {!section:parity}.
+      estimated from the signal, see {!section:parity}; estimating it needs
+      the whole signal, and [Soundml.estimate_tuning] computes the estimate
+      librosa's transforms default to.
 
       [gamma] selects the bandwidth offset and defaults to [`Constant_q].
       [filter_scale] multiplies every filter's support ([1.] by default;
@@ -449,7 +452,11 @@ end
       thrown away. librosa's default moves its own magnitudes by about
       [5e-3] of peak on music, so parity is stated against [sparsity=0].
     - {b Tuning is explicit.} [tuning] defaults to [0.] and is never estimated
-      from the signal; librosa's transforms estimate it by default. *)
+      from the signal; librosa's transforms estimate it by default, over the
+      whole signal, as
+      [Soundml.estimate_tuning (Stft.Config.create ~fft_size:2048
+      ~pad:(`Constant 0.) ()) ~bins_per_octave ~sample_rate x] does — with
+      [~bins_per_octave:36] for [librosa.feature.chroma_cqt]. *)
 
 (** {1:references References}
 

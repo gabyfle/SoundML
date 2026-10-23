@@ -221,6 +221,21 @@ let pcen = Pcen.pcen
 
 let pcen_stage = Pcen.stage
 
+(* Pitch tracking and tuning estimation: flat delegations to the private
+   [Tuning] module. *)
+
+type piptrack_reference = Tuning.reference
+
+let piptrack = Tuning.piptrack
+
+let piptrack_stage = Tuning.stage
+
+let pitch_tuning = Tuning.pitch_tuning
+
+let estimate_tuning = Tuning.estimate_tuning
+
+let estimate_tuning_of_spectrogram = Tuning.estimate_tuning_of_spectrogram
+
 (* Spectral contrast and onset strength: flat delegations to the private
    [Contrast] and [Onset] modules. *)
 

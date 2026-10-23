@@ -1,0 +1,7 @@
+(test
+ (name test_tuning)
+ (package soundml)
+ (modules tuning_goldens tuning_law test_tuning)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
