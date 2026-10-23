@@ -135,7 +135,8 @@ let mean x =
    rows share a long stretch of their spans (a block), four columns of all four
    rows over that stretch. A block's rows add their terms before the shared
    stretch alone, then the stretch together, then their terms after it alone, so
-   each output still takes its terms in ascending order. *)
+   each output still takes its terms in ascending order. An operand too narrow
+   for the eight-column groups takes a kernel of its own (see below). *)
 
 type block =
   { row: int (* the block's first row *)
@@ -577,6 +578,395 @@ let store32 (out : f32) acc ~a ~row ~width =
     Array1.unsafe_set out (row + t) (Float.Array.unsafe_get acc (a + t))
   done
 
+(* {2 Narrow operands}
+
+   An operand narrower than the eight-column groups — a streamed chunk of a
+   frame or a few — would leave the steps one chain of dependent multiply-adds
+   per output, each behind a scratch fill and closure calls. Such an operand
+   takes kernels of its own, one column at a time, which write each output
+   straight into the result, rounded once there as the stores round it. A
+   block's rows go side by side over their shared stretch as {!stretch64} takes
+   them, one sample feeding four multiply-adds; rows outside blocks go four at a
+   time too, each from its own first column, term by term for as many terms as
+   the shortest of the four spans holds, then each finishes its span alone.
+   Either way four independent chains are in flight, and each output still
+   starts from [0.] and takes its row's terms in ascending order, spelled as
+   above: its bits are the ones the steps give it.
+
+   In the kernels, a plane's operand starts at [x] and its result at [d]: column
+   [j]'s sample [c] is [src.(x + j * n + c)], and row [i]'s output [c] goes to
+   [d + i * n + c]. *)
+
+(* The narrowest operand the steps take: the width of their column groups. *)
+let narrow = 8
+
+(* A result being written, at float32 or float64. *)
+type dst = To32 of f32 | To64 of f64
+
+let[@inline] put dst i v =
+  match dst with
+  | To32 out ->
+      Array1.unsafe_set out i v
+  | To64 out ->
+      Array1.unsafe_set out i v
+
+(* The steps' [store] into [dst]. *)
+let store dst =
+  match dst with To32 out -> store32 out | To64 out -> store64 out
+
+(* Whether step [s], row [i], starts four steps of a row each. *)
+let four_rows steps s i =
+  s + 3 < Array.length steps
+  && match steps.(s + 3) with Row j -> j = i + 3 | Block _ -> false
+
+(* [alone64 mx src ~n dst ~x ~d i] and [alone32] write row [i]'s outputs. *)
+let alone64 (mx : matrix) (src : f64) ~n dst ~x ~d i =
+  let wbase = i * mx.k in
+  for c = 0 to n - 1 do
+    let x = x + c in
+    let s = ref 0. in
+    for j = mx.bounds.(2 * i) to mx.bounds.((2 * i) + 1) - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s := !s +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s
+  done
+
+let alone32 (mx : matrix) (src : f32) ~n dst ~x ~d i =
+  let wbase = i * mx.k in
+  for c = 0 to n - 1 do
+    let x = x + c in
+    let s = ref 0. in
+    for j = mx.bounds.(2 * i) to mx.bounds.((2 * i) + 1) - 1 do
+      let w = Array1.unsafe_get mx.weights (wbase + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s := !s +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s
+  done
+
+(* [rows64 mx src ~n dst ~x ~d i] and [rows32] write the outputs of rows [i] to
+   [i + 3], four steps of a row each. *)
+let rows64 (mx : matrix) (src : f64) ~n dst ~x ~d i =
+  let k = mx.k and weights = mx.weights and bounds = mx.bounds in
+  let j0 = bounds.(2 * i)
+  and j1 = bounds.((2 * i) + 2)
+  and j2 = bounds.((2 * i) + 4)
+  and j3 = bounds.((2 * i) + 6) in
+  let l0 = bounds.((2 * i) + 1) - j0
+  and l1 = bounds.((2 * i) + 3) - j1
+  and l2 = bounds.((2 * i) + 5) - j2
+  and l3 = bounds.((2 * i) + 7) - j3 in
+  let common = Int.min (Int.min l0 l1) (Int.min l2 l3) in
+  let p0 = (i * k) + j0
+  and p1 = ((i + 1) * k) + j1
+  and p2 = ((i + 2) * k) + j2
+  and p3 = ((i + 3) * k) + j3 in
+  for c = 0 to n - 1 do
+    let r0 = x + (j0 * n) + c
+    and r1 = x + (j1 * n) + c
+    and r2 = x + (j2 * n) + c
+    and r3 = x + (j3 * n) + c in
+    let s0 = ref 0. and s1 = ref 0. and s2 = ref 0. and s3 = ref 0. in
+    for t = 0 to common - 1 do
+      let r = t * n in
+      let w0 = Array1.unsafe_get weights (p0 + t)
+      and v0 = Array1.unsafe_get src (r0 + r)
+      and w1 = Array1.unsafe_get weights (p1 + t)
+      and v1 = Array1.unsafe_get src (r1 + r)
+      and w2 = Array1.unsafe_get weights (p2 + t)
+      and v2 = Array1.unsafe_get src (r2 + r)
+      and w3 = Array1.unsafe_get weights (p3 + t)
+      and v3 = Array1.unsafe_get src (r3 + r) in
+      s0 := !s0 +. (w0 *. v0) ;
+      s1 := !s1 +. (w1 *. v1) ;
+      s2 := !s2 +. (w2 *. v2) ;
+      s3 := !s3 +. (w3 *. v3)
+    done ;
+    for t = common to l0 - 1 do
+      let w = Array1.unsafe_get weights (p0 + t)
+      and v = Array1.unsafe_get src (r0 + (t * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for t = common to l1 - 1 do
+      let w = Array1.unsafe_get weights (p1 + t)
+      and v = Array1.unsafe_get src (r1 + (t * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for t = common to l2 - 1 do
+      let w = Array1.unsafe_get weights (p2 + t)
+      and v = Array1.unsafe_get src (r2 + (t * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for t = common to l3 - 1 do
+      let w = Array1.unsafe_get weights (p3 + t)
+      and v = Array1.unsafe_get src (r3 + (t * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s0 ;
+    put dst (d + ((i + 1) * n) + c) !s1 ;
+    put dst (d + ((i + 2) * n) + c) !s2 ;
+    put dst (d + ((i + 3) * n) + c) !s3
+  done
+
+let rows32 (mx : matrix) (src : f32) ~n dst ~x ~d i =
+  let k = mx.k and weights = mx.weights and bounds = mx.bounds in
+  let j0 = bounds.(2 * i)
+  and j1 = bounds.((2 * i) + 2)
+  and j2 = bounds.((2 * i) + 4)
+  and j3 = bounds.((2 * i) + 6) in
+  let l0 = bounds.((2 * i) + 1) - j0
+  and l1 = bounds.((2 * i) + 3) - j1
+  and l2 = bounds.((2 * i) + 5) - j2
+  and l3 = bounds.((2 * i) + 7) - j3 in
+  let common = Int.min (Int.min l0 l1) (Int.min l2 l3) in
+  let p0 = (i * k) + j0
+  and p1 = ((i + 1) * k) + j1
+  and p2 = ((i + 2) * k) + j2
+  and p3 = ((i + 3) * k) + j3 in
+  for c = 0 to n - 1 do
+    let r0 = x + (j0 * n) + c
+    and r1 = x + (j1 * n) + c
+    and r2 = x + (j2 * n) + c
+    and r3 = x + (j3 * n) + c in
+    let s0 = ref 0. and s1 = ref 0. and s2 = ref 0. and s3 = ref 0. in
+    for t = 0 to common - 1 do
+      let r = t * n in
+      let w0 = Array1.unsafe_get weights (p0 + t)
+      and v0 = Array1.unsafe_get src (r0 + r)
+      and w1 = Array1.unsafe_get weights (p1 + t)
+      and v1 = Array1.unsafe_get src (r1 + r)
+      and w2 = Array1.unsafe_get weights (p2 + t)
+      and v2 = Array1.unsafe_get src (r2 + r)
+      and w3 = Array1.unsafe_get weights (p3 + t)
+      and v3 = Array1.unsafe_get src (r3 + r) in
+      s0 := !s0 +. (w0 *. v0) ;
+      s1 := !s1 +. (w1 *. v1) ;
+      s2 := !s2 +. (w2 *. v2) ;
+      s3 := !s3 +. (w3 *. v3)
+    done ;
+    for t = common to l0 - 1 do
+      let w = Array1.unsafe_get weights (p0 + t)
+      and v = Array1.unsafe_get src (r0 + (t * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for t = common to l1 - 1 do
+      let w = Array1.unsafe_get weights (p1 + t)
+      and v = Array1.unsafe_get src (r1 + (t * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for t = common to l2 - 1 do
+      let w = Array1.unsafe_get weights (p2 + t)
+      and v = Array1.unsafe_get src (r2 + (t * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for t = common to l3 - 1 do
+      let w = Array1.unsafe_get weights (p3 + t)
+      and v = Array1.unsafe_get src (r3 + (t * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s0 ;
+    put dst (d + ((i + 1) * n) + c) !s1 ;
+    put dst (d + ((i + 2) * n) + c) !s2 ;
+    put dst (d + ((i + 3) * n) + c) !s3
+  done
+
+(* [block64 mx src ~n dst ~x ~d b] and [block32] write block [b]'s outputs. *)
+let block64 (mx : matrix) (src : f64) ~n dst ~x ~d b =
+  let k = mx.k and weights = mx.weights and bounds = mx.bounds and i = b.row in
+  let p0 = i * k in
+  let p1 = p0 + k in
+  let p2 = p1 + k in
+  let p3 = p2 + k in
+  for c = 0 to n - 1 do
+    let x = x + c in
+    let s0 = ref 0. and s1 = ref 0. and s2 = ref 0. and s3 = ref 0. in
+    for j = bounds.(2 * i) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p0 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 2) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p1 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 4) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p2 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 6) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p3 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    for j = b.lo to b.hi - 1 do
+      let p = 4 * (j - b.lo) in
+      let v = Array1.unsafe_get src (x + (j * n))
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s0 := !s0 +. (w0 *. v) ;
+      s1 := !s1 +. (w1 *. v) ;
+      s2 := !s2 +. (w2 *. v) ;
+      s3 := !s3 +. (w3 *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 1) - 1 do
+      let w = Array1.unsafe_get weights (p0 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 3) - 1 do
+      let w = Array1.unsafe_get weights (p1 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 5) - 1 do
+      let w = Array1.unsafe_get weights (p2 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 7) - 1 do
+      let w = Array1.unsafe_get weights (p3 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s0 ;
+    put dst (d + ((i + 1) * n) + c) !s1 ;
+    put dst (d + ((i + 2) * n) + c) !s2 ;
+    put dst (d + ((i + 3) * n) + c) !s3
+  done
+
+let block32 (mx : matrix) (src : f32) ~n dst ~x ~d b =
+  let k = mx.k and weights = mx.weights and bounds = mx.bounds and i = b.row in
+  let p0 = i * k in
+  let p1 = p0 + k in
+  let p2 = p1 + k in
+  let p3 = p2 + k in
+  for c = 0 to n - 1 do
+    let x = x + c in
+    let s0 = ref 0. and s1 = ref 0. and s2 = ref 0. and s3 = ref 0. in
+    for j = bounds.(2 * i) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p0 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 2) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p1 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 4) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p2 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for j = bounds.((2 * i) + 6) to b.lo - 1 do
+      let w = Array1.unsafe_get weights (p3 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    for j = b.lo to b.hi - 1 do
+      let p = 4 * (j - b.lo) in
+      let v = Array1.unsafe_get src (x + (j * n))
+      and w0 = Array1.unsafe_get b.packed p
+      and w1 = Array1.unsafe_get b.packed (p + 1)
+      and w2 = Array1.unsafe_get b.packed (p + 2)
+      and w3 = Array1.unsafe_get b.packed (p + 3) in
+      s0 := !s0 +. (w0 *. v) ;
+      s1 := !s1 +. (w1 *. v) ;
+      s2 := !s2 +. (w2 *. v) ;
+      s3 := !s3 +. (w3 *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 1) - 1 do
+      let w = Array1.unsafe_get weights (p0 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s0 := !s0 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 3) - 1 do
+      let w = Array1.unsafe_get weights (p1 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s1 := !s1 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 5) - 1 do
+      let w = Array1.unsafe_get weights (p2 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s2 := !s2 +. (w *. v)
+    done ;
+    for j = b.hi to bounds.((2 * i) + 7) - 1 do
+      let w = Array1.unsafe_get weights (p3 + j)
+      and v = Array1.unsafe_get src (x + (j * n)) in
+      s3 := !s3 +. (w *. v)
+    done ;
+    put dst (d + (i * n) + c) !s0 ;
+    put dst (d + ((i + 1) * n) + c) !s1 ;
+    put dst (d + ((i + 2) * n) + c) !s2 ;
+    put dst (d + ((i + 3) * n) + c) !s3
+  done
+
+(* [narrow64 mx src ~n dst o] and [narrow32] write plane [o]'s outputs of the
+   operand [src], [n < narrow] columns wide, into [dst], step by step. *)
+let narrow64 (mx : matrix) (src : f64) ~n dst o =
+  let x = o * mx.k * n and d = o * mx.m * n in
+  let steps = mx.steps in
+  let s = ref 0 in
+  while !s < Array.length steps do
+    match steps.(!s) with
+    | Block b ->
+        block64 mx src ~n dst ~x ~d b ;
+        incr s
+    | Row i when four_rows steps !s i ->
+        rows64 mx src ~n dst ~x ~d i ;
+        s := !s + 4
+    | Row i ->
+        alone64 mx src ~n dst ~x ~d i ;
+        incr s
+  done
+
+let narrow32 (mx : matrix) (src : f32) ~n dst o =
+  let x = o * mx.k * n and d = o * mx.m * n in
+  let steps = mx.steps in
+  let s = ref 0 in
+  while !s < Array.length steps do
+    match steps.(!s) with
+    | Block b ->
+        block32 mx src ~n dst ~x ~d b ;
+        incr s
+    | Row i when four_rows steps !s i ->
+        rows32 mx src ~n dst ~x ~d i ;
+        s := !s + 4
+    | Row i ->
+        alone32 mx src ~n dst ~x ~d i ;
+        incr s
+  done
+
+(* The planes of a narrow operand worth one parallel chunk. *)
+let plane_grain mx ~n =
+  Int.max 1 (grain_terms / Int.max 1 (Int.max 1 mx.terms * n))
+
+(* [project64 mx src ~outer ~n dst] and [project32] fold the operand [src] into
+   [dst]: a narrow one plane by plane, any other unit by unit. *)
+let project64 mx (src : f64) ~outer ~n dst =
+  if n < narrow then
+    Par.ranges ~n:outer ~grain:(plane_grain mx ~n) (fun lo hi ->
+        for o = lo to hi - 1 do
+          narrow64 mx src ~n dst o
+        done )
+  else
+    project_units mx ~outer ~n (span64 mx src ~n) (stretch64 src ~n) (store dst)
+
+let project32 mx (src : f32) ~outer ~n dst =
+  if n < narrow then
+    Par.ranges ~n:outer ~grain:(plane_grain mx ~n) (fun lo hi ->
+        for o = lo to hi - 1 do
+          narrow32 mx src ~n dst o
+        done )
+  else
+    project_units mx ~outer ~n (span32 mx src ~n) (stretch32 src ~n) (store dst)
+
 let check_project mx x =
   let shape, outer, k, n = geometry "project" x in
   if k <> mx.k then
@@ -589,34 +979,29 @@ let check_project mx x =
   out_shape.(Array.length shape - 2) <- mx.m ;
   (out_shape, outer, n)
 
-(* [project_into mx x store] folds [x] — read in place at float32 or float64,
-   widened to float64 otherwise — and hands each finished tile row to
-   [store]. *)
-let project_into (type a) mx (x : (float, a) Nx.t) ~outer ~n store =
+(* [project_into mx x dst] folds [x] — read in place at float32 or float64,
+   widened to float64 otherwise — into [dst]. *)
+let project_into (type a) mx (x : (float, a) Nx.t) ~outer ~n dst =
   match Nx.dtype x with
   | Nx.Float32 ->
-      Store.read32 x (fun src ->
-          project_units mx ~outer ~n (span32 mx src ~n) (stretch32 src ~n) store )
+      Store.read32 x (fun src -> project32 mx src ~outer ~n dst)
   | Nx.Float64 ->
-      Store.read64 x (fun src ->
-          project_units mx ~outer ~n (span64 mx src ~n) (stretch64 src ~n) store )
+      Store.read64 x (fun src -> project64 mx src ~outer ~n dst)
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       Store.read64 (Nx.cast Nx.float64 x) (fun src ->
-          project_units mx ~outer ~n (span64 mx src ~n) (stretch64 src ~n) store )
+          project64 mx src ~outer ~n dst )
 
 let project mx x =
   let out_shape, outer, n = check_project mx x in
-  Store.make64 out_shape (fun out -> project_into mx x ~outer ~n (store64 out))
+  Store.make64 out_shape (fun out -> project_into mx x ~outer ~n (To64 out))
 
 let project_cast (type a) mx (x : (float, a) Nx.t) : (float, a) Nx.t =
   let out_shape, outer, n = check_project mx x in
   match Nx.dtype x with
   | Nx.Float32 ->
-      Store.make32 out_shape (fun out ->
-          project_into mx x ~outer ~n (store32 out) )
+      Store.make32 out_shape (fun out -> project_into mx x ~outer ~n (To32 out))
   | Nx.Float64 ->
-      Store.make64 out_shape (fun out ->
-          project_into mx x ~outer ~n (store64 out) )
+      Store.make64 out_shape (fun out -> project_into mx x ~outer ~n (To64 out))
   | Nx.Float16 | Nx.BFloat16 | Nx.Float8_e4m3 | Nx.Float8_e5m2 ->
       Nx.cast (Nx.dtype x) (project mx x)
 
