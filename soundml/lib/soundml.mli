@@ -1564,6 +1564,248 @@ val poly_features_stage :
     chunk whose bin axis is not [Stft.Config.bins c] long, or a chunk of
     rank below two, is reported at that chunk, not at prepare time. *)
 
+(** {2:features_inverse Feature inversion}
+
+    Approximate inverses of the mel and cepstral features, as
+    [librosa.feature.inverse] computes them: a cepstrum back to its mel
+    power spectrogram, a mel spectrogram back to a linear magnitude
+    spectrogram, and either back to audio through {!Stft.griffin_lim}. *)
+
+val mfcc_to_mel :
+     Mel.Config.t
+  -> ?lifter:float
+  -> ?reference:float
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [mfcc_to_mel mel c] is the mel power spectrogram the cepstrum [c]
+    encodes, mapping [[...; n_mfcc; frames]] to [[...; n_mels; frames]] with
+    [n_mels = Mel.Config.n_mels mel] and [n_mfcc] read from [c]: the inverse
+    of {!mfcc} and {!mfcc_stage} on the same [mel], as
+    [librosa.feature.inverse.mfcc_to_mel] computes it. Each coefficient is
+    divided by its lifter weight, the orthonormal type-II DCT is inverted —
+    its transpose, the coefficients past [n_mfcc] taken as zero — and the
+    log-mel is raised back to power, [reference * 10 ** (db / 10)].
+    Leading axes broadcast, so a batch of cepstra is one call. [lifter]
+    defaults to [0.] (none) and must be the forward call's; [reference]
+    defaults to [1.], the forward log-mel's reference.
+
+    Only the first [n_mfcc] coefficients survive the forward transform, so
+    with [n_mfcc < n_mels] the result is the spectral envelope they
+    describe — the log-mel whose higher coefficients are zero — and with
+    [n_mfcc = n_mels] the exact inverse. Nothing undoes the forward
+    log-mel's [1e-10] floor or {!mfcc}'s 80 dB clamp. The inverse DCT and
+    the lifter division are one matrix, each frame folded from its own
+    coefficients in a fixed order, so a frame's bits do not depend on its
+    batch; everything is computed in double precision and rounded to the
+    dtype of [c] once, where librosa computes in the input dtype. Dividing
+    by a lifter weight near zero amplifies its coefficient accordingly; a
+    weight that vanishes, as lifter [2.]'s does at coefficient [2], is
+    refused.
+
+    Documented deviations: only the orthonormal type-II DCT {!mfcc}
+    computes is inverted (no [dct_type] or [norm]); [n_mfcc > n_mels]
+    raises where librosa's inverse DCT silently truncates; and a vanishing
+    lifter weight raises where librosa warns and divides by the smallest
+    positive normal.
+
+    Raises [Invalid_argument] if [c] has rank below two, if [n_mfcc] does
+    not lie in [\[1, n_mels\]], if [lifter] is not finite and non-negative,
+    if the lifter weight [1 + (lifter / 2) * sin (pi * (k + 1) / lifter)]
+    of a kept coefficient [k] is below [epsilon_float] in magnitude, or if
+    [reference] is not finite and positive. *)
+
+val mfcc_to_mel_stage :
+     Mel.Config.t
+  -> ?n_mfcc:int
+  -> ?lifter:float
+  -> ?reference:float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [mfcc_to_mel_stage mel ()] is {!mfcc_to_mel} as a memoryless pipeline
+    stage: rate 1:1 in frames, latency zero and format-preserving, mapping
+    [[...; n_mfcc; frames]] chunks to [[...; n_mels; frames]]; an empty
+    chunk maps to an empty chunk. [n_mfcc] defaults to [20], as for
+    {!mfcc_stage}, so [mfcc_stage mel ~n_mfcc () >> mfcc_to_mel_stage mel
+    ~n_mfcc ()] streams a cepstral round trip. Every partitioning of a
+    cepstrum yields the bits {!mfcc_to_mel} computes on the whole of it.
+
+    Raises [Invalid_argument] for the parameters as {!mfcc_to_mel} does,
+    with the stage's [n_mfcc], when the stage is built. The stream
+    {!Pipeline.Format} does not carry a coefficient count, so a chunk of
+    rank below two or whose coefficient axis is not [n_mfcc] long is
+    reported at that chunk. *)
+
+val mel_to_stft :
+  Mel.Config.t -> ?power:float -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [mel_to_stft mel m] is a non-negative linear spectrogram whose mel
+    projection through [mel] best fits the mel spectrogram [m], mapping
+    [[...; n_mels; frames]] to [[...; bins; frames]] with
+    [bins = Mel.Config.bins mel]: the counterpart of
+    [librosa.feature.inverse.mel_to_stft]. [m] is a power mel spectrogram
+    when [power] is [2.], the default, and the result is then a magnitude
+    spectrogram — the fitted spectrum raised to [1 / power] — ready for
+    {!Stft.griffin_lim}. Leading axes broadcast, so a batch of spectrograms
+    is one call.
+
+    There are fewer bands than bins, so many non-negative spectra fit a
+    frame equally well: each frame is solved on its own for one close to
+    librosa's starting point. With [A] the filterbank ({!Mel.filterbank}),
+    [b] a frame of [m] and [x0 = max 0 (A+ b)] the clipped pseudo-inverse
+    librosa starts from (singular values up to [1e-15] of the largest
+    dropped, as librosa's [scipy.linalg.pinv] call drops them), the fitted
+    spectrum is the third step of the proximal-point method from [x0]:
+
+    {[
+      x_(k+1) = argmin_(x >= 0) 1/2 |A x - b|^2 + lambda/2 |x - x_k|^2
+      lambda = 1e-9 * max_j |column j of A|^2
+    ]}
+
+    The first step is within [O (lambda)] of the non-negative
+    least-squares solution nearest [x0]; the next two remove what is left
+    of [lambda]'s pull on the fit. Each step is solved exactly, up to
+    rounding, by a generalised Newton method on its [n_mels]-dimensional
+    dual, whose Newton systems are banded since a mel filter overlaps only
+    its neighbours. Wherever no filter reaches a bin (DC and Nyquist at the
+    default bounds, and every bin outside [\[f_min, f_max\]]), the result
+    is exactly [0.]. Negative or zero entries of [m] are fitted like any
+    other; a zero frame yields the zero spectrum.
+
+    Named deviation: librosa runs scipy's L-BFGS-B from [x0] over blocks of
+    frames, each block one problem across its frames and every leading axis
+    — as many frames as fit 256 KiB of [m] (256 frames of 128 float64
+    bands, fewer in a batch) — on an objective it divides by the block's
+    size, and stops on absolute tolerances. Whether it leaves [x0] at all,
+    and where it stops, therefore depends on the absolute level of [m] and
+    on the size and content of the block: the same frames can come back as
+    [x0] at one level and be iterated on at another. The parity contract is
+    therefore:
+    - where [A+ b] is non-negative on a filterbank of full rank, the result
+      is librosa's own output, [x0], to rounding (measured, [2e-14]
+      relative). The envelopes of broadband signals tend to be such frames;
+      tonal envelopes, even the smooth ones {!mfcc_to_mel} produces from 13
+      or 20 coefficients, often reach a negative start, and the next case
+      applies. So does every frame on a rank-deficient filterbank (more
+      bands than the bins resolve, such as 128 on a 512-point FFT), where
+      the sign of [A+ b] is decided by the rounding of the smallest
+      singular values kept;
+    - elsewhere a frame's fit [1/2 |A x - b|^2] exceeds librosa's by at
+      most a relative [1e-9] (measured: [5e-11] at most on filterbanks of
+      full rank, [8e-10] on a rank-deficient one, both where L-BFGS-B
+      reaches the optimum), and is lower, often by orders of magnitude,
+      wherever L-BFGS-B stops short of it;
+    - the mel projection of the result reproduces any mel spectrogram of a
+      signal to rounding (measured, [2e-14] relative per frame). Where no
+      non-negative spectrum fits the bands, the dual grows as
+      [1 / lambda] and its image through [A^T] cancels, losing digits to
+      rounding: the optimality conditions of the fit then hold to [4e-6]
+      of the frame's scale at worst, the scale being the largest entry of
+      [|A^T b|], and the fit is within a relative [1e-9] of the optimum
+      (measured against [scipy.optimize.nnls]);
+    - the result is scale-equivariant, [mel_to_stft (c * m)] being
+      [c ** (1 / power) * mel_to_stft m] to rounding where some spectrum
+      fits the frame, and to [1e-6] of the frame's largest power where
+      none does (measured); the fitted spectrum scales bit for bit when [c]
+      is a power of two, and so does the result when [c ** (1 / power)] is
+      one too.
+    The spectrum itself is not compared outside the first case: the
+    solutions form a polytope and librosa's point in it is an artefact of
+    its stopping rule. Bins no filter reaches are exactly [0.] where
+    librosa's pseudo-inverse leaves a residue of about [1e-15] (about
+    [3e-8] after the square root).
+
+    A frame's spectrum is a function of that frame alone, computed in a
+    fixed order, so it is the same bits alone or among others, at every
+    chunking and on any number of domains; everything is computed in double
+    precision and rounded to the dtype of [m] once, where librosa builds
+    its filterbank and pseudo-inverse in the input dtype. A frame costs one
+    dense product with the pseudo-inverse, [O (bins * n_mels)], and three
+    proximal steps. A step whose start already fits stops at its first
+    gradient; any other runs some tens of Newton steps (at most about sixty
+    measured), each a banded Cholesky factorisation, [O (n_mels * w ** 2)]
+    for filters overlapping [w] neighbours, and a line search over sorted
+    breakpoints, [O (bins * log bins)]. The pseudo-inverse, a singular value
+    decomposition of the filterbank, is computed once per call.
+
+    Raises [Invalid_argument] if [power] is not finite and positive, if [m]
+    has rank below two or its mel axis is not [Mel.Config.n_mels mel] long
+    (librosa reads the band count from [m]; here it comes from [mel]), or
+    if [m] holds a NaN or infinite value. *)
+
+val mel_to_stft_stage :
+     Mel.Config.t
+  -> ?power:float
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [mel_to_stft_stage mel ()] is {!mel_to_stft} as a memoryless pipeline
+    stage: rate 1:1 in frames, latency zero and format-preserving, mapping
+    [[...; n_mels; frames]] chunks to [[...; bins; frames]]; an empty chunk
+    maps to an empty chunk. Each frame is solved on its own, with no state
+    carried between frames, so every partitioning yields the bits
+    {!mel_to_stft} computes on the whole spectrogram. The pseudo-inverse is
+    computed once, when the stage is built.
+    [mfcc_to_mel_stage mel ~n_mfcc () >> mel_to_stft_stage mel ()] streams
+    the spectral half of {!mfcc_to_audio}.
+
+    Raises [Invalid_argument] if [power] is not finite and positive, when
+    the stage is built, and, at the chunk concerned, for a chunk
+    {!mel_to_stft} would refuse. *)
+
+val mel_to_audio :
+     Stft.Config.t
+  -> Mel.Config.t
+  -> ?power:float
+  -> ?n_iter:int
+  -> ?length:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [mel_to_audio stft mel m] is a signal whose mel spectrogram on
+    [stft] and [mel] approximates [m], [[...; n_mels; frames]] to
+    [[...; samples]]: [Stft.griffin_lim ?n_iter ?length stft
+    (mel_to_stft mel ?power m)], the composition
+    [librosa.feature.inverse.mel_to_audio] computes. [power] is
+    {!mel_to_stft}'s; [n_iter] (default [32]) and [length] are
+    {!Stft.griffin_lim}'s, with its other defaults — momentum [0.99] and a
+    zero initial phase. Callers wanting another momentum or initial phase
+    compose the two functions themselves. Griffin-Lim iterates over the
+    whole signal, so there is no stage: stream the spectral half with
+    {!mel_to_stft_stage}.
+
+    Documented deviations, inherited from {!Stft.griffin_lim}: the initial
+    phase is zero and deterministic, where librosa's [mel_to_audio] starts
+    from a random phase it cannot be told to seed; the iteration runs in
+    double precision and returns the dtype of [m], where librosa rounds its
+    signal to float32 at every iteration and returns float32 whatever the
+    input; and [length] applies to the final synthesis only, where librosa
+    applies it at every iteration.
+
+    Raises [Invalid_argument] if the two configurations disagree on
+    [fft_size], naming both sizes, and for what {!mel_to_stft} and
+    {!Stft.griffin_lim} refuse — among them a non-invertible [stft],
+    [n_iter < 1] and a negative [length]. Every condition is checked
+    before the solve and reported under this function's name. *)
+
+val mfcc_to_audio :
+     Stft.Config.t
+  -> Mel.Config.t
+  -> ?lifter:float
+  -> ?reference:float
+  -> ?power:float
+  -> ?n_iter:int
+  -> ?length:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [mfcc_to_audio stft mel c] is a signal whose cepstrum approximates [c]:
+    [mel_to_audio stft mel ?power ?n_iter ?length
+    (mfcc_to_mel mel ?lifter ?reference c)], the composition
+    [librosa.feature.inverse.mfcc_to_audio] computes, with the parameters
+    and deviations of {!mfcc_to_mel} and {!mel_to_audio}.
+
+    Raises [Invalid_argument] as {!mfcc_to_mel} and {!mel_to_audio} do,
+    every condition checked before any work but one: a cepstrum whose mel
+    spectrogram holds a NaN or infinite value — a cepstrum holding a NaN,
+    or large enough for the power to overflow — is refused once
+    {!mfcc_to_mel} has computed that spectrogram. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each

@@ -263,6 +263,20 @@ let poly_features_of_spectrogram = Analysis.poly_features_of_spectrogram
 
 let poly_features_stage = Analysis.stage
 
+(* Feature inversion: flat delegations to the private [Inverse] module. *)
+
+let mfcc_to_mel = Inverse.mfcc_to_mel
+
+let mfcc_to_mel_stage = Inverse.mfcc_to_mel_stage
+
+let mel_to_stft = Inverse.mel_to_stft
+
+let mel_to_stft_stage = Inverse.mel_to_stft_stage
+
+let mel_to_audio = Inverse.mel_to_audio
+
+let mfcc_to_audio = Inverse.mfcc_to_audio
+
 (* Spectral contrast and onset strength: flat delegations to the private
    [Contrast] and [Onset] modules. *)
 

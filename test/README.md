@@ -200,6 +200,21 @@ Current suites:
   end to end from audio at even and odd FFT sizes, each coefficient measured
   against the size of the terms it sums (`err_scale`, stored per case).
   float32 cases quantize the input against a float64 reference.
+- `inverse` — the feature inversions against `librosa.feature.inverse`,
+  every input stored with its case: `mfcc_to_mel` of `librosa.feature.mfcc`
+  (13 to 40 coefficients, lifters including the negative weights of 3, a
+  reference, a batch, both element dtypes); `mel_to_stft` in the two forms
+  its parity contract takes — spectra compared on "start" cases, broadband
+  spectral envelopes whose pseudo-inverse librosa returns unchanged (the
+  generator asserts the margin of every bin and pins the bins no filter
+  reaches to zero), and fits compared on "objective" cases, where librosa's
+  L-BFGS-B iterates, where no non-negative spectrum fits, and on tonal
+  envelopes whose pseudo-inverse goes negative (asserted); and
+  `librosa.griffinlim` at `init=None` on those spectra for `mel_to_audio`
+  and `mfcc_to_audio`. The laws check the cepstral round trip,
+  re-projection and the optimality conditions of the least squares at
+  several geometries, scale equivariance, and the stages and compositions
+  bit for bit.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which
