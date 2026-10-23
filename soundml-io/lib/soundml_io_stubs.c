@@ -29,10 +29,14 @@
    bug in the OCaml bookkeeping, never a file condition.
 
    The runtime lock is released around all file I/O (open, read, write,
-   close); every pointer (bigarray data, the copied path, the SNDFILE*) is
-   extracted before the release, errno and sf_strerror are captured into C
-   locals before the lock is reacquired, and no OCaml value is touched in
-   between. No OCaml callback is reachable from any I/O path.
+   close); every pointer (bigarray data, the copied path, a memory file's
+   bytes, the SNDFILE*) is extracted before the release, errno and
+   sf_strerror are captured into C locals before the lock is reacquired, and
+   no OCaml value is touched in between. No OCaml callback is reachable from
+   any I/O path. Audio held in memory goes through the same handles: the
+   encoded bytes are copied off the OCaml heap at open and libsndfile reaches
+   them, or the sink an encode grows, through sf_open_virtual (see Memory
+   files).
 
    Decode is single-copy: a mono destination is decoded into directly, one
    sf_readf call over the whole extent the caller's destination already
@@ -58,10 +62,11 @@
    decode of a seekable, exactly-seekable format is split into W <= 4
    contiguous frame extents: the workers take the leading ones through
    duplicate decoders — sf_open_virtual over one shared descriptor, each with
-   its own read cursor and pread — and the calling handle takes the last, so
-   it ends the call at EOF exactly as the sequential decode leaves it. A
-   planar write interleaves the next block while libsndfile encodes the
-   current one. Both are opportunistic: no worker, no descriptor, a format
+   its own read cursor and pread, or over a memory handle's own copy with
+   memcpy — and the calling handle takes the last, so it ends the call at EOF
+   exactly as the sequential decode leaves it. A planar write interleaves the
+   next block while libsndfile encodes the current one. Both are
+   opportunistic: no worker, no descriptor, a format
    outside the whitelist, a chunked (non-whole-file) request, or any anomaly
    mid-flight and the call runs the sequential body over the full request, so
    every short-read, error and position semantic is the sequential code's.
@@ -160,6 +165,145 @@ static int soundml_io_classify_errno(int err) {
   }
 }
 
+/* {1 Memory files}
+
+   A byte buffer libsndfile reaches through sf_open_virtual, with the
+   lseek(2)/read(2)/write(2) semantics the containers are written against:
+   seek returns the new absolute position and may land past the end (a read
+   there delivers nothing, a write there zero-fills the gap the way a file
+   hole reads back), a negative or overflowing target is refused with -1 and
+   leaves the cursor where it was, counts are bytes and short counts are
+   honest. get_filelen is the extent held, not the cursor: WAV, AIFF and CAF
+   read it back when they rewrite their header at sf_close, as FLAC rewrites
+   STREAMINFO through the same seek. sf_open_virtual refuses a table only
+   for the slots the open asks for — get_filelen, read on a read open, write
+   on a write open, seek and tell when the caller's SF_INFO claims seekable
+   (sndfile.c:474-497 in 1.2.2) — while the psf_f* wrappers every container
+   reads and writes through call any slot unchecked (file_io.c), so both
+   tables below fill all five.
+
+   A source holds an encoded stream copied off the OCaml heap at open, while
+   the runtime lock is still held: that memcpy is the only read of the OCaml
+   string, which can move once the lock is released (a minor collection
+   another domain forces, the compactor) and need not outlive the call. A
+   non-moving bigarray would avoid the copy but tie every later decode to
+   the caller's buffer, its lifetime and its mutations; the copy makes the
+   handle self-contained. A source is immutable from then on — its table
+   refuses writes, which libsndfile never issues on a read handle anyway —
+   so a parallel decode's duplicates read it without a lock.
+
+   A sink starts empty and grows geometrically, overflow-checked and bounded.
+   A growth that fails is latched in [failed] and every later write refused:
+   libsndfile sees a short write, and the close stub turns the latch into an
+   error even when libsndfile reported none, so a truncated encode never
+   reads as a success.
+
+   The structure lives in the handle's malloc'd state, never in the custom
+   block: libsndfile keeps the user-data pointer for the SNDFILE's whole life
+   and a custom block can move. Virtual I/O has no close callback and
+   libsndfile frees none of this; soundml_io_state_free closes the SNDFILE
+   first — a sink's close writes through these callbacks — and only then
+   frees the bytes. */
+
+typedef struct {
+  unsigned char *data;
+  sf_count_t len; /* bytes held: the file's length */
+  sf_count_t cap; /* bytes allocated */
+  sf_count_t pos; /* the cursor, possibly past [len] */
+  int failed;     /* a sink growth failed; every later write is refused */
+} soundml_io_mfile;
+
+/* A sink's first allocation, and its bound (the staging bound of
+   soundml_io_staging). */
+#define SOUNDML_IO_SINK_FIRST ((sf_count_t) 65536)
+#define SOUNDML_IO_SINK_MAX ((sf_count_t) (SIZE_MAX / 4))
+
+static sf_count_t soundml_io_mfile_len(void *user) {
+  return ((soundml_io_mfile *) user)->len;
+}
+
+static sf_count_t soundml_io_mfile_seek(sf_count_t offset, int whence,
+                                        void *user) {
+  soundml_io_mfile *m = user;
+  sf_count_t base, pos;
+  switch (whence) {
+    case SEEK_SET:
+      base = 0;
+      break;
+    case SEEK_CUR:
+      base = m->pos;
+      break;
+    case SEEK_END:
+      base = m->len;
+      break;
+    default:
+      return -1;
+  }
+  if (__builtin_add_overflow(base, offset, &pos) || pos < 0) return -1;
+  m->pos = pos;
+  return pos;
+}
+
+static sf_count_t soundml_io_mfile_read(void *ptr, sf_count_t count,
+                                        void *user) {
+  soundml_io_mfile *m = user;
+  if (count <= 0 || m->pos >= m->len) return 0;
+  if (count > m->len - m->pos) count = m->len - m->pos;
+  memcpy(ptr, m->data + m->pos, (size_t) count);
+  m->pos += count;
+  return count;
+}
+
+static sf_count_t soundml_io_mfile_refuse(const void *ptr, sf_count_t count,
+                                          void *user) {
+  (void) ptr;
+  (void) count;
+  (void) user;
+  return 0;
+}
+
+static sf_count_t soundml_io_mfile_write(const void *ptr, sf_count_t count,
+                                         void *user) {
+  soundml_io_mfile *m = user;
+  sf_count_t end;
+  if (count <= 0 || m->failed) return 0;
+  if (__builtin_add_overflow(m->pos, count, &end) ||
+      end > SOUNDML_IO_SINK_MAX) {
+    m->failed = 1;
+    return 0;
+  }
+  if (end > m->cap) {
+    sf_count_t cap = m->cap < SOUNDML_IO_SINK_FIRST ? SOUNDML_IO_SINK_FIRST
+                                                    : m->cap;
+    while (cap < end)
+      cap = cap > SOUNDML_IO_SINK_MAX / 2 ? SOUNDML_IO_SINK_MAX : cap * 2;
+    unsigned char *grown = realloc(m->data, (size_t) cap);
+    if (grown == NULL) {
+      m->failed = 1;
+      return 0;
+    }
+    m->data = grown;
+    m->cap = cap;
+  }
+  if (m->pos > m->len) memset(m->data + m->len, 0, (size_t) (m->pos - m->len));
+  memcpy(m->data + m->pos, ptr, (size_t) count);
+  m->pos = end;
+  if (end > m->len) m->len = end;
+  return count;
+}
+
+static sf_count_t soundml_io_mfile_tell(void *user) {
+  return ((soundml_io_mfile *) user)->pos;
+}
+
+static SF_VIRTUAL_IO soundml_io_source_io = {
+    soundml_io_mfile_len, soundml_io_mfile_seek, soundml_io_mfile_read,
+    soundml_io_mfile_refuse, soundml_io_mfile_tell};
+
+static SF_VIRTUAL_IO soundml_io_sink_io = {
+    soundml_io_mfile_len, soundml_io_mfile_seek, soundml_io_mfile_read,
+    soundml_io_mfile_write, soundml_io_mfile_tell};
+
 /* {1 The handle}
 
    A custom block owning one pointer, to the open file's state off the OCaml
@@ -171,8 +315,10 @@ static int soundml_io_classify_errno(int err) {
    Besides the SNDFILE*, a read handle records what a parallel decode needs to
    reach the same bytes through a second decoder: the file's path (this
    structure's own malloc'd copy, so a worker can use it with the runtime lock
-   released), the frame count the header advertises, the format word and the
-   seekable flag. A write handle holds NULL and zeroes. */
+   released) or, for a memory handle, the memory file the state embeds; the
+   frame count the header advertises, the format word and the seekable flag.
+   A write handle holds NULL and zeroes, and a memory write handle the sink it
+   grows. A path handle's memory file is empty. */
 
 typedef struct {
   SNDFILE *file;
@@ -180,6 +326,7 @@ typedef struct {
   int64_t frames;
   int format;
   int seekable;
+  soundml_io_mfile mem;
 } soundml_io_state;
 
 typedef struct {
@@ -189,12 +336,16 @@ typedef struct {
 #define Handle_val(v) ((soundml_io_handle *) Data_custom_val(v))
 #define State_val(v) (Handle_val(v)->state)
 
+/* The one release point of a state, reached from every path (failed open,
+   eager close, the finalizer). The order is load-bearing: a memory sink's
+   sf_close writes its header through [mem], so the bytes go only after it. */
 static void soundml_io_state_free(soundml_io_state *s) {
   if (s == NULL) return;
   if (s->file != NULL) {
     sf_close(s->file);
     s->file = NULL;
   }
+  free(s->mem.data);
   free(s->path);
   free(s);
 }
@@ -217,6 +368,7 @@ static soundml_io_state *soundml_io_state_alloc(SNDFILE *file, const char *path,
   s->frames = frames;
   s->format = format;
   s->seekable = seekable;
+  memset(&s->mem, 0, sizeof s->mem);
   return s;
 }
 
@@ -259,9 +411,57 @@ static value soundml_io_outcome(int64_t count, int err, const char *details) {
 
 /* {1 Opening} */
 
+/* sf_count_t is int64; saturate the (malformed-header) tail that a 63-bit
+   OCaml int cannot carry — the OCaml allocation guard rejects any such claim
+   against the file's byte size anyway. */
+static int64_t soundml_io_frames(sf_count_t count) {
+  int64_t frames = (int64_t) count;
+  if (frames < 0) frames = 0;
+  if (frames > (((int64_t) 1 << 62) - 1)) frames = ((int64_t) 1 << 62) - 1;
+  return frames;
+}
+
+/* The [Ok (handle, frames, channels, rate, format, seekable)] payload of a
+   read open; the handle takes [state] over. [mem] is the off-heap size
+   charged to the GC for it: a memory reader reports its copy
+   (caml_alloc_custom_mem) so that a leaked reader pinning a large one is
+   collected under the pressure it actually exerts. A memory handle its face
+   closes before returning (info, read, fold) reports nothing, like a path
+   handle: its copy is freed before the GC could reclaim it, and charging it
+   anyway would pace major collections against memory no longer held. */
+static value soundml_io_read_payload(soundml_io_state *state,
+                                     const SF_INFO *info, mlsize_t mem) {
+  CAMLparam0();
+  CAMLlocal3(v_res, v_payload, v_handle);
+  v_handle = (mem == 0) ? caml_alloc_custom(&soundml_io_handle_ops,
+                                            sizeof(soundml_io_handle), 0, 1)
+                        : caml_alloc_custom_mem(&soundml_io_handle_ops,
+                                                sizeof(soundml_io_handle), mem);
+  Handle_val(v_handle)->state = state;
+  v_payload = caml_alloc_tuple(6);
+  Store_field(v_payload, 0, v_handle);
+  Store_field(v_payload, 1, Val_long((intnat) state->frames));
+  Store_field(v_payload, 2, Val_long(info->channels));
+  Store_field(v_payload, 3, Val_long(info->samplerate));
+  Store_field(v_payload, 4, Val_long(info->format));
+  Store_field(v_payload, 5, Val_bool(info->seekable));
+  v_res = caml_alloc(1, 0);
+  Store_field(v_res, 0, v_payload);
+  CAMLreturn(v_res);
+}
+
+/* Float data into a PCM subtype saturates at full scale rather than wrapping
+   (python-soundfile's behavior, pinned by the clipping golden). */
+static void soundml_io_set_clipping(SNDFILE *file, int format) {
+  int subtype = format & SF_FORMAT_SUBMASK;
+  if (subtype == SF_FORMAT_PCM_S8 || subtype == SF_FORMAT_PCM_U8 ||
+      subtype == SF_FORMAT_PCM_16 || subtype == SF_FORMAT_PCM_24 ||
+      subtype == SF_FORMAT_PCM_32)
+    sf_command(file, SFC_SET_CLIPPING, NULL, SF_TRUE);
+}
+
 CAMLprim value soundml_io_open_read(value v_path) {
   CAMLparam1(v_path);
-  CAMLlocal3(v_res, v_payload, v_handle);
   char *path = caml_stat_strdup(String_val(v_path));
   SF_INFO info;
   memset(&info, 0, sizeof info);
@@ -289,15 +489,10 @@ CAMLprim value soundml_io_open_read(value v_path) {
 
   if (file == NULL) CAMLreturn(soundml_io_error(fs, sf_err, details));
 
-  /* sf_count_t is int64; saturate the (malformed-header) tail that a 63-bit
-     OCaml int cannot carry — the OCaml allocation guard rejects any such
-     claim against the file's byte size anyway. */
-  int64_t frames = (int64_t) info.frames;
-  if (frames < 0) frames = 0;
-  if (frames > (((int64_t) 1 << 62) - 1)) frames = ((int64_t) 1 << 62) - 1;
-
-  soundml_io_state *state = soundml_io_state_alloc(
-      file, String_val(v_path), frames, info.format, info.seekable);
+  soundml_io_state *state =
+      soundml_io_state_alloc(file, String_val(v_path),
+                             soundml_io_frames(info.frames), info.format,
+                             info.seekable);
   if (state == NULL) {
     caml_release_runtime_system();
     sf_close(file);
@@ -305,19 +500,7 @@ CAMLprim value soundml_io_open_read(value v_path) {
     CAMLreturn(soundml_io_error(SOUNDML_IO_FS_OTHER, 0, "out of memory"));
   }
 
-  v_handle =
-      caml_alloc_custom(&soundml_io_handle_ops, sizeof(soundml_io_handle), 0, 1);
-  Handle_val(v_handle)->state = state;
-  v_payload = caml_alloc_tuple(6);
-  Store_field(v_payload, 0, v_handle);
-  Store_field(v_payload, 1, Val_long((intnat) frames));
-  Store_field(v_payload, 2, Val_long(info.channels));
-  Store_field(v_payload, 3, Val_long(info.samplerate));
-  Store_field(v_payload, 4, Val_long(info.format));
-  Store_field(v_payload, 5, Val_bool(info.seekable));
-  v_res = caml_alloc(1, 0);
-  Store_field(v_res, 0, v_payload);
-  CAMLreturn(v_res);
+  CAMLreturn(soundml_io_read_payload(state, &info, 0));
 }
 
 CAMLprim value soundml_io_open_write(value v_path, value v_format,
@@ -359,13 +542,7 @@ CAMLprim value soundml_io_open_write(value v_path, value v_format,
       fs = soundml_io_classify_errno(errno);
     }
   } else {
-    /* Float data into a PCM subtype saturates at full scale rather than
-       wrapping (python-soundfile's behavior, pinned by the clipping golden). */
-    int subtype = info.format & SF_FORMAT_SUBMASK;
-    if (subtype == SF_FORMAT_PCM_S8 || subtype == SF_FORMAT_PCM_U8 ||
-        subtype == SF_FORMAT_PCM_16 || subtype == SF_FORMAT_PCM_24 ||
-        subtype == SF_FORMAT_PCM_32)
-      sf_command(file, SFC_SET_CLIPPING, NULL, SF_TRUE);
+    soundml_io_set_clipping(file, info.format);
   }
   caml_acquire_runtime_system();
   caml_stat_free(path);
@@ -380,6 +557,122 @@ CAMLprim value soundml_io_open_write(value v_path, value v_format,
     CAMLreturn(soundml_io_error(SOUNDML_IO_FS_OTHER, 0, "out of memory"));
   }
 
+  v_handle =
+      caml_alloc_custom(&soundml_io_handle_ops, sizeof(soundml_io_handle), 0, 1);
+  Handle_val(v_handle)->state = state;
+  v_res = caml_alloc(1, 0);
+  Store_field(v_res, 0, v_handle);
+  CAMLreturn(v_res);
+}
+
+/* {2 Encoded bytes}
+
+   The memory faces open over a memory file instead of a path. The state, and
+   the memory file inside it, exist before the open, because libsndfile keeps
+   the user-data pointer from sf_open_virtual on; a source's bytes are copied
+   in before the runtime lock is released (see Memory files). sf_open_virtual
+   runs the same psf_open_file as sf_open and writes the same failed-open
+   global, so the open and its error capture take the same mutex. These stubs
+   probe no filesystem: a failed open reports libsndfile's verdict alone
+   (FS_NONE), the verdict a readable path gets. libsndfile itself still may.
+   Bytes whose header names no container go to its SD2 resource-fork
+   fallback (try_resource_fork, sndfile.c:2906), which with virtual I/O's
+   empty name and directory opens "._" and ".AppleDouble/" relative to the
+   process's current directory (psf_open_rsrc, file_io.c:156-214), and then
+   to its extension fallback (format_from_extension), which sees the empty
+   name and finds nothing. Neither can be switched off; the OCaml interface
+   documents both. Every failure frees the state, and with it the copy,
+   before returning.
+
+   [v_retained] says whether the handle outlives the OCaml call that opens it
+   — true for a reader, false for the faces that close it before returning —
+   and only a retained handle charges its copy to the GC (see
+   soundml_io_read_payload). */
+
+CAMLprim value soundml_io_open_read_memory(value v_data, value v_retained) {
+  CAMLparam2(v_data, v_retained);
+  const mlsize_t n = caml_string_length(v_data);
+  SF_INFO info;
+  memset(&info, 0, sizeof info);
+  SNDFILE *file;
+  int sf_err = 0;
+  char details[256] = {0};
+
+  soundml_io_state *state = soundml_io_state_alloc(NULL, NULL, 0, 0, 0);
+  if (state != NULL) {
+    state->mem.data = malloc(n > 0 ? n : 1);
+    if (state->mem.data == NULL) {
+      soundml_io_state_free(state);
+      state = NULL;
+    }
+  }
+  if (state == NULL)
+    CAMLreturn(soundml_io_error(SOUNDML_IO_FS_OTHER, 0, "out of memory"));
+  /* The only read of the OCaml string, with the runtime lock held. */
+  memcpy(state->mem.data, String_val(v_data), n);
+  state->mem.len = (sf_count_t) n;
+  state->mem.cap = (sf_count_t) n;
+
+  caml_release_runtime_system();
+  pthread_mutex_lock(&soundml_io_open_mutex);
+  file = sf_open_virtual(&soundml_io_source_io, SFM_READ, &info, &state->mem);
+  if (file == NULL) {
+    sf_err = sf_error(NULL);
+    snprintf(details, sizeof details, "%s", sf_strerror(NULL));
+  }
+  pthread_mutex_unlock(&soundml_io_open_mutex);
+  caml_acquire_runtime_system();
+
+  if (file == NULL) {
+    soundml_io_state_free(state);
+    CAMLreturn(soundml_io_error(SOUNDML_IO_FS_NONE, sf_err, details));
+  }
+
+  state->file = file;
+  state->frames = soundml_io_frames(info.frames);
+  state->format = info.format;
+  state->seekable = info.seekable;
+  CAMLreturn(
+      soundml_io_read_payload(state, &info, Bool_val(v_retained) ? n : 0));
+}
+
+CAMLprim value soundml_io_open_write_memory(value v_format, value v_channels,
+                                            value v_rate) {
+  CAMLparam3(v_format, v_channels, v_rate);
+  CAMLlocal2(v_res, v_handle);
+  SF_INFO info;
+  memset(&info, 0, sizeof info);
+  info.samplerate = Int_val(v_rate);
+  info.channels = Int_val(v_channels);
+  info.format = Int_val(v_format);
+
+  if (!sf_format_check(&info))
+    CAMLreturn(soundml_io_error(SOUNDML_IO_FS_REFUSED, 0, ""));
+
+  SNDFILE *file;
+  int sf_err = 0;
+  char details[256] = {0};
+  soundml_io_state *state = soundml_io_state_alloc(NULL, NULL, 0, 0, 0);
+  if (state == NULL)
+    CAMLreturn(soundml_io_error(SOUNDML_IO_FS_OTHER, 0, "out of memory"));
+
+  caml_release_runtime_system();
+  pthread_mutex_lock(&soundml_io_open_mutex);
+  file = sf_open_virtual(&soundml_io_sink_io, SFM_WRITE, &info, &state->mem);
+  if (file == NULL) {
+    sf_err = sf_error(NULL);
+    snprintf(details, sizeof details, "%s", sf_strerror(NULL));
+  }
+  pthread_mutex_unlock(&soundml_io_open_mutex);
+  if (file != NULL) soundml_io_set_clipping(file, info.format);
+  caml_acquire_runtime_system();
+
+  if (file == NULL) {
+    soundml_io_state_free(state);
+    CAMLreturn(soundml_io_error(SOUNDML_IO_FS_NONE, sf_err, details));
+  }
+
+  state->file = file;
   v_handle =
       caml_alloc_custom(&soundml_io_handle_ops, sizeof(soundml_io_handle), 0, 1);
   Handle_val(v_handle)->state = state;
@@ -643,11 +936,15 @@ static void soundml_io_join(soundml_io_slot *s) {
    this structure and reads with pread, which neither moves nor consults the
    descriptor's own offset, so duplicates are independent without a descriptor
    each. Opening this way costs a header parse rather than a second path
-   resolution. Writing is refused — these handles are read-only by
-   construction. */
+   resolution. A memory handle needs no descriptor: its duplicates read the
+   handle's own copy with memcpy ([mem] set, [fd] unused), which is immutable
+   for the handle's life (see Memory files) and which the handle — a root for
+   the whole read stub — keeps alive until every worker has joined. Writing is
+   refused — these handles are read-only by construction. */
 
 typedef struct {
   int fd;
+  const unsigned char *mem; /* a memory handle's bytes, or NULL */
   sf_count_t pos, len;
 } soundml_io_vfile;
 
@@ -681,6 +978,11 @@ static sf_count_t soundml_io_vio_read(void *ptr, sf_count_t count, void *user) {
   if (count <= 0) return 0;
   if (count > v->len - v->pos) count = v->len - v->pos;
   if (count <= 0) return 0;
+  if (v->mem != NULL) {
+    memcpy(ptr, v->mem + v->pos, (size_t) count);
+    v->pos += count;
+    return count;
+  }
   ssize_t got = pread(v->fd, ptr, (size_t) count, (off_t) v->pos);
   if (got <= 0) return 0;
   v->pos += got;
@@ -957,10 +1259,10 @@ static int64_t soundml_io_read_body(SNDFILE *file, void *data, int kind,
 /* {1 Extent decoding}
 
    One contiguous frame range of a whole-file decode, carried out by a
-   duplicate decoder over the shared descriptor and laid into the caller's
-   destination by the same kernels the sequential body uses. The extents of a
-   split partition the request, so the destination regions written here are
-   disjoint and every one of them is written exactly once.
+   duplicate decoder over the shared descriptor (or memory copy) and laid into
+   the caller's destination by the same kernels the sequential body uses. The
+   extents of a split partition the request, so the destination regions
+   written here are disjoint and every one of them is written exactly once.
 
    [ok] is set only when the duplicate agreed with the original about the
    file's geometry, seeked exactly, delivered the full extent and reported no
@@ -968,6 +1270,7 @@ static int64_t soundml_io_read_body(SNDFILE *file, void *data, int kind,
 
 typedef struct {
   int fd;
+  const unsigned char *mem;
   int64_t file_bytes;
   int64_t adv_frames;
   int64_t start, count;
@@ -987,6 +1290,7 @@ static void soundml_io_extent_decode(void *arg) {
 
   e->ok = 0;
   vf.fd = e->fd;
+  vf.mem = e->mem;
   vf.pos = 0;
   vf.len = e->file_bytes;
   memset(&info, 0, sizeof info);
@@ -1029,8 +1333,10 @@ static void soundml_io_extent_decode(void *arg) {
    in full, and then [*out_done] is [frames]. A 0 return means nothing about
    the destination can be assumed and the caller must run its sequential body
    over the whole request — which is what makes every partial, truncated and
-   error outcome the sequential code's to define. */
+   error outcome the sequential code's to define. The bytes are reached
+   through [path] or, for a memory handle, [mem] ([mem_len] bytes). */
 static int soundml_io_read_split(SNDFILE *file, const char *path,
+                                 const unsigned char *mem, int64_t mem_len,
                                  int64_t adv_frames, void *data, int kind,
                                  int mode, int64_t off, int64_t total,
                                  int64_t frames, int64_t channels, size_t elt,
@@ -1040,8 +1346,8 @@ static int soundml_io_read_split(SNDFILE *file, const char *path,
   soundml_io_extent extent[SOUNDML_IO_POOL_SLOTS];
   void *stage[SOUNDML_IO_POOL_SLOTS];
   struct stat st;
-  int64_t per, last_start, last_count, done = 0;
-  int workers, i, fd, ok = 0;
+  int64_t per, last_start, last_count, file_bytes, done = 0;
+  int workers, i, fd = -1, ok = 0;
 
   if (sf_seek(file, 0, SEEK_CUR) != 0) return 0;
 
@@ -1050,9 +1356,15 @@ static int soundml_io_read_split(SNDFILE *file, const char *path,
   width = workers + 1;
 
   for (i = 0; i < workers; i++) stage[i] = NULL;
-  fd = open(path, O_RDONLY | O_CLOEXEC);
-  if (fd < 0) goto done;
-  if (fstat(fd, &st) != 0 || st.st_size <= 0) goto done;
+  if (mem != NULL) {
+    file_bytes = mem_len;
+  } else {
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) goto done;
+    if (fstat(fd, &st) != 0) goto done;
+    file_bytes = (int64_t) st.st_size;
+  }
+  if (file_bytes <= 0) goto done;
 
   if (mode != SOUNDML_IO_MODE_DIRECT) {
     for (i = 0; i < workers; i++) {
@@ -1071,7 +1383,8 @@ static int soundml_io_read_split(SNDFILE *file, const char *path,
 
   for (i = 0; i < workers; i++) {
     extent[i].fd = fd;
-    extent[i].file_bytes = (int64_t) st.st_size;
+    extent[i].mem = mem;
+    extent[i].file_bytes = file_bytes;
     extent[i].adv_frames = adv_frames;
     extent[i].start = per * i;
     extent[i].count = per;
@@ -1203,29 +1516,33 @@ CAMLprim value soundml_io_readf(value v_handle, value v_ba, value v_mode,
 
 #ifdef SOUNDML_IO_PARALLEL
   /* The custom block can move once the runtime lock is released, so the
-     split's inputs are read out of it here; the path is a malloc'd copy the
-     handle owns for its whole life, stable to dereference either side of the
-     release. A split covers a whole-file decode: the request must fill the
-     destination from its first frame and span exactly the frames the header
-     advertises, and the handle must still be at the file's start (checked in
-     the split itself). A chunked read qualifies only when its one chunk is
-     the whole file; a downmix never does, and neither does any request that
-     leaves frames behind for a later call. */
+     split's inputs are read out of it here; the path and a memory handle's
+     bytes are malloc'd memory the handle owns for its whole life, stable to
+     dereference either side of the release. A split covers a whole-file
+     decode: the request must fill the destination from its first frame and
+     span exactly the frames the header advertises, and the handle must still
+     be at the file's start (checked in the split itself). A chunked read
+     qualifies only when its one chunk is the whole file; a downmix never
+     does, and neither does any request that leaves frames behind for a later
+     call. */
   const soundml_io_state *st = State_val(v_handle);
   const char *par_path = st->path;
+  const unsigned char *par_mem = st->mem.data;
+  const int64_t par_mem_len = st->mem.len;
   const int64_t par_frames = st->frames;
   int par_width = 1;
-  if (mode != SOUNDML_IO_MODE_DOWNMIX && st->seekable && par_path != NULL &&
-      off == 0 && par_frames > 0 && frames == par_frames)
+  if (mode != SOUNDML_IO_MODE_DOWNMIX && st->seekable &&
+      (par_path != NULL || par_mem != NULL) && off == 0 && par_frames > 0 &&
+      frames == par_frames)
     par_width = soundml_io_split_plan(st->format, frames, channels);
 #endif
 
   caml_release_runtime_system();
 #ifdef SOUNDML_IO_PARALLEL
   if (par_width < 2 ||
-      !soundml_io_read_split(file, par_path, par_frames, data, kind, mode, off,
-                             total, frames, channels, elt, staging, block,
-                             par_width, &done))
+      !soundml_io_read_split(file, par_path, par_mem, par_mem_len, par_frames,
+                             data, kind, mode, off, total, frames, channels,
+                             elt, staging, block, par_width, &done))
 #endif
     done = soundml_io_read_body(file, data, kind, mode, off, total, frames,
                                 channels, staging, block);
@@ -1355,6 +1672,56 @@ CAMLprim value soundml_io_close(value v_handle) {
   v_res = caml_alloc_tuple(2);
   Store_field(v_res, 0, Val_int(err));
   Store_field(v_res, 1, caml_copy_string(details));
+  CAMLreturn(v_res);
+}
+
+/* Closing a memory sink is where its bytes become final: WAV, AIFF and CAF
+   rewrite their header and FLAC its STREAMINFO inside sf_close, through the
+   sink. The SNDFILE* is detached before the release, as above, but the state
+   — and the bytes with it — stays attached to the handle until the result
+   string exists, so an allocation failure there leaves the buffer to the
+   finalizer instead of leaking it; the handle is re-read after that
+   allocation, the custom block having possibly moved. A growth failure
+   latched in the sink fails the close even when libsndfile reported nothing
+   (SOUNDML_IO_ERR_STAGING): libsndfile does not reliably turn a short
+   virtual write into an error, and a truncated encode must never be
+   returned as the stream. Returns [(err, details, bytes)], [bytes] empty on
+   error. */
+CAMLprim value soundml_io_close_memory(value v_handle) {
+  CAMLparam1(v_handle);
+  CAMLlocal2(v_res, v_bytes);
+  soundml_io_state *state = State_val(v_handle);
+  if (state == NULL || state->file == NULL)
+    caml_failwith("soundml_io: handle used after close");
+  SNDFILE *file = state->file;
+  int err;
+  char details[256] = {0};
+
+  state->file = NULL;
+  caml_release_runtime_system();
+  err = sf_close(file);
+  if (err != 0) {
+    const char *msg = sf_error_number(err);
+    snprintf(details, sizeof details, "%s", msg == NULL ? "" : msg);
+  }
+  caml_acquire_runtime_system();
+  if (err == 0 && state->mem.failed) {
+    err = SOUNDML_IO_ERR_STAGING;
+    snprintf(details, sizeof details,
+             "out of memory: the encoded stream outgrew the allocator");
+  }
+
+  if (err == 0 && state->mem.len > 0)
+    v_bytes = caml_alloc_initialized_string((mlsize_t) state->mem.len,
+                                            (const char *) state->mem.data);
+  else
+    v_bytes = caml_alloc_string(0);
+  Handle_val(v_handle)->state = NULL;
+  soundml_io_state_free(state);
+  v_res = caml_alloc_tuple(3);
+  Store_field(v_res, 0, Val_int(err));
+  Store_field(v_res, 1, caml_copy_string(details));
+  Store_field(v_res, 2, v_bytes);
   CAMLreturn(v_res);
 }
 
