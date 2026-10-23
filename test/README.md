@@ -85,6 +85,18 @@ Current suites:
   `librosa.onset.onset_strength` end-to-end on its default log-power-mel
   chain (lags 1-3, centered and left alignment, degenerate short signals,
   the >80 dB envelope), both element dtypes.
+- `onset_detect` — `librosa.util.peak_pick` (greedy, `dp_count` and
+  `dp_value`) over hand-made signals with plateaus, ties, NaN and
+  infinities and over LCG signals under ten parameter sets, also streamed
+  through `peak_pick_stage`; `librosa.onset.onset_backtrack`; and
+  `librosa.onset.onset_detect` from stored envelopes (normalised or not,
+  derived and explicit windows, both backtracking curves, the early exits)
+  and end to end from audio rebuilt in OCaml (clicks, tone bursts, noise
+  bursts, a mixture) at librosa's own analysis and a 16 kHz one. Every
+  value is a frame index compared exactly: from an envelope SoundML runs the
+  reference's float64 arithmetic term for term, and from audio the
+  generator keeps every decision a margin from flipping that covers the
+  measured envelope agreement, both element dtypes.
 - `hpss` — `librosa.decompose.hpss` over a deterministic magnitude
   spectrogram (harmonic ridges, percussive columns, an LCG noise floor and a
   silent band driving the denormal branch of the mask) across the

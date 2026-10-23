@@ -1270,6 +1270,284 @@ val onset_strength_stage :
 
     Raises [Invalid_argument] if [lag < 1]. *)
 
+(** {2:features_onsets Onset detection}
+
+    Onsets picked from an onset strength envelope: the peak picker of
+    librosa's onset detector with its {!Pipeline} stage, the detector itself
+    on audio or on an envelope, and the backtracking that moves each onset
+    back to the energy minimum before it.
+
+    The rule is Dixon's ({e Onset detection revisited}, DAFx 2006, section
+    2.6) in the parameterisation of Böck, Krebs and Schedl ({e Evaluating
+    the online capabilities of onset detection methods}, ISMIR 2012,
+    section 2.3.4): a frame is an onset when it is a local maximum, stands
+    far enough above a local mean, and comes far enough after the previous
+    onset.
+
+    Results are frame indices, ascending, as [int] arrays. Frame [f] starts
+    at sample [f * hop], and {!Convert.frames_to_time} gives seconds:
+    [Convert.frames_to_time ~sample_rate ~hop
+       (Nx.create Nx.float64 [|k|] (Array.map Float.of_int onsets))].
+    A list of frames belongs to one signal, so each function reads one
+    signal along its last axis: a rank-one [[frames]], or any shape whose
+    leading axes all have size [1], such as the [[1; frames]] envelope of
+    [[1; samples]] audio. A batch is picked signal by signal, as in librosa,
+    whose index results refuse every envelope of rank above one.
+
+    Only the greedy picker streams. The detector's normalisation divides by
+    the maximum of the whole envelope, which Böck et al. (section 2.3.1)
+    rule out online; the dynamic-programming selections run a backward pass
+    over the whole envelope; and backtracking defaults to the normalised
+    envelope. Those are offline, with no stage. *)
+
+(** How {!peak_pick} chooses among the candidates — the frames that are
+    local maxima clearing the threshold — so that no two peaks lie within
+    [wait] frames of each other:
+    - [`Greedy] (librosa's ['greedy'], the default) scans forward and keeps
+      every candidate more than [wait] frames after the last one kept;
+    - [`Dp_count] (['dp_count']) keeps, by dynamic programming, a set of
+      candidates spaced more than [wait] frames apart with the most peaks;
+    - [`Dp_value] (['dp_value']) keeps one with the largest sum of values.
+
+    The dynamic-programming selections resolve ties as librosa does: a
+    candidate is taken only when taking it strictly improves on skipping
+    it, so equal totals resolve towards later frames. *)
+type peak_selection = [`Greedy | `Dp_count | `Dp_value]
+
+val peak_pick :
+     ?selection:peak_selection
+  -> pre_max:int
+  -> post_max:int
+  -> pre_avg:int
+  -> post_avg:int
+  -> delta:float
+  -> wait:int
+  -> (float, 'a) Nx.t
+  -> int array
+(** [peak_pick ~pre_max ~post_max ~pre_avg ~post_avg ~delta ~wait x] is the
+    peaks of the envelope [x], as [librosa.util.peak_pick] picks them. Frame
+    [n] is a candidate when
+    - it equals the maximum of frames [\[n - pre_max, n + post_max)], and
+    - it is at least [mean + delta], [mean] the mean of frames
+      [\[n - pre_avg, n + post_avg)].
+
+    Both windows are half-open and hold frame [n], so [post_max = 1] looks
+    at no later frame. Both are cut short at either end of the signal, never
+    padded, and the mean divides by the frames its window holds. Every frame
+    of a plateau at the maximum is a candidate. The candidates are then
+    selected as [selection] says, [`Greedy] by default: a peak at [p]
+    excludes frames [p + 1] to [p + wait]. The windows and [delta] have no
+    defaults, as in librosa; {!onset_detect_of_envelope} derives librosa's
+    from the frame rate.
+
+    The maximum is compared exactly and the mean is zero plus the window's
+    frames in ascending order, divided by their count, in double precision:
+    the reference's float64 arithmetic term for term, the
+    dynamic-programming selections taking their means from prefix sums as
+    it does. A float64 envelope is therefore picked exactly as librosa picks
+    it, and a float32 one as librosa picks its float64 image: librosa sums a
+    float32 window in single precision, so a frame within that rounding of
+    its threshold can be decided the other way. NaN keeps the reference's
+    semantics: it fails the greedy test of every frame whose maximum's
+    window holds it, passes the dynamic-programming selections' maximum
+    test there, and fails every comparison it reaches; infinities compare
+    as IEEE numbers.
+
+    Named deviations: the windows are integers, where librosa rounds
+    fractional windows up; [delta] must be finite, where librosa accepts NaN
+    and infinity and then finds no peak; a signal of no frames has no peak,
+    where librosa raises.
+
+    The greedy selection scans the maximum's window of each frame it reaches
+    up to the first frame above it, and sums the mean's window at local
+    maxima only: at worst [frames * (pre_max + post_max + pre_avg + post_avg)]
+    operations. The dynamic-programming selections cost the same plus three
+    arrays of [frames + 1] entries.
+
+    Raises [Invalid_argument] if [pre_max], [pre_avg] or [wait] is negative,
+    if [post_max] or [post_avg] is below [1], if [delta] is not finite and
+    non-negative, or if [x] has rank zero, a leading axis of size other than
+    [1] or a dtype other than float32 and float64. *)
+
+val peak_pick_stage :
+     pre_max:int
+  -> post_max:int
+  -> pre_avg:int
+  -> post_avg:int
+  -> delta:float
+  -> wait:int
+  -> ((float, 'a) Nx.t, int array, 'k) Pipeline.t
+(** [peak_pick_stage ~pre_max ~post_max ~pre_avg ~post_avg ~delta ~wait] is
+    the greedy {!peak_pick} as a causal pipeline stage: envelope chunks in,
+    each holding one signal as {!peak_pick} reads it, and out the peaks each
+    chunk decides, as frame indices of the stage's own input stream counted
+    from its first frame since [prepare] or [reset]. Concatenated, they are
+    {!peak_pick} of the envelope the stream carried, on every partitioning:
+    the offline greedy picker is the stage's kernel on one chunk.
+
+    Latency. A decision reads [max post_max post_avg - 1] frames past its own
+    frame, and the stage declares that many frames of latency: frame [n] is
+    decided by the push that brings the frames seen past
+    [n + max post_max post_avg - 1], and the flush decides the last ones with
+    the windows cut short at the end of the stream, as {!peak_pick} cuts
+    them at the end of the signal. After [k] frames, every peak below
+    [k - max post_max post_avg + 1] has been emitted; a push that decides no
+    peak emits nothing. With [post_max = post_avg = 1], Böck et al.'s online
+    setting, each frame is decided as it arrives. Behind the first undecided
+    frame the stage keeps [max pre_max pre_avg] frames.
+
+    The stage streams the picker, not {!onset_detect}, whose normalisation
+    needs the whole envelope. An online detector feeds the unnormalised
+    envelope straight in:
+    {[
+      Pipeline.(
+        Stft.power_stage c >> Mel.stage m >> Db.stage (Db.Value 1.)
+        >> onset_strength_stage ()
+        >> peak_pick_stage ~pre_max:3 ~post_max:1 ~pre_avg:10 ~post_avg:1
+             ~delta ~wait:3)
+    ]}
+    picks with no lookahead, [delta] then in decibels of mean flux rather
+    than on the [\[0, 1\]] scale of the detector's [0.07]. That chain
+    carries neither the centered shift nor the 80 dB clamp of
+    {!onset_strength}, as {!onset_strength_stage} documents: add
+    [fft_size / (2 * hop)] to its frames for the offline numbering.
+
+    Raises [Invalid_argument] for the parameters as {!peak_pick} does, when
+    the stage is built; when it is prepared, if its latency overflows the
+    pipeline's exact rate arithmetic (windows near [max_int] frames); and, at
+    the chunk concerned, for a chunk of rank zero, of a dtype other than
+    float32 and float64, or with a leading axis of size other than [1]. *)
+
+val onset_detect :
+     Stft.Config.t
+  -> Mel.Config.t
+  -> ?normalize:bool
+  -> ?backtrack:[`Envelope | `Energy of (float, 'e) Nx.t]
+  -> ?selection:peak_selection
+  -> ?pre_max:int
+  -> ?post_max:int
+  -> ?pre_avg:int
+  -> ?post_avg:int
+  -> ?delta:float
+  -> ?wait:int
+  -> (float, 'a) Nx.t
+  -> int array
+(** [onset_detect stft mel x] is the onset frames of the audio [x],
+    ascending, as [librosa.onset.onset_detect] finds them from audio:
+    {!onset_detect_of_envelope} over [onset_strength stft mel x] at lag [1],
+    at the sample rate of [mel] and the hop of [stft], with the same
+    options. [x] holds one signal, as {!peak_pick} reads it.
+
+    librosa analyses with
+    [Stft.Config.create ~fft_size:2048 ~hop ~pad:(`Constant 0.) ()] and
+    [Mel.Config.create ~n_mels:128 ~sample_rate ~fft_size:2048 ()], [hop]
+    being its [hop_length] (512 by default), and with these configurations
+    the frames are its own. The envelope carries {!onset_strength}'s
+    documented deviations, none of which applies at these settings, and one
+    more: librosa projects through a float32 mel filterbank where SoundML's
+    is double, so a frame within that rounding of a threshold could be
+    decided the other way.
+
+    Offline only, as {!onset_detect_of_envelope}; the cost is one
+    {!onset_strength} and the picking.
+
+    Raises [Invalid_argument] for the options as {!onset_detect_of_envelope}
+    does, its [sample_rate] the rate of [mel] and its [hop] the hop of
+    [stft]; if the configurations disagree on [fft_size]; or if [x] has rank
+    zero, a leading axis of size other than [1] or a dtype other than
+    float32 and float64 — all before any analysis. *)
+
+val onset_detect_of_envelope :
+     ?hop:int
+  -> ?normalize:bool
+  -> ?backtrack:[`Envelope | `Energy of (float, 'e) Nx.t]
+  -> ?selection:peak_selection
+  -> ?pre_max:int
+  -> ?post_max:int
+  -> ?pre_avg:int
+  -> ?post_avg:int
+  -> ?delta:float
+  -> ?wait:int
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> int array
+(** [onset_detect_of_envelope ~sample_rate e] is the onset frames of the
+    onset strength envelope [e], ascending, as [librosa.onset.onset_detect]
+    finds them given [onset_envelope=e]: [e] is {!onset_strength} output, or
+    any envelope of one signal whose frames lie [hop] samples apart at
+    [sample_rate].
+
+    + With [normalize] (default [true]), [e] is shifted to a minimum of [0]
+      and divided by its maximum plus the smallest positive normal double,
+      so that it spans [\[0, 1\]]: a whole-signal step.
+    + An envelope with no nonzero value (a constant one, once normalised) or
+      with a value that is not finite has no onset, normalised or not.
+    + The onsets are {!peak_pick}'s, at [selection] ([`Greedy] by default).
+      The windows default to librosa's durations in whole frames, in integer
+      division at the rate [r = sample_rate] and the hop [h]: [pre_max] and
+      [wait] to [3 * r / 100 / h] (30 ms), [pre_avg] to [r / 10 / h]
+      (100 ms), [post_avg] to [r / 10 / h + 1] (100 ms after the frame, the
+      frame included) and [post_max] to [1] (no lookahead); [delta] defaults
+      to [0.07], on the normalised scale:
+      {v
+      sample_rate  hop  pre_max  post_max  pre_avg  post_avg  wait
+      22050        512        1         1        4         5     1
+      16000        160        3         1       10        11     3
+      44100        441        3         1       10        11     3
+      8000         128        1         1        6         7     1
+      v}
+      A geometry whose windows round down to no frame — 8000 Hz at a hop of
+      2400, say — compares each frame with itself alone and finds no onset.
+      Without normalisation, [delta] is in the envelope's own units.
+    + [backtrack] (default: none) then moves each onset back as
+      {!onset_backtrack} does: [`Envelope] to the latest minimum at or before
+      it of the envelope the picker read, normalised when normalising, and
+      [`Energy c] to that of the curve [c] — librosa's [energy=] — such as
+      [rms ~frame_length ~hop x] on the same frame grid.
+
+    [hop] defaults to [512]. The arithmetic is librosa's float64 arithmetic,
+    so a float64 envelope gives librosa's frames exactly and a float32 one
+    the frames librosa finds in its float64 image (see {!peak_pick}).
+    Offline only: the normalisation needs the whole envelope. With
+    [~normalize:false], [`Greedy] and no backtracking, the result is
+    {!peak_pick} at the same windows, which {!peak_pick_stage} streams.
+
+    Named deviations, beyond {!peak_pick}'s:
+    - empty results where librosa raises: an envelope of no frames when
+      normalising, and backtracking when no onset was found;
+    - every parameter is validated, even for an envelope with no onset,
+      where librosa validates them only when it picks;
+    - frames are the only unit, librosa's [units='samples'] being
+      [f * hop] and [units='time'] {!Convert.frames_to_time}, and there is
+      no dense [sparse=False] output.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], for the
+    windows and [delta], given or derived, as {!peak_pick} does, or if [e] or
+    an [`Energy] curve has rank zero, a leading axis of size other than [1]
+    or a dtype other than float32 and float64. *)
+
+val onset_backtrack : int array -> (float, 'a) Nx.t -> int array
+(** [onset_backtrack events energy] is each frame of [events] moved back to
+    the latest minimum of [energy] at or before it, as
+    [librosa.onset.onset_backtrack] moves it, so that a segment cut at the
+    onset keeps its whole attack (Jehan, {e Creating music by listening},
+    MIT, 2005). The minima are frame [0] and every interior frame [i] with
+    [energy i <= energy (i - 1)] and [energy i < energy (i + 1)]: the last
+    frame of a flat valley before a rise. An event on a minimum stays, an
+    event past the end of [energy] moves to its last minimum, and the result
+    keeps the order and the duplicates of [events]. The comparisons are
+    exact at either dtype, so the frames are librosa's; a NaN is never a
+    minimum.
+
+    [energy] holds one signal along its last axis, so {!rms} output
+    [[1; frames]] is read along its frames, where librosa reads such an input
+    along its first axis, finds no interior frame and moves every event to
+    frame [0]. No events give no frames, where librosa raises.
+
+    Raises [Invalid_argument] if an event is negative, or if [energy] has
+    rank zero, a leading axis of size other than [1] or a dtype other than
+    float32 and float64. *)
+
 (** {2:features_hpss Harmonic/percussive separation}
 
     Median-filtering separation of sustained partials from transients, in the

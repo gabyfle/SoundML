@@ -75,6 +75,7 @@ SUITE_DIRECTORIES = {
     "synthesis": "soundml/test/synthesis/vectors",
     "f0": "soundml/test/f0/vectors",
     "tuning": "soundml/test/tuning/vectors",
+    "onset_detect": "soundml/test/onset_detect/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -5419,6 +5420,525 @@ class TuningVectorGenerator:
         write_suite(self.SUITE, "piptrack", self.piptrack_cases())
         write_suite(self.SUITE, "pitch_tuning", self.pitch_tuning_cases())
         write_suite(self.SUITE, "estimate_tuning", self.estimate_tuning_cases())
+class OnsetDetectVectorGenerator:
+    """Golden vectors for Soundml.peak_pick (and so peak_pick_stage),
+    onset_detect, onset_detect_of_envelope and onset_backtrack. Every
+    expected value is a frame index, stored as a float, and the tests compare
+    the lists exactly. Four files:
+
+    - peak_pick: librosa.util.peak_pick, by the greedy method and both
+      dynamic-programming ones, over hand-made signals (plateaus, all-equal
+      signals, a peak at the first and at the last frame, spikes exactly wait
+      and wait + 1 frames apart, negative values, NaN and infinities) and over
+      LCG signals under this suite's seed (|v|, its cube, |v| rounded down to
+      quarters -- full of exact ties -- and v itself) under ten parameter
+      sets: librosa's defaults at 22050 Hz / hop 512 and 16000 Hz / hop 160,
+      its docstring's, Böck et al.'s online and offline settings, windows
+      holding the current frame alone, windows wider than the signal and a
+      wait longer than them. SoundML reproduces the reference's float64
+      arithmetic term for term, so ties need no margin here.
+
+    - onset_backtrack: librosa.onset.onset_backtrack over hand-made, step
+      (ties) and continuous energies, with sorted, unsorted, duplicated and
+      out-of-range events, a NaN energy, and energies too short to hold an
+      interior frame.
+
+    - onset_detect_envelope: librosa.onset.onset_detect(onset_envelope=...)
+      over stored envelopes -- the onset_strength envelope of the mixture
+      below at both geometries, an LCG envelope at five (sample_rate, hop)
+      geometries, one of which derives windows of no frame -- with and
+      without normalisation, explicit windows, the dynamic-programming
+      methods, backtracking on the envelope and on a stored RMS curve, and
+      the early exits (constant, zero, non-finite, one-frame and empty
+      envelopes). Exact arithmetic again.
+
+    - onset_detect: onset_detect end to end from two seconds of audio
+      rebuilt in OCaml from the recipes in `audio` (clicks, decaying tone
+      bursts, noise bursts and a mixture of the three over an LCG floor), at
+      22050 Hz / n_fft 2048 / hop 512 / 128 mels -- librosa's own analysis --
+      and 16000 Hz / n_fft 512 / hop 160 / 64 mels, with the defaults and,
+      on the mixture, a larger delta, a longer wait, no normalisation,
+      backtracking on the envelope and on the RMS curve, and dp_count. The
+      envelope is onset_strength with pad_mode="constant" (librosa 1.0's
+      default) and the mel parameters passed explicitly at dtype=np.float64;
+      at 22050 Hz the default cases are also asserted to equal librosa's own
+      onset_detect(y=...), whose mel basis is float32. Here the two sides'
+      envelopes differ by rounding, so every frame's picking decision is
+      asserted to lie at least PICK_FLOOR (of the normalised scale, or of the
+      envelope's maximum when not normalising) from flipping, and every
+      comparison backtracking relies on at least ENVELOPE_TIE_FLOOR or
+      RMS_TIE_FLOOR of the curve's maximum from a tie, unless it ties two
+      exact zeros that are structural: the envelope's constructed prefix, or
+      frames at which every log-mel band falls clearly.
+
+    float32 cases quantize the input to float32 and take the reference on its
+    float64 image.
+    """
+
+    SUITE = "onset_detect"
+
+    SEED = 20261103
+
+    @staticmethod
+    def quantize(x, dtype):
+        x = np.asarray(x, dtype=np.float64)
+        return x if dtype == "float64" else x.astype(np.float32).astype(np.float64)
+
+    @staticmethod
+    def case(name, params, frames):
+        frames = np.asarray(frames)
+        assert frames.ndim == 1, name
+        return {"name": name, "params": params, "shape": [len(frames)],
+                "values": [float(v) for v in frames]}
+
+    def lcg(self, n, offset=0):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED + offset)
+
+    @staticmethod
+    def windows(pre_max, post_max, pre_avg, post_avg, delta, wait):
+        return {"pre_max": pre_max, "post_max": post_max, "pre_avg": pre_avg,
+                "post_avg": post_avg, "delta": delta, "wait": wait}
+
+    # {1 Peak picking}
+
+    METHODS = ["greedy", "dp_count", "dp_value"]
+
+    # (key, pre_max, post_max, pre_avg, post_avg, delta, wait)
+    WINDOWS = [
+        ("unit", 1, 1, 1, 1, 0.0, 0),
+        ("librosa_22050_512", 1, 1, 4, 5, 0.07, 1),
+        ("librosa_16000_160", 3, 1, 10, 11, 0.07, 3),
+        ("docstring", 3, 3, 3, 5, 0.5, 10),
+        ("self_only", 0, 1, 0, 1, 0.0, 0),
+        ("lookahead", 2, 4, 5, 2, 0.05, 0),
+        ("long_wait", 10, 10, 10, 10, 0.0, 20),
+        ("boeck_online", 3, 1, 10, 1, 0.1, 3),
+        ("boeck_offline", 3, 4, 10, 2, 0.1, 0),
+        ("wider_than_signal", 500, 500, 500, 500, 0.0, 0),
+    ]
+
+    SPIKES = [1.0 if i in (0, 3, 7, 10, 14, 17) else 0.0 for i in range(20)]
+
+    # (key, signal, (pre_max, post_max, pre_avg, post_avg, delta, wait))
+    HAND = [
+        ("plateaus", [0, 1, 1, 0, 1, 1, 1, 0], (2, 3, 1, 1, 0.0, 0)),
+        ("plateaus_wait1", [0, 1, 1, 0, 1, 1, 1, 0], (2, 3, 1, 1, 0.0, 1)),
+        ("equal", [0.5] * 8, (1, 1, 1, 1, 0.0, 0)),
+        ("equal_wait1", [0.5] * 8, (1, 1, 1, 1, 0.0, 1)),
+        ("equal_wait2", [0.5] * 7, (1, 1, 1, 1, 0.0, 2)),
+        ("first_frame", [5, 1, 1, 1], (1, 1, 1, 1, 0.0, 0)),
+        ("last_frame", [0, 0.25, 0.5, 0.75, 1, 1.5, 2.5], (2, 2, 3, 3, 0.0, 0)),
+        ("spikes_wait3", SPIKES, (1, 1, 1, 1, 0.0, 3)),
+        ("spikes_wait4", SPIKES, (1, 1, 1, 1, 0.0, 4)),
+        ("lookahead_wait2", [3, 0, 2, 0, 1, 0, 5, 0], (1, 2, 1, 1, 0.0, 2)),
+        ("negative", [-3, -1, -2, -5, -4, -0.5, -6], (1, 1, 1, 1, 0.0, 0)),
+        ("one_frame", [1.0], (1, 1, 1, 1, 0.0, 0)),
+        ("one_frame_delta", [1.0], (1, 1, 1, 1, 0.1, 0)),
+        ("wait_past_end", [1, 0, 2, 0, 3, 0, 4], (0, 1, 0, 1, 0.0, 100)),
+        ("nan", [0, 1, np.nan, 0, 2, 0, 3, 1, 0, 1, 0], (1, 1, 2, 2, 0.0, 0)),
+        ("nan_first", [np.nan, 0, 1, 0, 2, 0, 1, 0], (1, 1, 1, 1, 0.0, 0)),
+        ("nan_lookahead", [0, 2, 0, 1, np.nan, 3, 0, 1, 0], (1, 3, 1, 1, 0.0, 0)),
+        ("inf", [0, np.inf, 0, 1, 0, 2, 0], (1, 1, 1, 1, 0.0, 0)),
+        ("inf_both", [0, np.inf, 0, -np.inf, 1, 0, 2, 0, 1], (1, 1, 2, 2, 0.0, 0)),
+        ("neg_inf", [-np.inf, 0, 1, -np.inf, 2, 0], (1, 1, 1, 1, 0.0, 1)),
+    ]
+
+    PEAK_LENGTH = 160
+
+    def peak_forms(self):
+        """The LCG signals, rebuilt in OCaml by the same IEEE operations."""
+        v = self.lcg(self.PEAK_LENGTH, 1)
+        a = np.abs(v)
+        return {"abs": a, "cube": (a * a) * a,
+                "quarters": np.floor(4.0 * a) / 4.0, "signed": v}
+
+    def peak_cases(self):
+        cases = []
+        differs = False
+        for key, signal, w in self.HAND:
+            x = np.asarray(signal, dtype=np.float64)
+            p = self.windows(*w)
+            greedy = librosa.util.peak_pick(x, **p)
+            for method in self.METHODS:
+                expected = librosa.util.peak_pick(x, method=method, **p)
+                differs = differs or not np.array_equal(expected, greedy)
+                cases.append(self.case(
+                    f"{key}_{method}",
+                    {"input": x.tolist(), **p, "method": method,
+                     "dtype": "float64"},
+                    expected))
+        for form, x in self.peak_forms().items():
+            methods = self.METHODS if form in ("abs", "quarters") else ["greedy"]
+            dtypes = ["float64", "float32"] if form in ("abs", "cube") else ["float64"]
+            for key, *w in self.WINDOWS:
+                p = self.windows(*w)
+                for dtype in dtypes:
+                    xq = self.quantize(x, dtype)
+                    greedy = librosa.util.peak_pick(xq, **p)
+                    if key == "self_only":
+                        assert len(greedy) == len(x), form
+                    for method in methods:
+                        expected = librosa.util.peak_pick(xq, method=method, **p)
+                        differs = differs or not np.array_equal(expected, greedy)
+                        cases.append(self.case(
+                            f"{form}_{key}_{method}_{dtype}",
+                            {"form": form, "length": len(x), **p,
+                             "method": method, "dtype": dtype},
+                            expected))
+        assert differs, "no dynamic-programming case differs from greedy"
+        return cases
+
+    # {1 Backtracking}
+
+    def backtrack_cases(self):
+        cases = []
+
+        def add(key, energy, events, dtype="float64"):
+            e = self.quantize(energy, dtype)
+            ev = np.asarray(events, dtype=int)
+            expected = librosa.onset.onset_backtrack(ev, e)
+            cases.append(self.case(
+                key, {"energy": e.tolist(), "events": ev.tolist(),
+                      "dtype": dtype}, expected))
+
+        valleys = [5, 3, 4, 2, 2, 6, 1, 0, 0, 3, 7]
+        add("valleys", valleys, list(range(11)) + [12])
+        add("valleys_unsorted", valleys, [10, 2, 5])
+        add("valleys_duplicates", valleys, [7, 2, 7, 4, 4, 0])
+        add("flat_valley", [3, 1, 1, 1, 2, 0, 0, 4], list(range(8)))
+        steps = np.floor(4.0 * np.abs(self.lcg(50, 2)))
+        add("steps", steps, list(range(0, 50, 3)))
+        add("steps_unsorted_past_end", steps, [49, 3, 60, 17, 17, 0, 33, 51])
+        smooth = np.abs(self.lcg(60, 3))
+        events = [int(70 * abs(v)) for v in self.lcg(15, 4)]
+        add("continuous", smooth, events)
+        add("continuous_float32", smooth, events, "float32")
+        add("nan", [3, np.nan, 1, 2, 0, np.nan, 4, 1, 2], list(range(10)))
+        add("length2", [1.0, 0.0], [0, 1, 5])
+        add("length1", [1.0], [0, 3])
+        add("length0", [], [0, 2])
+        return cases
+
+    # {1 Audio}
+
+    SECONDS = 2
+
+    # (sample_rate, fft_size, hop, n_mels)
+    GEOMETRIES = [(22050, 2048, 512, 128), (16000, 512, 160, 64)]
+
+    KINDS = ["clicks", "tones", "noise", "mix"]
+
+    @staticmethod
+    def fade(n, k):
+        """Unit gain with a raised-cosine fade over the last k samples."""
+        g = np.ones(n)
+        k = min(k, n)
+        g[n - k:] = 0.5 * (1.0 + np.cos(np.pi * np.arange(1, k + 1) / k))
+        return g
+
+    @staticmethod
+    def clicks(n, sr, amps, period, first):
+        """Unit impulses of the amplitudes amps in turn, every period seconds
+        from first."""
+        y = np.zeros(n)
+        p, step, k = int(first * sr), int(period * sr), 0
+        while p < n:
+            y[p] += amps[k % len(amps)]
+            p += step
+            k += 1
+        return y
+
+    def bursts(self, n, sr, kind, starts, dur, amp=0.5):
+        """Bursts of dur seconds at the starts (seconds): an instant attack,
+        an exp(-t / (dur / 3)) decay and a 20 ms raised-cosine fade-out over
+        a sine at 220 * 2 ** ((k % 4) / 4) Hz for the k-th tone, or over the
+        LCG stream of offset 1 for noise."""
+        y = np.zeros(n)
+        noise = self.lcg(n, 1)
+        t = np.arange(n) / sr
+        for k, s in enumerate(starts):
+            a = int(s * sr)
+            b = min(n, a + int(dur * sr))
+            tt = t[a:b] - t[a]
+            env = np.exp(-tt / (dur / 3)) * self.fade(b - a, int(0.02 * sr))
+            if kind == "tone":
+                src = np.sin(2 * np.pi * (220.0 * 2 ** ((k % 4) / 4)) * tt)
+            else:
+                src = noise[a:b]
+            y[a:b] += (amp * env) * src
+        return y
+
+    def audio(self, kind, sr):
+        """Two seconds of the signal kind at sr over a 1e-3 LCG floor."""
+        n = self.SECONDS * sr
+        floor = 1e-3 * self.lcg(n)
+        if kind == "clicks":
+            return floor + self.clicks(n, sr, (0.8, 0.25), 0.25, 0.1)
+        if kind == "tones":
+            return floor + self.bursts(n, sr, "tone", [0.1, 0.45, 0.8, 1.2, 1.55], 0.25)
+        if kind == "noise":
+            return floor + self.bursts(n, sr, "noise", [0.12, 0.5, 0.9, 1.33, 1.7], 0.15)
+        assert kind == "mix"
+        return (floor + self.bursts(n, sr, "tone", [0.15, 0.62, 1.1, 1.55], 0.35)
+                + 0.6 * self.bursts(n, sr, "noise", [0.4, 0.95, 1.32], 0.1)
+                + self.clicks(n, sr, (0.3, 0.1), 0.5, 0.27))
+
+    @staticmethod
+    def envelope(y, sr, fft_size, hop, n_mels):
+        return librosa.onset.onset_strength(
+            y=y, sr=sr, n_fft=fft_size, hop_length=hop, center=True,
+            pad_mode="constant",
+            **MelVectorGenerator.mel_kwargs(n_mels, 0.0, 0.5 * sr, "slaney", "slaney"))
+
+    @staticmethod
+    def rms(y, fft_size, hop):
+        return librosa.feature.rms(y=y, frame_length=fft_size, hop_length=hop,
+                                   center=True, pad_mode="constant",
+                                   dtype=np.float64)[0]
+
+    @staticmethod
+    def normalise(e):
+        e = e - e.min()
+        return e / (e.max() + np.finfo(np.float64).tiny)
+
+    @staticmethod
+    def defaults(sr, hop):
+        """onset_detect's window defaults, as it derives them."""
+        return {"pre_max": int(0.03 * sr // hop), "post_max": 1,
+                "pre_avg": int(0.10 * sr // hop),
+                "post_avg": int(0.10 * sr // hop + 1),
+                "wait": int(0.03 * sr // hop), "delta": 0.07}
+
+    @staticmethod
+    def pick_margin(z, pre_max, post_max, pre_avg, post_avg, delta, wait):
+        """The smallest distance, over every frame, from flipping the frame's
+        candidate test (the wait rule is integer arithmetic): a passing frame
+        by the smaller of its two gaps, a failing one by its larger failing
+        gap. A tie of the maximum that the threshold does not settle has no
+        margin."""
+        n = len(z)
+        worst = np.inf
+        for i in range(n):
+            lo, hi = max(0, i - pre_max), min(n, i + post_max)
+            others = [z[j] for j in range(lo, hi) if j != i]
+            top = z[i] - max(others) if others else np.inf
+            lo, hi = max(0, i - pre_avg), min(n, i + post_avg)
+            threshold = z[i] - (np.mean(z[lo:hi]) + delta)
+            if top >= 0 and threshold >= 0:
+                m = min(top, threshold)
+            else:
+                m = max(-top if top < 0 else 0.0, -threshold if threshold < 0 else 0.0)
+            worst = min(worst, m)
+        return worst
+
+    def structural_zeros(self, y, sr, fft_size, hop, n_mels):
+        """The envelope frames that are exactly zero on both sides whatever
+        their rounding: the constructed prefix (lag + n_fft // (2 hop)
+        frames), and the frames at which every log-mel band falls by more
+        than 0.01 dB, a hundred times the float32 analysis's error."""
+        shift = fft_size // (2 * hop)
+        S = librosa.feature.melspectrogram(
+            y=y, sr=sr, n_fft=fft_size, hop_length=hop, center=True,
+            pad_mode="constant",
+            **MelVectorGenerator.mel_kwargs(n_mels, 0.0, 0.5 * sr, "slaney", "slaney"))
+        rise = np.max(np.diff(librosa.power_to_db(S), axis=-1), axis=0)
+        return {t for t in range(S.shape[-1])
+                if t < 1 + shift or rise[t - 1 - shift] < -1e-2}
+
+    @staticmethod
+    def backtrack_margin(e, events, structural):
+        """The smallest distance from a tie of the comparisons that decide
+        where each event backtracks to -- whether the minimum it reaches is
+        one, and whether each later frame up to the event is not -- except a
+        tie of two structural exact zeros."""
+        m = len(e)
+
+        def is_minimum(i):
+            return e[i] <= e[i - 1] and e[i] < e[i + 1]
+
+        worst = np.inf
+        for k in events:
+            last = min(k, m - 2)
+            j = max([0] + [i for i in range(1, last + 1) if is_minimum(i)])
+            for i in range(max(j, 1), last + 1):
+                for a, b in ((i, i - 1), (i, i + 1)):
+                    if e[a] == 0.0 and e[b] == 0.0 and {a, b} <= structural:
+                        continue
+                    worst = min(worst, abs(e[a] - e[b]))
+        return worst
+
+    # The margins, as fractions of the curve's maximum (the normalised scale
+    # when normalising). SoundML's envelope of these signals agrees with
+    # librosa's within 3e-15 of its maximum from float64 audio and 3e-7 from
+    # float32 audio, and its RMS curve within 3e-15 (soundml/test/onset_detect,
+    # "agreement"). The smallest margins measured are 1.2e-3 for a pick (the
+    # mixture at 22050 Hz), 1.5e-4 for an envelope comparison and 1.7e-6 for
+    # an RMS one, each floor below leaving more than two orders of magnitude
+    # over the agreement it must cover.
+    PICK_FLOOR = 1e-3
+
+    ENVELOPE_TIE_FLOOR = 1e-4
+
+    RMS_TIE_FLOOR = 1e-6
+
+    # (variant key, onset_detect options, normalize, backtrack)
+    AUDIO_VARIANTS = [
+        ("delta0.2", {"delta": 0.2}, True, "none"),
+        ("wait8", {"wait": 8}, True, "none"),
+        ("raw_delta1", {"delta": 1.0}, False, "none"),
+        ("backtrack_envelope", {}, True, "envelope"),
+        ("backtrack_rms", {}, True, "energy"),
+        ("dp_count_wait4", {"method": "dp_count", "wait": 4}, True, "none"),
+    ]
+
+    @staticmethod
+    def detect(env, sr, hop, options, normalize, backtrack, energy=None):
+        return librosa.onset.onset_detect(
+            onset_envelope=env, sr=sr, hop_length=hop, normalize=normalize,
+            backtrack=backtrack != "none",
+            energy=energy if backtrack == "energy" else None, **options)
+
+    def audio_cases(self):
+        cases = []
+        for sr, fft_size, hop, n_mels in self.GEOMETRIES:
+            for kind in self.KINDS:
+                y = self.audio(kind, sr)
+                for dtype in ["float64", "float32"]:
+                    yq = self.quantize(y, dtype)
+                    env = self.envelope(yq, sr, fft_size, hop, n_mels)
+                    rms = self.rms(yq, fft_size, hop)
+                    structural = self.structural_zeros(yq, sr, fft_size, hop, n_mels)
+                    variants = [("defaults", {}, True, "none")]
+                    if kind == "mix":
+                        variants += [v for v in self.AUDIO_VARIANTS
+                                     if v[3] != "energy" or dtype == "float64"]
+                    for variant, options, normalize, backtrack in variants:
+                        onsets = self.detect(env, sr, hop, options, normalize,
+                                             backtrack, rms)
+                        assert len(onsets) > 0, (sr, kind, dtype, variant)
+                        z = self.normalise(env) if normalize else env
+                        scale = 1.0 if normalize else float(np.max(env))
+                        p = self.defaults(sr, hop)
+                        p.update({k: v for k, v in options.items() if k != "method"})
+                        margin = self.pick_margin(z, **p) / scale
+                        assert margin >= self.PICK_FLOOR, (sr, kind, dtype, variant, margin)
+                        if backtrack != "none":
+                            picked = librosa.util.peak_pick(z, **p)
+                            if backtrack == "envelope":
+                                curve, floor, at = z, self.ENVELOPE_TIE_FLOOR, structural
+                            else:
+                                curve, floor, at = rms, self.RMS_TIE_FLOOR, set()
+                            tie = self.backtrack_margin(curve, picked, at) / np.max(curve)
+                            assert tie >= floor, (sr, kind, dtype, variant, tie)
+                        if variant == "defaults" and fft_size == 2048:
+                            own = librosa.onset.onset_detect(y=yq, sr=sr, hop_length=hop)
+                            assert np.array_equal(own, onsets), (sr, kind, dtype)
+                        params = {"signal": kind, "sample_rate": sr,
+                                  "fft_size": fft_size, "hop": hop,
+                                  "n_mels": n_mels, "normalize": normalize,
+                                  "backtrack": backtrack, **options,
+                                  "dtype": dtype}
+                        cases.append(self.case(
+                            f"{kind}_{sr}_{variant}_{dtype}", params, onsets))
+        return cases
+
+    # {1 Envelopes}
+
+    # (variant key, onset_detect options, normalize, backtrack)
+    ENVELOPE_VARIANTS = [
+        ("defaults", {}, True, "none"),
+        ("delta0.2", {"delta": 0.2}, True, "none"),
+        ("wait8", {"wait": 8}, True, "none"),
+        ("raw_delta1", {"delta": 1.0}, False, "none"),
+        ("backtrack_envelope", {}, True, "envelope"),
+        ("raw_backtrack_envelope", {"delta": 1.0}, False, "envelope"),
+        ("backtrack_rms", {}, True, "energy"),
+        ("dp_count_wait4", {"method": "dp_count", "wait": 4}, True, "none"),
+        ("dp_value_wait4", {"method": "dp_value", "wait": 4}, True, "none"),
+        ("docstring", {"pre_max": 3, "post_max": 3, "pre_avg": 3,
+                       "post_avg": 5, "delta": 0.5, "wait": 10}, True, "none"),
+    ]
+
+    # (sample_rate, hop): the window defaults of each, the last all empty
+    ENVELOPE_RATES = [(22050, 512), (16000, 160), (44100, 441), (8000, 128),
+                      (8000, 2400)]
+
+    ENVELOPE_LENGTH = 120
+
+    def envelope_cases(self):
+        cases = []
+
+        def add(name, env, sr, hop, options, normalize, backtrack, dtype,
+                energy=None, stored=True, extra=None):
+            e = self.quantize(env, dtype)
+            onsets = self.detect(e, sr, hop, options, normalize, backtrack, energy)
+            params = dict(extra or {})
+            if stored:
+                params["envelope"] = e.tolist()
+            if backtrack == "energy":
+                params["energy"] = np.asarray(energy).tolist()
+            params.update({"sample_rate": sr, "hop": hop, "normalize": normalize,
+                           "backtrack": backtrack, **options, "dtype": dtype})
+            cases.append(self.case(name, params, onsets))
+            return onsets
+
+        for sr, fft_size, hop, n_mels in self.GEOMETRIES:
+            y = self.audio("mix", sr)
+            env = self.envelope(y, sr, fft_size, hop, n_mels)
+            rms = self.rms(y, fft_size, hop)
+            for variant, options, normalize, backtrack in self.ENVELOPE_VARIANTS:
+                dtypes = (["float64", "float32"]
+                          if variant in ("defaults", "backtrack_envelope", "dp_count_wait4")
+                          else ["float64"])
+                for dtype in dtypes:
+                    add(f"mix_{sr}_{variant}_{dtype}", env, sr, hop, options,
+                        normalize, backtrack, dtype, energy=rms)
+        a = np.abs(self.lcg(self.ENVELOPE_LENGTH, 5))
+        spiky = ((a * a) * a) * 10.0
+        for sr, hop in self.ENVELOPE_RATES:
+            for variant, options, normalize, backtrack in [
+                    ("defaults", {}, True, "none"),
+                    ("raw_delta0.5", {"delta": 0.5}, False, "none"),
+                    ("backtrack_envelope", {}, True, "envelope")]:
+                if hop == 2400 and backtrack != "none":
+                    # no onset to backtrack: librosa raises there
+                    continue
+                for dtype in ["float64", "float32"]:
+                    onsets = add(f"spiky_{sr}_{hop}_{variant}_{dtype}", spiky, sr,
+                                 hop, options, normalize, backtrack, dtype,
+                                 stored=False,
+                                 extra={"form": "spiky",
+                                        "length": self.ENVELOPE_LENGTH})
+                    if hop == 2400:
+                        assert len(onsets) == 0
+        # (key, envelope, normalize, options): the early exits and the
+        # shortest envelopes, at 22050 Hz / hop 512
+        for key, env, normalize, options in [
+                ("constant", [2.5] * 50, True, {}),
+                ("constant_raw", [2.5] * 50, False, {}),
+                ("constant_raw_delta0", [2.5] * 50, False, {"delta": 0.0}),
+                ("zeros_raw_delta0", [0.0] * 50, False, {"delta": 0.0}),
+                ("one_frame", [1.0], True, {}),
+                ("one_frame_raw_delta0", [1.0], False, {"delta": 0.0}),
+                ("two_frames", [0.25, 1.0], True, {}),
+                ("negative_raw_delta0", [-3.0, -1.0, -2.0, -5.0, -4.0, -0.5, -6.0],
+                 False, {"delta": 0.0}),
+                ("nan", [0.0, 1.0, np.nan, 0.5, 2.0, 0.0], True, {}),
+                ("nan_raw", [0.0, 1.0, np.nan, 0.5, 2.0, 0.0], False, {}),
+                ("inf", [0.0, 1.0, np.inf, 0.5, 2.0, 0.0], True, {}),
+                ("neg_inf_raw", [0.0, 1.0, -np.inf, 0.5, 2.0, 0.0], False, {}),
+                ("empty_raw", [], False, {})]:
+            onsets = add(key, env, 22050, 512, options, normalize, "none", "float64")
+            if key in ("constant", "constant_raw", "zeros_raw_delta0", "one_frame",
+                       "nan", "nan_raw", "inf", "neg_inf_raw", "empty_raw"):
+                assert len(onsets) == 0, key
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "peak_pick", self.peak_cases())
+        write_suite(self.SUITE, "onset_backtrack", self.backtrack_cases())
+        write_suite(self.SUITE, "onset_detect_envelope", self.envelope_cases())
+        write_suite(self.SUITE, "onset_detect", self.audio_cases())
 
 
 GENERATORS = [
@@ -5443,6 +5963,7 @@ GENERATORS = [
     SynthesisVectorGenerator,
     F0VectorGenerator,
     TuningVectorGenerator,
+    OnsetDetectVectorGenerator,
 ]
 
 if __name__ == "__main__":
