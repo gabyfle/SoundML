@@ -102,8 +102,11 @@ module Config : sig
       prototype of a phase-rich plan measures about 0.3 ms at [`High]
       44.1 → 48 kHz and 0.7 ms at [`High] 44.1 → 16 kHz, spread across
       cores — many times the cost of resampling one second of float32 audio
-      through it — so corpus jobs must build the config once and reuse it;
-      the flat [Soundml.resample] convenience rebuilds it on every call. *)
+      through it — so corpus jobs build the config once and reuse it. The
+      flat conveniences that take rates instead — [Soundml.resample],
+      [Effects.pitch_shift] and [Soundml_io.read ~sample_rate] — keep the
+      configurations they built most recently, up to 8 MB of designed
+      filters, so a conversion they repeat is designed once. *)
   type t
 
   val create : ?quality:quality -> sample_rate:int -> target:int -> unit -> t
@@ -177,6 +180,14 @@ module Config : sig
   val equal : t -> t -> bool
   (** [equal a b] is [true] iff [a] and [b] were created from the same rates
       and quality; [`Custom] fields are compared with [Float.equal]. *)
+
+  (**/**)
+
+  val cached : ?quality:quality -> sample_rate:int -> target:int -> unit -> t
+  (* Library-internal: [create ?quality ~sample_rate ~target ()], or the
+     configuration an earlier call built from the same parameters while it is
+     among the most recent ones, which hold at most 8 MB of designed filters
+     together. The flat conveniences that take rates use it. *)
 end
 
 (** {1 Offline} *)

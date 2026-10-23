@@ -505,7 +505,7 @@ let pitch_shift ?(phase = `Independent) ?quality c ~(ratio : Pipeline.Rate.t) x
   let rate = Float.of_int ratio.den /. Float.of_int ratio.num in
   let stretched = time_stretch ~phase c ~rate x in
   let resampler =
-    Resample.Config.create ?quality ~sample_rate:ratio.num ~target:ratio.den ()
+    Resample.Config.cached ?quality ~sample_rate:ratio.num ~target:ratio.den ()
   in
   fix_length n (Resample.apply resampler stretched)
 

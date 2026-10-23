@@ -422,7 +422,24 @@ let domain_tests =
                   failf "%d -> %d: a domain's conversion diverges" sample_rate
                     target )
               (on_domains 4 (fun () -> run cfg)) )
-          [(44100, 48000); (22050, 44100); (8000, 48000)] ) ]
+          [(44100, 48000); (22050, 44100); (8000, 48000)] )
+  ; test "the conveniences share their configurations across domains" (fun () ->
+        (* a preset no other test converts at, so the domains miss together *)
+        let x = signal Nx.float32 4096 in
+        let expected =
+          bits
+            (Resample.apply
+               (Resample.Config.create ~quality:`Best ~sample_rate:22050
+                  ~target:16000 () )
+               x )
+        in
+        List.iter
+          (fun got ->
+            if got <> expected then fail "a domain's conversion diverges" )
+          (on_domains 4 (fun () ->
+               bits
+                 (Soundml.resample ~quality:`Best ~sample_rate:22050
+                    ~target:16000 x ) ) ) ) ]
 
 let suite =
   [ group "length" length_tests

@@ -152,8 +152,11 @@ val read :
     [Resample.apply] over the native read (the delegation law, held by the
     test suite at byte equality), so everything the resampler documents —
     exact output length [ceil (frames * L / M)], compensated group delay,
-    quality tiers — holds verbatim here. [?quality] defaults to [`High] and
-    is forwarded to [Resample.Config.create]; passing it without
+    quality tiers — holds verbatim here. The conversion's configuration is
+    kept for later reads at the same rates and quality, as
+    [Soundml.resample] keeps its own, so a corpus read at one rate designs it
+    once. [?quality] defaults to [`High] and is forwarded to
+    [Resample.Config.create]; passing it without
     [?sample_rate] raises [Invalid_argument] — a quality that changes
     nothing is a lie refused at the call site. When [sample_rate] equals the
     native rate the configuration is the identity and the decode path is the
