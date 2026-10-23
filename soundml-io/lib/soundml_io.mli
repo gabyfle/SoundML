@@ -26,7 +26,9 @@
     at decode time: {!read}[ ~sample_rate] drives the same kernel every other
     face of the library drives, and is bit-identical to decoding at the
     native rate and applying {!Soundml.Resample.apply} afterwards, without
-    ever materializing the native-rate signal.
+    ever materializing the native-rate signal. Headerless PCM byte streams
+    ({!Raw}) decode and encode in OCaml, bit-identical to {!read} and
+    {!write} on the same encodings.
 
     Defaults never guess: absent [?sample_rate] means the file's native rate,
     absent [?mono] means the file's native channels, absent [?format] on
@@ -310,3 +312,239 @@ val write : ?format:Format.t -> string -> 'a audio -> (unit, error) result
     or rank > 2, or its dtype is neither float32 nor float64. Everything
     else is typed: {!Unsupported} for encoder refusals ([sf_format_check]),
     {!Not_found} for a missing directory, {!Io} for the rest. *)
+
+(** {1 Headerless PCM} *)
+
+module Raw : sig
+  (** Headerless interleaved PCM — the byte streams of [sox -t raw] and
+      [ffmpeg -f s16le] — decoded and encoded in OCaml, without libsndfile.
+
+      Nothing in the bytes says how to read them, so nothing here guesses:
+      the caller names the encoding and the channel count. The sample rate,
+      which no conversion needs, stays the caller's: the faces take and
+      return bare [[channels; frames]] tensors, and
+      [Pipeline.Format.audio dt ~sample_rate ~channels] describes them to a
+      pipeline.
+
+      Samples convert exactly as {!Soundml_io.read} and {!Soundml_io.write}
+      convert the same encoding inside a container, bit for bit: decoding a
+      WAV file's data chunk is {!Soundml_io.read} of the file, and encoding
+      a tensor yields the bytes {!Soundml_io.write} puts in the data chunk.
+      {ul
+      {- Integers read normalised, [v * 2^-(bits - 1)] ([`U8] centred on
+         128), rounded once into float32.}
+      {- Integers write through libsndfile's clipping writer: a sample at or
+         past full scale saturates; any other is [x * 2^31] rounded half to
+         even, then shifted down to the encoding's width — a floor, so 0.75
+         LSB writes 0 and -0.5 LSB writes -1. NaN writes 0 (128 in [`U8]).
+         The 8-bit encodings, which {!Soundml_io.write} does not offer,
+         follow the same rule — which departs from libsndfile once: its
+         [`S8] writer from double rounds [x * 2^31] through a float first,
+         and so writes [1 - 2^-26] as -128, where [`S8] from float64 here
+         rounds the double, as libsndfile's [`U8] and wider writers do.}
+      {- A float of the tensor's own width moves as bits, NaN payloads and
+         signalling NaNs included; a width change is C's conversion, round
+         to nearest.}}
+
+      Preconditions raise [Invalid_argument]; what a channel does is a typed
+      {!Io}, whose [path] is the face's [?name] (default ["<channel>"]) —
+      a channel failure, and a stream that ends inside a frame. No face
+      guesses what a partial frame held: where libsndfile's RAW reader, sox
+      and ffmpeg drop it silently, here it is an error, after every complete
+      frame ({!Reader}) or instead of the data ({!val-read}). *)
+
+  (** The type for sample encodings, named after ffmpeg's raw formats
+      ([-f s16le]): integers are signed but for [`U8], 24-bit ones packed in
+      three bytes; [le]/[be] is the byte order; floats are IEEE 754 binary32
+      and binary64. *)
+  type encoding =
+    [ `S8
+    | `U8
+    | `S16le
+    | `S16be
+    | `S24le
+    | `S24be
+    | `S32le
+    | `S32be
+    | `F32le
+    | `F32be
+    | `F64le
+    | `F64be ]
+
+  val encoding_of_name : string -> encoding option
+  (** [encoding_of_name s] is the encoding ffmpeg's format name [s] denotes
+      — ["s16le"] is [`S16le] — and [None] for anything else, other
+      spellings included. *)
+
+  val encoding_name : encoding -> string
+  (** [encoding_name e] is [e]'s ffmpeg format name. *)
+
+  val sample_bytes : encoding -> int
+  (** [sample_bytes e] is the size of one sample of [e] in bytes: 1, 2, 3, 4
+      or 8. A frame of [channels] samples is [channels * sample_bytes e]
+      bytes. *)
+
+  val decode :
+       encoding
+    -> channels:int
+    -> (float, 'a) Nx.dtype
+    -> string
+    -> (float, 'a) Nx.t
+  (** [decode e ~channels dt s] is the [[channels; frames]] tensor of the
+      interleaved frames [s] holds — fresh, C-contiguous, [frames] the
+      length of [s] over the frame size. The empty string decodes to
+      [[channels; 0]]. A [bytes] buffer nothing writes any more decodes
+      through [Bytes.unsafe_to_string]: [decode] keeps no reference to its
+      argument.
+
+      Raises [Invalid_argument] if [channels < 1], or so many that the size
+      of a frame overflows, if [dt] is neither float32 nor float64, or if
+      [s] does not hold a whole number of frames — the length of a string in
+      hand is the caller's to check, where the end of a stream is a runtime
+      outcome ({!val-read}). *)
+
+  val read :
+       ?name:string
+    -> encoding
+    -> channels:int
+    -> (float, 'a) Nx.dtype
+    -> In_channel.t
+    -> ((float, 'a) Nx.t, error) result
+  (** [read e ~channels dt ic] decodes all that [ic] holds up to end of
+      file, as {!decode} decodes a string. [ic] is put in binary mode and
+      left open, at end of file.
+
+      A stream that ends inside a frame is [Error (Io {op = "read"; _})]
+      naming the byte counts, and no sample is returned — as
+      {!Soundml_io.read} never returns part of a truncated file; {!Reader}
+      delivers the complete frames first. A failure of the channel
+      ([Sys_error], or [Sys_blocked_io] from a non-blocking descriptor) is
+      [Error (Io {op = "read"; _})] as well.
+
+      Raises [Invalid_argument] if [channels < 1], or so many that the size
+      of a frame overflows, or if [dt] is neither float32 nor float64. *)
+
+  module Reader : sig
+    (** Chunked decoding of a channel — a microphone pipe, a socket, a file
+        too large to hold. Mutable; single-owner; not domain-safe (the
+        pipeline-kernel contract). The caller owns the channel and closes
+        it.
+
+        It slots straight into {!Soundml.Pipeline.Stream}, chunks of at most
+        [max_chunk] frames being exactly what {!read} delivers. Mel frames
+        off a microphone, captured by either of
+        {v
+sox -d -t raw -r 16000 -c 1 -e floating-point -b 32 -L - | ./kws
+ffmpeg -f avfoundation -i :0 -ac 1 -ar 16000 -f f32le - | ./kws
+        v}
+        ([-L] forces sox's little-endian output; it defaults to the host's
+        order), where [consume] takes each [[1; 40; n]] chunk of mel
+        frames:
+        {[
+          let () =
+            let open Soundml in
+            let sample_rate = 16000 and max_chunk = 1024 in
+            let stft = Stft.Config.create ~hop:160 ~fft_size:512 () in
+            let mel = Mel.Config.create ~n_mels:40 ~sample_rate ~fft_size:512 () in
+            let s =
+              Pipeline.Stream.prepare
+                Pipeline.(Stft.power_stage stft >> Mel.stage mel)
+                ~source:(Pipeline.Format.audio Nx.float32 ~sample_rate ~channels:1)
+                ~max_chunk
+            in
+            let r = Soundml_io.Raw.Reader.create `F32le ~channels:1 Nx.float32 stdin in
+            let rec loop () =
+              match Soundml_io.Raw.Reader.read r ~frames:max_chunk with
+              | Ok (Some chunk) ->
+                  Option.iter consume (Pipeline.Stream.push s chunk) ;
+                  loop ()
+              | Ok None ->
+                  List.iter consume (Pipeline.Stream.flush s)
+              | Error e ->
+                  Stdlib.Format.eprintf "%a@." Soundml_io.pp_error e
+            in
+            loop ()
+        ]}
+        The test suite holds this loop, over a file, equal bit for bit to
+        [Pipeline.run] on the whole signal. *)
+
+    (** The type for readers. *)
+    type 'a t
+
+    val create :
+         ?name:string
+      -> encoding
+      -> channels:int
+      -> (float, 'a) Nx.dtype
+      -> In_channel.t
+      -> 'a t
+    (** [create e ~channels dt ic] is a reader of frames of [e] from [ic],
+        which it puts in binary mode. It allocates its one staging block —
+        the whole frames that fit in 64 KiB, or one frame when a frame is
+        larger — and reads nothing.
+
+        Raises [Invalid_argument] if [channels < 1], or so many that the
+        size of a frame overflows, or if [dt] is neither float32 nor
+        float64. *)
+
+    val read : 'a t -> frames:int -> ((float, 'a) Nx.t option, error) result
+    (** [read r ~frames] is the next chunk: [Ok (Some c)] with [c] fresh,
+        C-contiguous and caller-owned, shaped [[channels; n]] with
+        [1 <= n <= frames]. It blocks until [frames] frames have arrived or
+        the stream ends, so [n = frames] but for the last chunk before end
+        of file or an error, and the chunks depend on the bytes alone, never
+        on how the system splits the reads: a pipe delivering a byte at a
+        time yields the chunks a file does.
+
+        [r] never reads past the frames it owes: after a chunk of [frames]
+        frames, [ic] stands at the frame boundary that ends it and [r] holds
+        no byte. [Ok None] is end of file, and is end of file forever after,
+        without another read of [ic].
+
+        Failures come after data. A stream that ends inside a frame, or a
+        failure of the channel — [Sys_error], or [Sys_blocked_io] from a
+        non-blocking descriptor with nothing ready, which a reader that
+        blocks cannot wait out — is [Error (Io {op = "read"; _})], reported
+        once, after the chunk of every complete frame before it; [r] is at
+        end of file from then on. So is it after an exception that escapes
+        [read] — one a signal handler raises during a blocking read, such as
+        [Sys.Break] — which propagates: the bytes that call had consumed are
+        lost, and as [ic] may then stand inside a frame, where no later read
+        could find the next frame's first byte, [r] reads no more.
+
+        Each call allocates its whole chunk of [frames] frames before it
+        reads, and copies a short last chunk to a buffer of its own size:
+        [frames] sizes an allocation, and one too large for the host raises
+        rig's [Out_of_memory].
+
+        Raises [Invalid_argument] if [frames < 1], or if the size of a chunk
+        of [frames] frames overflows. *)
+  end
+
+  val encode : encoding -> (float, 'a) Nx.t -> string
+  (** [encode e x] is the interleaved frames of [x], [[channels; frames]] or
+      rank-one (mono) in any strided layout (one compaction copy when not
+      contiguous, none when it is): [frames * channels * sample_bytes e]
+      bytes.
+
+      Raises [Invalid_argument] if [x] has rank 0 or rank > 2, no channel or
+      so many that the size of a frame overflows, or a dtype neither float32
+      nor float64. *)
+
+  val write :
+       ?name:string
+    -> encoding
+    -> Out_channel.t
+    -> (float, 'a) Nx.t
+    -> (unit, error) result
+  (** [write e oc x] writes [encode e x] to [oc], which it puts in binary
+      mode, a staging block at a time — the encoded stream never exists
+      whole — and then flushes [oc], so that every failure of the channel
+      ([Sys_error], [Sys_blocked_io]) lands in the result:
+      [Error (Io {op = "write"; _})]. [oc] stays open.
+      Writing to a pipe whose reader has exited raises [SIGPIPE], which
+      kills a program that does not ignore it; one that does
+      ([Sys.set_signal Sys.sigpipe Sys.Signal_ignore]) gets the error.
+
+      Raises [Invalid_argument] as {!encode} does. *)
+end
