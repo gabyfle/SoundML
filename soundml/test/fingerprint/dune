@@ -1,0 +1,48 @@
+; The bit fingerprints: see the header of fingerprint.ml.
+
+(executable
+ (name fingerprint)
+ (modules fingerprint)
+ (libraries nx soundml))
+
+; Producing the fingerprints runs the streaming laws, which hold on every
+; platform: a violation exits 1 and fails runtest everywhere.
+
+(rule
+ (package soundml)
+ (action
+  (with-stdout-to
+   fingerprints.out
+   (run %{exe:fingerprint.exe}))))
+
+(alias
+ (name runtest)
+ (package soundml)
+ (deps fingerprints.out))
+
+; The bits themselves are compared on the platforms that have a recorded
+; expectation, keyed by system and architecture. A missing expectation file
+; reads as empty, so the first run on a newly enabled platform fails with the
+; complete content as its diff. SOUNDML_FINGERPRINT_TAG, when set, is appended
+; to the key, so that two machines of one platform whose bits differ (a
+; developer's Mac and CI's macOS runner) each keep their own file. Only the dev
+; profile compares: a release build (dune runtest -p, opam's with-test) runs
+; the laws but not the comparison, whose bits belong to the recording machines.
+
+(rule
+ (alias runtest)
+ (package soundml)
+ (enabled_if
+  (and
+   (= %{profile} dev)
+   (or
+    (and
+     (= %{system} macosx)
+     (= %{architecture} arm64))
+    (and
+     (= %{system} linux)
+     (= %{architecture} amd64)))))
+ (action
+  (diff
+   fingerprints.%{system}-%{architecture}%{env:SOUNDML_FINGERPRINT_TAG=}.expected
+   fingerprints.out)))

@@ -118,6 +118,101 @@ Current suites:
   `dev/soxr_reference.py` — SoXR's only appearance in the repository —
   rather than by `generate_vectors.py`.
 
+## Bit fingerprints
+
+The goldens check that SoundML is right, within tolerances. The
+`soundml/test/fingerprint` suite checks something narrower: that a change
+did not move a single bit. It is what a refactor or a performance change is
+held to.
+
+`fingerprint.exe` prints one line per public function, per kernel driven
+directly, and per stage run in one chunk where that run is the stage's only
+reference, at explicit configurations, at both dtypes: the row's name, the
+shapes of its outputs and the MD5 of their float64 image (float32 widened
+exactly, complex values as their re/im pairs, integers as themselves, every
+NaN as the one quiet NaN; -0 and +0 stay distinct). The input is two seconds
+of a deterministic stereo signal (OCaml's `Random.State` is the same
+generator on every platform) and every parameter is spelled out, so the lines
+pin arithmetic, not defaults, which the goldens pin. The whole run takes a few
+seconds.
+
+The other stages are pinned through their laws (below): a stage with the bits
+of a printed row at every chunking moves exactly when that row moves. The
+executable fails if a law's reference is not a printed row, so a change
+confined to a stage (a float32 kernel only the stage takes, say) cannot keep
+every law and every line.
+
+The bits legitimately differ between platforms (the arm64 multiply-add rule,
+libm, the BLAS Nx calls on macOS), so the expectation is recorded per
+platform, keyed by dune's `%{system}-%{architecture}` followed by the
+environment variable `SOUNDML_FINGERPRINT_TAG` (empty when unset), and
+compared through dune's `diff` action on the platforms that have an
+`enabled_if` clause in `soundml/test/fingerprint/dune`:
+
+- `fingerprints.macosx-arm64.expected`: the developer's Mac;
+- `fingerprints.macosx-arm64-ci.expected`: CI's macOS runner, whose job sets
+  `SOUNDML_FINGERPRINT_TAG=-ci`, since another chip, OS and Xcode under the
+  same key need not give the same bits;
+- `fingerprints.linux-amd64.expected`: CI's ubuntu runner, glibc on an x86-64
+  with FMA and AVX2, which every CI runner has; an older processor or musl may
+  disagree under the same key.
+
+Only the dev profile compares: release builds (`dune runtest -p soundml`,
+opam's `with-test`) run the laws but skip the comparison, since the bits
+belong to the recording machines.
+
+The same executable checks, on every platform, recorded or not, that every
+stage streamed at several chunkings (one chunk, 333, 4096, one item at a time
+for the cheap ones, and again after a reset) has exactly the bits of its
+offline function, and that the documented offline identities (a fused path
+against its composition, a range against a slice, ...) hold to the bit. A
+violation fails the suite with a report on stderr. The output is also the
+same at any number of worker domains (`OCAMLRUNPARAM=d=1`, `d=2`, the
+default) and of BLAS threads.
+
+Bits must not move for a refactor, a performance change, or a change in
+parallelism, chunking or allocation. They may move, and the expectations are
+then re-recorded, for:
+
+- a deliberate numeric change: review that only the intended rows moved;
+- an OCaml compiler upgrade (the arm64 multiply-add fusion rule). CI locks
+  its dependencies afresh on every run (`dune pkg lock` against
+  `ocaml >= 5.5.0`, with no committed lock), so a new compiler release
+  reaches CI by itself and can turn its diffs red on a pull request that
+  changes nothing numeric: re-record, or pin the compiler in CI;
+- a Raven pin bump (Nx's FFT, its matrix product and BLAS cutoff, its fold
+  constants);
+- a C compiler upgrade (contraction in Nx's C kernels);
+- an OS or C library update: Apple's libm and Accelerate, glibc (which is
+  merging correctly rounded functions release by release), as when a CI
+  runner image moves;
+- adding, renaming or reconfiguring a row.
+
+To re-record on the developer's Mac, run `dune test`, review which rows the
+diff moved, then `dune promote`. In a worktree nested inside another dune
+project, pass the root to both: `dune test --root .`, then
+`dune promotion apply --root .` (`dune promote` takes no `--root`).
+
+The two CI expectations come from CI. When one is missing or stale, its job
+fails on the diff (a missing file reads as empty, so the diff then lists the
+complete content), and the failure-only step "Print the fingerprints this
+platform produced" prints the whole file, in the log and in the job summary
+under the file's name. Save that block as the file, with a final newline,
+check that it has the same row names and shapes as the others:
+
+```sh
+cd soundml/test/fingerprint
+diff <(awk '{$NF=""; print}' fingerprints.macosx-arm64.expected) \
+  <(awk '{$NF=""; print}' fingerprints.linux-amd64.expected)
+```
+
+and push to the same branch. A new platform is one more `enabled_if` clause
+and the same procedure.
+
+A new public function or stage adds a row to `fingerprint.ml` and, for a
+stage, a law against a row: its offline function's, or else its own
+one-chunk run's.
+
 ## Regenerating the vectors
 
 Rerun `dev/generate_vectors.py` only to regenerate the goldens, from the

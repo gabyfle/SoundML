@@ -1,0 +1,284 @@
+stft.grid hann                                               12                   663b95dc09994b6ddf25247d255bd5a9
+stft.grid odd                                                12                   6725dcc89bcc13315914d4cf9e2f77ca
+stft.grid right-edge                                         12                   d45288d77f7f74523b133deb0e09108a
+stft.grid right-reflect                                      12                   3497b9f0903fd3f6b2ff843d9e2f4ce3
+stft.grid left                                               12                   bbca7d7b38aeb73658124fa63b58f46b
+cqt.grid cqt                                                 3+1                  44a8c7f4601a5de6e5fb4f906aa60b69
+cqt.grid vqt                                                 3+1                  882f01aab48f639236b54e8614e2b37b
+cqt.grid cqt-odd                                             3+1                  189f894c2189b092b4f8b57550ece532
+resample.grid 22050-16000 high                               8                    f5f269eac1f6350aa39f8ee301a71c1f
+resample.grid 22050-24000 custom-90-0.9                      8                    714de520d4720821c26c1b17e207e925
+resample.grid 22050-44100 fast                               8                    e657f3dc1510cd8316fc2439216f93e7
+resample.grid 22050-11025 best                               8                    acf4c775f13f64ebff4772631deb1009
+resample.grid 48000-8000 high                                8                    a5e6a4e8b4c601e7932313677f55aa1a
+resample.grid 8000-48000 high                                8                    f1bb6140e8f19fa75ea67ce3983add1b
+resample.grid 22050-22050 high                               8                    80cc9f36f856d57435d4e768296ecab6
+window.cola                                                  3                    b337f546ab4470190fe68b16b8fb1760
+effects.semitones 12-tet                                     18                   ab8895b6a4cac03fa4e40633c2c49bfa
+pipeline.latency feature stages                              28                   83f2a0524495443c6b7e92bd5c5fed3b
+input f32                                                    2x44100+1x44100      8cd41ab8accf46a2635ed59a2def56ec
+window.make hann f32                                         1024+333             d791a22043f851ce41af398c1e4e9073
+window.make hamming f32                                      1024+333             30dd41575ac75dda6be0dc4fce604b9b
+window.make blackman f32                                     1024+333             dfcabb487ea9eaae8a94b9e0d67888bc
+window.make blackman-harris f32                              1024+333             8dbcdbb4ef26b873eaedf760710aea0a
+window.make nuttall f32                                      1024+333             7b5c4966db807f97d95d213e6b60b6a5
+window.make bartlett f32                                     1024+333             0e74699da37c244894251d6666affb05
+window.make kaiser-8.6 f32                                   1024+333             703b10a345066a6ec271d737a6028279
+window.make gaussian-50 f32                                  1024+333             e43b90cea5a59a8e175ababed7547c17
+window.make tukey-0.25 f32                                   1024+333             fbf02bcc71df58ea775c245bfb26aa95
+window.make flat-top f32                                     1024+333             5f66afea0ffa9c7943413828b83b97f3
+window.make rectangular f32                                  1024+333             e9753b6b531186dd707eadb0250249d7
+stft.power_spectrum hann p2 f32                              2x513x173            85d0736af1e62b0355896aece653f44c
+stft.power_spectrum hann p1 f32                              2x513x173            edac23dc63e29b605ad5149ea4b775c8
+stft.power_spectrum odd p1.5 f32                             2x255x393            83bb2a859b8e324f8b335387b5942fe4
+stft.power_spectrum right-edge p2 f32                        2x513x276            5856dbae54f3cd97ddc8edb60f02c75f
+stft.power_spectrum right-reflect p2 f32                     2x257x345            39b974ada8de268521a7a3f69700f39e
+stft.coordinates hann f32                                    513+173              87217c8506d9c9d7383345a002f5f89a
+stft.coordinates odd f32                                     255+393              cc57f01d469b709ac474376a86a2e5aa
+stft.coordinates right-edge f32                              513+276              526b228d8ab8b817f15947f1dc1de610
+stft.coordinates right-reflect f32                           257+345              10f31f8b3409e96a970218bb35496103
+stft.transform hann c64                                      2x513x173            631debf0e14986ada7e8333d18993e94
+stft.transform odd c64                                       2x255x393            7451c79852f5c0723b5ec6759f23a83a
+stft.transform right-edge c64                                2x513x276            3b45fe97bd26bb0745ec4ba3374a210c
+stft.transform right-reflect c64                             2x257x345            8ab59611347707ed712c3b23fdd64ff6
+stft.transform_range hann 17-61 c64                          2x513x44             2e5fd45205caa8fc629d3b0e5a81ad44
+stft.invert hann length-n f32                                2x44100              be8f197a6dfa93923d09d854ab8213f7
+stft.invert hann f32                                         2x44032              ee8d51813b8a62dfbd3a4a87e948445e
+stft.invert odd f32                                          2x44021              f397ab47f3d5e8a0a72bfb2675d1415a
+stft.invert right-edge f32                                   2x44001              55de788941bc582dab8dd75d4d8c5800
+stft.invert right-reflect f32                                2x44033              8c0e6d99e63c4472796f47fb40559ab7
+stft.griffin_lim hann zero-phase i8 m0.99 length-n f32       44100                36d8dca7563c1309d664b73f3f82be4f
+stft.griffin_lim hann phase i4 m0 f32                        2x44032              2f0ee18afdec2464ede664ce26f92d63
+convert.power_to_db ref-1 amin-1e-10 top-80 f32              2x513x173            e18e4e45e19c13c357f7ceb01962e75e
+convert.amplitude_to_db ref-0.5 amin-1e-5 top-60 f32         2x513x173            34ebf6ca6e769601ed22482ec804a129
+convert.db_to_power ref-2 f32                                2x513x173            bad319a69275629fb44c304cf013a43e
+convert.db_to_amplitude ref-2 f32                            2x64x173             7b9e9352bcffdad14d8ac405a5c3cc04
+convert.mel_scale slaney f32                                 513+513              dda4fc5c1db0db1a9dc7bb68fca5bf30
+convert.mel_scale htk f32                                    513+513              1f3c927aa5e681109a9519bdf9d6ee8f
+convert.midi f32                                             512+512              810e866ff731498ee858a65db4b60ddb
+convert.frame_grid hop-256 f32                               173+173              52b4b7821cd2a2303c9eb80546e70b27
+db.stage maximum amin-1e-10 run f32                          2x64x173             00b1c5214954117a7730ef04439d1ac0
+db.clamped_stage maximum amin-1e-10 top-80 run f32           2x64x173             b64d93f074bbfc7dfff8bd637ec5f8b7
+db.stage value-1 amin-1e-10 run f32                          2x64x173             e16004d994cdc32db46b13f6e8e345ac
+mel.filterbank slaney f32                                    64x513               38f28a69b5a6599e4c0b5d7cfd8fa7fc
+mel.filterbank htk f32                                       40x513               8344676b248085376753b2f3f801eb05
+mel.apply slaney p2 f32                                      2x64x173             0481364243fa85be6083a9c6b99c09a5
+mel_spectrogram hann slaney p2 f32                           2x64x173             0481364243fa85be6083a9c6b99c09a5
+mel_spectrogram hann htk p1 f32                              2x40x173             0d79e4deda8bb8d1e721d4c97d8f2021
+mfcc hann slaney n13 lifter-22 f32                           2x13x173             859ac18f4c7178da3479021e72b85bd9
+mfcc hann htk n20 lifter-0 f32                               2x20x173             9b549a183093cd927b2d8c2124872d97
+chroma.filterbank c12 f32                                    12x513               b55c3b5edc9f4fdbd583118ca78835e3
+chroma.filterbank a24 f32                                    24x513               68c424d5ac86a595b906d2335b95c240
+chroma.apply c12 inf f32                                     2x12x173             f2cf46c52619e8e88b71da688313e641
+chroma_stft hann c12 p2 inf f32                              2x12x173             f2cf46c52619e8e88b71da688313e641
+chroma_stft hann c12 p1 l2 f32                               2x12x173             67a932a23649e7be02c18b090ef61b41
+chroma_stft hann a24 p2 none f32                             2x24x173             ed3314446f71aaac4d396f816dc88965
+cqt.coordinates cqt f32                                      48+48                79b079173126b35f54c4628320ec1fb6
+cqt.coordinates vqt f32                                      96+96                ca1eabb457da6f04513ab3599662dc9b
+cqt.coordinates cqt-odd f32                                  108+108              1b9b01440cbf9a2b23dab247a7376638
+cqt.transform cqt c64                                        2x48x173             ab82594adaa55fe4149a2b54a1e33420
+cqt.transform vqt c64                                        2x96x173             5aae0514cbf536253eea6686c82b430e
+cqt.transform cqt-odd c64                                    2x108x147            74104fb316381ed1bbda2f819fcfea09
+cqt.power_spectrum cqt p1 f32                                2x48x173             c87748d57461a6eec4b56abafb11cc91
+cqt.power_spectrum vqt p2 f32                                2x96x173             9e9c0009f03a6374c644aa6fd225b9f6
+cqt.power_spectrum cqt-odd p1.5 f32                          2x108x147            3b36b27e8f70804954037b57876d7115
+chroma.cqt_projection cqt c12 f32                            12x48                331101b6623e21315cf71015620f17a8
+chroma.cqt_projection cqt-odd c12 f32                        12x108               ed8a02ac02be1ac6fc00fdf35bb7be4d
+chroma.of_cqt cqt c12 inf f32                                2x12x173             b5a4ec14c6c22cc458ab47e2431c728c
+chroma_cqt cqt c12 inf f32                                   2x12x173             b5a4ec14c6c22cc458ab47e2431c728c
+chroma_cqt vqt c12 l1 f32                                    2x12x173             3c11f36cbd0265dfd456387805f7a2af
+chroma_cqt cqt-odd c12 l1 f32                                2x12x147             c3593a5e631f26cb4974f378bd8292d3
+cqt.kernel cqt c64                                           2x48x173             eaf0936a9947f218c67aef31c63a8404
+cqt.kernel vqt c64                                           2x96x173             1473ae9aba50adb927ca3910a6784c8b
+cqt.kernel cqt-odd c64                                       2x108x147            74104fb316381ed1bbda2f819fcfea09
+resample 22050-16000 high f32                                2x32000              63df76e8c4f8c07cdd7fbb8f9d9b695f
+resample.apply 22050-16000 high f32                          2x32000              63df76e8c4f8c07cdd7fbb8f9d9b695f
+resample.apply 22050-24000 custom-90-0.9 f32                 2x48000              a7d5a2740e0be40378abf6a98277eef5
+resample.apply 22050-44100 fast f32                          2x88200              46dd4e425fab15f819657239adf7673a
+resample.apply 22050-11025 best f32                          2x22050              a3055ef6350115ef3987799733df34f8
+resample.apply 48000-8000 high f32                           2x7350               b570ee66c4783a8478f226a697d5ccd6
+resample.apply 8000-48000 high f32                           2x264600             8e96eacbb79cac1a528e968d204a233a
+resample.apply 22050-22050 high f32                          2x44100              746b17f6f81d932c21901f7e28607ffd
+resample.apply_gemm 22050-16000 high f32                     2x32000              63df76e8c4f8c07cdd7fbb8f9d9b695f
+resample.prototype 22050-16000 high f32                      83841                b7391ccb01448aae20c2dcd1626e8a5d
+resample.apply_gemm 48000-8000 high f32                      2x7350               daee0942a149953ec4ee2b06f40f26cc
+resample.prototype 48000-8000 high f32                       1245                 ce3e7f6e418e980e84cd14ebe7807110
+spectral_centroid hann f32                                   2x1x173              34cc6f6abd8565d0480e2aa82d176477
+spectral_bandwidth hann p2 f32                               2x1x173              26d038c75878f5a58b24d6de45bd8c8f
+spectral_rolloff hann 0.85 f32                               2x1x173              d7063e7a28f47bd05dddb3fc6a820b0e
+spectral_flatness hann amin-1e-10 p2 f32                     2x1x173              3cd32830bb2c28aa16f28578db7130ac
+spectral_centroid custom-freqs f32                           2x1x173              2a3b32d82727a8fc8a2d992e6c74328b
+spectral_bandwidth custom-freqs p1.5 f32                     2x1x173              1d9ae849666421e995f1422b57d4d8f8
+spectral_bandwidth custom-freqs p1.5 given-centroid f32      2x1x173              43bc7eca69ec42f209bbee4047cafd51
+spectral_rolloff custom-freqs 0.5 f32                        2x1x173              6f1e2629b66340da8d21fbd724af5173
+rms 1024-256 f32                                             2x1x173              9d58fa78fd5ef3736880aa0eb2154488
+rms_of_spectrogram 1024 f32                                  2x1x173              3ddb8a982e4fd691665fddbf12098396
+zero_crossing_rate 1024-256 threshold-1e-10 f32              2x1x173              53c759e2724f4b4d1dc85abc3c86f525
+zero_crossing_rate 1024-256 threshold-0.05 f32               2x1x173              5abb8981960abd479005df0fdbe8cb0e
+delta mfcc w9 o1 interp f32                                  2x13x173             11e96387b0c78df0a73df60347b08775
+delta mfcc w5 o2 nearest f32                                 2x13x173             444aa9b980c46838a1d62ad2c0e68b16
+delta rms w9 o1 interp f32                                   2x1x173              dbeb12948dbf25e262f7f6200580612f
+pcen mel g0.98 b2 p0.5 tc0.4 max1 f32                        2x64x173             d4c1ac0101633c8e0fba644a5752d9d4
+pcen mel g0.8 b10 p0.25 tc0.06 s0.05 max3 f32                2x64x173             236e70e6a7d1d9a21db7c940bd12191a
+pcen mel g0.9 b0 p0 tc0.2 max1 f32                           2x64x173             5f8761a50e2345a4e41f4f81026c1172
+pcen band g0.98 b2 p0.5 tc0.4 max1 f32                       173                  90ff5b67dfe694897f5b90f5d66bb027
+spectral_contrast hann b6 f200 q0.02 log f32                 2x7x173              f8c1543cd5bcdbe2cb1af065ce372e3b
+spectral_contrast_of_spectrogram hann b5 f150 q0.05 lin f32  2x6x173              81ff844c8b1ce8dca16d1d80ef8e64ed
+onset_strength hann slaney lag-1 f32                         2x173                aa5c0f1d3051a19be7eb7a3c84750d76
+onset_strength left slaney lag-2 f32                         2x169                df3d7b18fbaab19b4a7f22168046bd22
+onset_strength_stage lag-1 run f32                           2x173                7521a8ae4b2d213ca8b2421f836f9a3b
+onset_strength_stage chain hann slaney value-1 lag-1 run f32 2x173                7521a8ae4b2d213ca8b2421f836f9a3b
+mfcc_stage slaney n13 lifter-22 run f32                      2x13x173             0173023c220f7f6ceaf058b9a89f4ad0
+mfcc hann slaney n13 lifter-22 noise f32                     1x13x173             71a0b44b4e4c7bf6526752556c300579
+spectral_contrast hann b6 f200 q0.02 log noise f32           1x7x173              c84033cc6df35f3e6f32d57376ce1492
+hpss hann k31x31 p2 m1x1 f32                                 2x44100+2x44100      d38816f6b4a062e8f5536446b8d1579a
+harmonic hann k17x31 p1 m2x2 f32                             2x44100              f371ca57d3dd398dbcecf793884f9e59
+percussive hann k31x17 pinf m1x3 f32                         2x44100              b48bee5ba80a3496a309cd21c00c5956
+hpss hann k16x30 p2 m1x1 f32                                 2x44100+2x44100      e63f574012fe0735ce31cfc5198891da
+hpss_of_spectrogram hann k31x31 p2 m1x1 f32                  2x513x173+2x513x173  b024304108d9e913482f42a0119373ac
+hpss_masks hann k31x31 p2 m1.5x1.5 f32                       2x513x173+2x513x173  c1c5253f7966456742759486d9195fe1
+hpss_of_stft hann k31x31 p2 m1x1 c64                         2x513x173+2x513x173  3c3e8cd3e9d1689dafada7cce07c0eba
+effects.phase_vocoder hann independent 1.5 c64               2x513x116            dd3b80aec7c79557763a8eb5c0d92461
+effects.phase_vocoder hann locked 0.75 c64                   2x513x231            464f528c92cc4b47e9a77db2f2f8b97c
+effects.time_stretch hann independent 1.25 f32               2x35280              e24008aa8090104a3248eeb4f3c633ab
+effects.time_stretch hann locked 0.8 f32                     2x55125              61343e7836ef693fb88dc8a10cef7a3d
+effects.time_stretch hann independent 1 f32                  2x44100              1b01f1e3f92903664cd0e5b96c3b39b3
+effects.pitch_shift hann locked high +3 f32                  2x44100              e4bc08c38999bc5586ee727c316eebc3
+effects.pitch_shift hann independent fast -5 f32             2x44100              bf39d1dd10eef8386f465335a4375b97
+effects.trim top-60 maximum 1024-256 mono f32                35328+2              24e87479bbed187b3abd2471027bfb33
+effects.trim top-40 value-0.5 2048-512 stereo f32            2x36352+2            ca6ffb822311335afd14b9dfba50cde7
+effects.split top-30 maximum 1024-256 mono f32               4                    bd66b371ccf73bc483c16d81e11bec99
+effects.split top-20 value-0.25 512-128 stereo f32           4                    670f6d6497ea0172d82f352240ce4936
+input f64                                                    2x44100+1x44100      be7346d3a74e911fa3ce48901301c279
+window.make hann f64                                         1024+333             ce69dd27353bd7c2ff26bd6cea4b5eb4
+window.make hamming f64                                      1024+333             d1d906cc3275b4ed97f55abf08034437
+window.make blackman f64                                     1024+333             20b1670a8d4348969ad16b14dad5a346
+window.make blackman-harris f64                              1024+333             79dee3128f8342f135666a60db64d95a
+window.make nuttall f64                                      1024+333             d7471d2863248379b3e49c6b6f6c2a4f
+window.make bartlett f64                                     1024+333             da058e6a40b1582f06facd494d6bc724
+window.make kaiser-8.6 f64                                   1024+333             47a417e011ffa4ce9884418e137b9267
+window.make gaussian-50 f64                                  1024+333             8c1f7e7101638ccc94e60926588b551e
+window.make tukey-0.25 f64                                   1024+333             07767c0697af1c2ff76752c0bf82e02a
+window.make flat-top f64                                     1024+333             62b3fd24cb7ed38c87aa05e3a1a15e34
+window.make rectangular f64                                  1024+333             e9753b6b531186dd707eadb0250249d7
+stft.power_spectrum hann p2 f64                              2x513x173            28bc509ab1713c07daa74674b91edb80
+stft.power_spectrum hann p1 f64                              2x513x173            8b0a6742e24f30141d7d6161c28f161e
+stft.power_spectrum odd p1.5 f64                             2x255x393            8a3a70f6ccf332ea226c1755780b85b9
+stft.power_spectrum right-edge p2 f64                        2x513x276            4fac7ff682ed8b2d5a226a72208a24b1
+stft.power_spectrum right-reflect p2 f64                     2x257x345            9b39ba10d077d89e1491d1dc7e8fac79
+stft.coordinates hann f64                                    513+173              ee9cfd90511850fdf7c812a675a42a82
+stft.coordinates odd f64                                     255+393              e429c82d77bc70ab4d8b3cd873731447
+stft.coordinates right-edge f64                              513+276              a5a3600471c7114d8e410f26c22be4af
+stft.coordinates right-reflect f64                           257+345              1d599ae3cdd184af5b0a305ce15e7c4f
+stft.transform hann c128                                     2x513x173            353074ed12e2100a323792867335ba4e
+stft.transform odd c128                                      2x255x393            1a6155574be69a812b33a3d190269232
+stft.transform right-edge c128                               2x513x276            e12a83dc3a0f368fe0310ee33121012d
+stft.transform right-reflect c128                            2x257x345            93a572d6e8317d0980f6fab1986014ab
+stft.transform_range hann 17-61 c128                         2x513x44             3424eb5d9ab651776361c426d5d7026d
+stft.invert hann length-n f64                                2x44100              23287cc781de026b0e1f2d0ee9108a74
+stft.invert hann f64                                         2x44032              be8c69adc4d29b1ea3a7929e4c085438
+stft.invert odd f64                                          2x44021              badf5a8059d979db4c96e3f777a42f44
+stft.invert right-edge f64                                   2x44001              c7bb9840b58fdebf166f4a0920398c54
+stft.invert right-reflect f64                                2x44033              9ee210f26755f022ff25f3ade0370e61
+stft.griffin_lim hann zero-phase i8 m0.99 length-n f64       44100                800a884edfa3fce9bca0a7a2c39e7154
+stft.griffin_lim hann phase i4 m0 f64                        2x44032              e8e3e9ccfee9aa6fa64a81804babc52c
+convert.power_to_db ref-1 amin-1e-10 top-80 f64              2x513x173            dd118c7f9332ee004892bb463ff3e923
+convert.amplitude_to_db ref-0.5 amin-1e-5 top-60 f64         2x513x173            580dc4e85f6c0e0aa081c7af06d412de
+convert.db_to_power ref-2 f64                                2x513x173            9d950fc6f1c4940d489eda4dbb03e825
+convert.db_to_amplitude ref-2 f64                            2x64x173             d2283cf26cfcdb78d86ed8b4c5d1be6e
+convert.mel_scale slaney f64                                 513+513              779a106eaa3e1ff612ea511447f28b8e
+convert.mel_scale htk f64                                    513+513              69aebebde11d44a163d512f73dd247a4
+convert.midi f64                                             512+512              866a0ce229157fbf91fc47dea42df067
+convert.frame_grid hop-256 f64                               173+173              b9f69e2fe29bd5d1d8e7a7dd789f97f9
+db.stage maximum amin-1e-10 run f64                          2x64x173             712b6da011286b40d324c0b8952c4d11
+db.clamped_stage maximum amin-1e-10 top-80 run f64           2x64x173             85f682b87ccd2f1c9b57c09abc7f7416
+db.stage value-1 amin-1e-10 run f64                          2x64x173             ed714dd4467e975df5dd846a0357ba3a
+mel.filterbank slaney f64                                    64x513               a8203c77ad7a511fa8b6217c7ebc55ac
+mel.filterbank htk f64                                       40x513               13c3479c24739ee9389abdcc49023f30
+mel.apply slaney p2 f64                                      2x64x173             19028c0229beb3155f7ec99a5a1f6784
+mel_spectrogram hann slaney p2 f64                           2x64x173             19028c0229beb3155f7ec99a5a1f6784
+mel_spectrogram hann htk p1 f64                              2x40x173             ccfc1098fedbd88216644a3e739a8895
+mfcc hann slaney n13 lifter-22 f64                           2x13x173             c1b5aca2cc2224102be7afba630eead9
+mfcc hann htk n20 lifter-0 f64                               2x20x173             a3009b8ecf097b17c7d2aaec18d98c29
+chroma.filterbank c12 f64                                    12x513               502e368e85be814d66643f62c5bfb742
+chroma.filterbank a24 f64                                    24x513               58a740f4beedab1e8c12de7215bf49ab
+chroma.apply c12 inf f64                                     2x12x173             c80cf9f3ea52158954ad6e7662e31f94
+chroma_stft hann c12 p2 inf f64                              2x12x173             c80cf9f3ea52158954ad6e7662e31f94
+chroma_stft hann c12 p1 l2 f64                               2x12x173             59aefcacbdb088ecbd3a885cd2f94385
+chroma_stft hann a24 p2 none f64                             2x24x173             446fcbe25dc26f9a4bc22e784477c972
+cqt.coordinates cqt f64                                      48+48                98a2163385f9ea80b156f13f539d4566
+cqt.coordinates vqt f64                                      96+96                c450b8a81bb0fa102adec10778abe193
+cqt.coordinates cqt-odd f64                                  108+108              0864515dbb7535f0b92a14ed2677ede2
+cqt.transform cqt c128                                       2x48x173             0c6e22f79479150a3fa14c3a9db219df
+cqt.transform vqt c128                                       2x96x173             550be20772c45995653303faf3642cb6
+cqt.transform cqt-odd c128                                   2x108x147            85393324ad015156f56655bd327af9d1
+cqt.power_spectrum cqt p1 f64                                2x48x173             99c2a4e538ddcb1973ff4392ea0e1c97
+cqt.power_spectrum vqt p2 f64                                2x96x173             d6c65074b1e91087b92a53640f9673e0
+cqt.power_spectrum cqt-odd p1.5 f64                          2x108x147            3dc5e25ccd69f369a4a619030c11a2ef
+chroma.cqt_projection cqt c12 f64                            12x48                331101b6623e21315cf71015620f17a8
+chroma.cqt_projection cqt-odd c12 f64                        12x108               ed8a02ac02be1ac6fc00fdf35bb7be4d
+chroma.of_cqt cqt c12 inf f64                                2x12x173             e3ceecc3f27af47bbca849ef8008e053
+chroma_cqt cqt c12 inf f64                                   2x12x173             e3ceecc3f27af47bbca849ef8008e053
+chroma_cqt vqt c12 l1 f64                                    2x12x173             472d0cbeeea8d9d85d58554b028632d9
+chroma_cqt cqt-odd c12 l1 f64                                2x12x147             f114223467acb5761837f321cbd4efea
+cqt.kernel cqt c128                                          2x48x173             f00c75dd104af2014d486648dd2a10e2
+cqt.kernel vqt c128                                          2x96x173             88ea2cfff6f4d43746c2b145f5683425
+cqt.kernel cqt-odd c128                                      2x108x147            d07136744d3cb7d9a17c978c5228e3b5
+resample 22050-16000 high f64                                2x32000              81844f104cd805edcd2d1db0054766b9
+resample.apply 22050-16000 high f64                          2x32000              81844f104cd805edcd2d1db0054766b9
+resample.apply 22050-24000 custom-90-0.9 f64                 2x48000              5f73ce1586d509084f2572db5a1fcf99
+resample.apply 22050-44100 fast f64                          2x88200              f4b575d2222ef7a349d29963248f4b46
+resample.apply 22050-11025 best f64                          2x22050              2f1dd56cee0ece4f73d0c60a811e8e04
+resample.apply 48000-8000 high f64                           2x7350               fd09fe94364ad5c85b3310378183e3d2
+resample.apply 8000-48000 high f64                           2x264600             38eea17118828b921e591b0efde79b14
+resample.apply 22050-22050 high f64                          2x44100              a12c4a967291051e3985c694bc7926c6
+resample.apply_gemm 22050-16000 high f64                     2x32000              81844f104cd805edcd2d1db0054766b9
+resample.prototype 22050-16000 high f64                      83841                90952cf3a33af7a297cbc58990993f61
+resample.apply_gemm 48000-8000 high f64                      2x7350               36f407a41172e36d0766c741ec5e5f5f
+resample.prototype 48000-8000 high f64                       1245                 aeeaa6f16f2f863ca1d42e30414f5c54
+spectral_centroid hann f64                                   2x1x173              4bcaf2a1db686b74397af0e6c8e1f9e7
+spectral_bandwidth hann p2 f64                               2x1x173              a5d86b1c33d04231db05b1176a99f4d8
+spectral_rolloff hann 0.85 f64                               2x1x173              d7063e7a28f47bd05dddb3fc6a820b0e
+spectral_flatness hann amin-1e-10 p2 f64                     2x1x173              fa618fbf3b628a9a1c1040c915229a37
+spectral_centroid custom-freqs f64                           2x1x173              6d8a15ac1243bec7acc55743dde76fb3
+spectral_bandwidth custom-freqs p1.5 f64                     2x1x173              c3f0f8d92b8acd9945a44bf30d62a7d6
+spectral_bandwidth custom-freqs p1.5 given-centroid f64      2x1x173              c3f0f8d92b8acd9945a44bf30d62a7d6
+spectral_rolloff custom-freqs 0.5 f64                        2x1x173              153d0d16bdfaf7b02b715bdf9db3eeef
+rms 1024-256 f64                                             2x1x173              979c812cacb6a0eea0d07a1b9b690dd6
+rms_of_spectrogram 1024 f64                                  2x1x173              361b1a85c274094bcea1c9dd3c7736e3
+zero_crossing_rate 1024-256 threshold-1e-10 f64              2x1x173              53c759e2724f4b4d1dc85abc3c86f525
+zero_crossing_rate 1024-256 threshold-0.05 f64               2x1x173              5abb8981960abd479005df0fdbe8cb0e
+delta mfcc w9 o1 interp f64                                  2x13x173             0d43c90bf13ca3eb021db15280eff956
+delta mfcc w5 o2 nearest f64                                 2x13x173             ac29a6cd035048c4b7fdc6d1b957859b
+delta rms w9 o1 interp f64                                   2x1x173              e83736a66c1c403380edbc79a8440c91
+pcen mel g0.98 b2 p0.5 tc0.4 max1 f64                        2x64x173             e24fccea1bf2af756985a54af776bcc3
+pcen mel g0.8 b10 p0.25 tc0.06 s0.05 max3 f64                2x64x173             00bc592f0c5d2866da53856673ac2071
+pcen mel g0.9 b0 p0 tc0.2 max1 f64                           2x64x173             3fcb20f4a5e23c1e557ee7baf17a812d
+pcen band g0.98 b2 p0.5 tc0.4 max1 f64                       173                  46e7b1f81ca2383e939ace0b4b008b9f
+spectral_contrast hann b6 f200 q0.02 log f64                 2x7x173              a9f8e8c263a6c7bb6f977bba9122e7bc
+spectral_contrast_of_spectrogram hann b5 f150 q0.05 lin f64  2x6x173              533ef9a1e3f62807017588480170ac48
+onset_strength hann slaney lag-1 f64                         2x173                7afd65b8c398aee249e51aff25671f95
+onset_strength left slaney lag-2 f64                         2x169                43f83ddcdfa6194fec06c2e580c264e3
+onset_strength_stage lag-1 run f64                           2x173                fc2a810a08ef519d858a9276c18271a5
+onset_strength_stage chain hann slaney value-1 lag-1 run f64 2x173                fc2a810a08ef519d858a9276c18271a5
+mfcc_stage slaney n13 lifter-22 run f64                      2x13x173             5f6371dace4e8feda0e7b910edda8b12
+mfcc hann slaney n13 lifter-22 noise f64                     1x13x173             2ac71a6fdfe1e3ace24bc3f55b7dedcf
+spectral_contrast hann b6 f200 q0.02 log noise f64           1x7x173              4547fb5a8666dd79967a77de65a5df81
+hpss hann k31x31 p2 m1x1 f64                                 2x44100+2x44100      4f4107b9afcb83ef909fd232ad74143b
+harmonic hann k17x31 p1 m2x2 f64                             2x44100              a6bd29bd3036a4340d67ba832545abc3
+percussive hann k31x17 pinf m1x3 f64                         2x44100              1ce8adfcd6bce5453302876032cd0e3e
+hpss hann k16x30 p2 m1x1 f64                                 2x44100+2x44100      e6c6352c31e85d4bceb80801bb492fda
+hpss_of_spectrogram hann k31x31 p2 m1x1 f64                  2x513x173+2x513x173  dcaa61652d50941dca33e12a279f1535
+hpss_masks hann k31x31 p2 m1.5x1.5 f64                       2x513x173+2x513x173  5ffe00229744b8b62bd053fbb9344241
+hpss_of_stft hann k31x31 p2 m1x1 c128                        2x513x173+2x513x173  1835ce4c723dabd74222258f5538c2f4
+effects.phase_vocoder hann independent 1.5 c128              2x513x116            86326d6c007483957a33871ab20270f6
+effects.phase_vocoder hann locked 0.75 c128                  2x513x231            533efb1cbccee293fe0b93297158453e
+effects.time_stretch hann independent 1.25 f64               2x35280              6e899f423e9325586e762dfa985983d2
+effects.time_stretch hann locked 0.8 f64                     2x55125              b942def5e83955233670be17ef5c1326
+effects.time_stretch hann independent 1 f64                  2x44100              ba2713c13cb28eac625227efcdb9cb60
+effects.pitch_shift hann locked high +3 f64                  2x44100              c209f96541d51048cb36756942b099e3
+effects.pitch_shift hann independent fast -5 f64             2x44100              6577e0bf12fc3c1effc2236f1022c175
+effects.trim top-60 maximum 1024-256 mono f64                35328+2              e3f6742cc3b7766d6efcb486899ab59c
+effects.trim top-40 value-0.5 2048-512 stereo f64            2x36352+2            a7f01508a3a9295d703599fd4ec98bf1
+effects.split top-30 maximum 1024-256 mono f64               4                    bd66b371ccf73bc483c16d81e11bec99
+effects.split top-20 value-0.25 512-128 stereo f64           4                    670f6d6497ea0172d82f352240ce4936
