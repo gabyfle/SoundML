@@ -1,7 +1,7 @@
 (test
  (name test_io)
  (package soundml-io)
- (modules io_roundtrip io_goldens io_errors io_reader io_law test_io)
+ (modules io_roundtrip io_goldens io_errors io_reader io_law io_raw test_io)
  (libraries nx soundml soundml_io tutils unix windtrap yojson)
  (deps
   (glob_files corpus/*)

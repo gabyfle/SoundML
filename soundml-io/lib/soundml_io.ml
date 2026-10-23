@@ -1294,3 +1294,301 @@ let write ?format path (a : 'a audio) =
                   Ok ()
               | _ ->
                   Error (Io {path; op= "close"; details= close_details}) ) )
+
+(* {1 Headerless PCM}
+
+   Pure OCaml over [Pcm]'s kernels: no libsndfile handle, so no stub and no
+   worker pool. Bytes reach a staging block — from a string by a blit, from a
+   channel through the channel's own buffer — and each block decodes straight
+   into the planes of the destination; encoding runs the other way. A
+   destination is a rig host buffer the result tensor takes over without a copy,
+   as the core library's results are (soundml/lib/store.ml) — but for the
+   reader's short last chunk, copied to its own size. *)
+
+module Raw = struct
+  type encoding = Pcm.encoding
+
+  let encoding_of_name = Pcm.of_name
+
+  let encoding_name = Pcm.name
+
+  let sample_bytes = Pcm.sample_bytes
+
+  let default_name = "<channel>"
+
+  (* Samples and elements are at most 8 bytes: a channel count within [max_int /
+     8] keeps every frame's size representable. *)
+  let check_channels op channels =
+    if channels < 1 then
+      invalid_arg
+        (Printf.sprintf "%s: %d channels (a frame holds at least one sample)" op
+           channels )
+    else if channels > max_int / 8 then
+      invalid_arg
+        (Printf.sprintf "%s: %d channels overflow the size of a frame" op
+           channels )
+
+  let frame_bytes e ~channels = channels * Pcm.sample_bytes e
+
+  let plural n = if n = 1 then "" else "s"
+
+  (* The details of [Sys_blocked_io]: a non-blocking descriptor with nothing
+     ready, which faces that block cannot wait out. Typed like [Sys_error]. *)
+  let not_ready = "the channel is non-blocking and not ready"
+
+  let partial_frame ~name ~have ~frame_bytes =
+    Io
+      { path= name
+      ; op= "read"
+      ; details=
+          Printf.sprintf "the stream ends %d byte%s into a %d-byte frame" have
+            (plural have) frame_bytes }
+
+  (* [s] holds whole frames: decode them a staging block at a time — the copy
+     into the block is what gives the kernels typed views of the bytes. *)
+  let decode_frames e ~channels dt s =
+    let fb = frame_bytes e ~channels in
+    let frames = String.length s / fb in
+    let dst = Rig.Buffer.create Rig.host (elt_size dt * channels * frames) in
+    if frames > 0 then begin
+      let st = Pcm.staging ~frames ~frame_bytes:fb () in
+      let block = Pcm.capacity st / fb in
+      let pos = ref 0 in
+      while !pos < frames do
+        let n = Int.min block (frames - !pos) in
+        Rig.Buffer.blit_from_string s (!pos * fb) st.Pcm.buffer 0 (n * fb) ;
+        Pcm.decode e dt st dst ~channels ~frames:n ~total:frames ~off:!pos ;
+        pos := !pos + n
+      done
+    end ;
+    Nx.of_buffer dt [|channels; frames|] dst
+
+  let decode e ~channels dt s =
+    let op = "Soundml_io.Raw.decode" in
+    check_channels op channels ;
+    check_dtype op dt ;
+    let fb = frame_bytes e ~channels in
+    let len = String.length s in
+    if len mod fb <> 0 then
+      invalid_arg
+        (Printf.sprintf
+           "%s: %d bytes are not whole %d-byte frames (%d channel%s of %s)" op
+           len fb channels (plural channels) (Pcm.name e) ) ;
+    decode_frames e ~channels dt s
+
+  let read ?(name = default_name) e ~channels dt ic =
+    let op = "Soundml_io.Raw.read" in
+    check_channels op channels ;
+    check_dtype op dt ;
+    match
+      In_channel.set_binary_mode ic true ;
+      In_channel.input_all ic
+    with
+    | exception Sys_error details ->
+        Error (Io {path= name; op= "read"; details})
+    | exception Sys_blocked_io ->
+        Error (Io {path= name; op= "read"; details= not_ready})
+    | s ->
+        let fb = frame_bytes e ~channels in
+        let have = String.length s mod fb in
+        if have <> 0 then Error (partial_frame ~name ~have ~frame_bytes:fb)
+        else Ok (decode_frames e ~channels dt s)
+
+  module Reader = struct
+    type 'a t =
+      { ic: In_channel.t
+      ; name: string
+      ; encoding: encoding
+      ; channels: int
+      ; frame_bytes: int
+      ; dt: (float, 'a) Nx.dtype
+      ; staging: Pcm.staging
+      ; mutable ended: bool
+            (* end of file, a failure, or an exception seen: no more reads *)
+      ; mutable pending: error option (* the next call's report, once *) }
+
+    let create ?(name = default_name) e ~channels dt ic =
+      let op = "Soundml_io.Raw.Reader.create" in
+      check_channels op channels ;
+      check_dtype op dt ;
+      (* a failure here is the channel's, and the first read reports it *)
+      ( try In_channel.set_binary_mode ic true with Sys_error _ -> () ) ;
+      let frame_bytes = frame_bytes e ~channels in
+      { ic
+      ; name
+      ; encoding= e
+      ; channels
+      ; frame_bytes
+      ; dt
+      ; staging= Pcm.staging ~frame_bytes ()
+      ; ended= false
+      ; pending= None }
+
+    (* Fill one chunk of [frames] frames. The reads ask for at most the bytes
+       the chunk still owes, so the channel never runs past the chunk's last
+       frame and no byte is carried from one chunk to the next: a frame a read
+       splits, at any byte, stays staged until the reads that follow complete
+       it. The staged bytes decode whenever the block is full (a multiple of the
+       frame size), once the chunk is complete, and once the stream stops —
+       whole frames only, leaving an incomplete last frame to report. The
+       outcome is [None] when the chunk is full or the stream ended cleanly, the
+       failure otherwise; either way after every complete frame was decoded. *)
+    let fill r dst ~frames =
+      let fb = r.frame_bytes and capacity = Pcm.capacity r.staging in
+      let bytes = r.staging.Pcm.bytes in
+      let produced = ref 0 and have = ref 0 in
+      let drain () =
+        let whole = !have / fb in
+        if whole > 0 then begin
+          Pcm.decode r.encoding r.dt r.staging dst ~channels:r.channels
+            ~frames:whole ~total:frames ~off:!produced ;
+          produced := !produced + whole
+        end ;
+        have := !have - (whole * fb)
+      in
+      let fail details =
+        r.ended <- true ;
+        drain () ;
+        Some (Io {path= r.name; op= "read"; details})
+      in
+      let rec go () =
+        let owed = ((frames - !produced) * fb) - !have in
+        if owed = 0 then begin
+          drain () ; None
+        end
+        else if !have = capacity then begin
+          drain () ; go ()
+        end
+        else
+          match
+            In_channel.input_bigarray r.ic bytes !have
+              (Int.min owed (capacity - !have))
+          with
+          | 0 ->
+              r.ended <- true ;
+              drain () ;
+              if !have = 0 then None
+              else Some (partial_frame ~name:r.name ~have:!have ~frame_bytes:fb)
+          | n ->
+              have := !have + n ;
+              go ()
+          | exception Sys_error details ->
+              fail details
+          | exception Sys_blocked_io ->
+              fail not_ready
+      in
+      let outcome = go () in
+      (!produced, outcome)
+
+    let read (type a) (r : a t) ~frames : ((float, a) Nx.t option, error) result
+        =
+      let op = "Soundml_io.Raw.Reader.read" in
+      if frames < 1 then
+        invalid_arg
+          (Printf.sprintf "%s: cannot read %d frames (frames must be positive)"
+             op frames ) ;
+      if frames > max_int / 8 / r.channels then
+        invalid_arg
+          (Printf.sprintf "%s: a chunk of %d frames of %d channels overflows" op
+             frames r.channels ) ;
+      match r.pending with
+      | Some e ->
+          r.pending <- None ;
+          Error e
+      | None when r.ended ->
+          Ok None
+      | None -> (
+          let elt = elt_size r.dt in
+          let dst = Rig.Buffer.create Rig.host (elt * r.channels * frames) in
+          match fill r dst ~frames with
+          | exception ex ->
+              (* An exception escaping [fill] — one a signal handler raises
+                 during a blocking read — takes the bytes the call had staged
+                 with it, and may leave [ic] inside a frame, where no later read
+                 could find the frame boundary again: the reader ends here
+                 rather than decode misaligned samples from then on. *)
+              let bt = Printexc.get_raw_backtrace () in
+              r.ended <- true ;
+              Printexc.raise_with_backtrace ex bt
+          | 0, None ->
+              Ok None
+          | 0, Some e ->
+              Error e
+          | n, outcome ->
+              r.pending <- outcome ;
+              if n = frames then
+                Ok (Some (Nx.of_buffer r.dt [|r.channels; frames|] dst))
+              else begin
+                (* A short chunk is copied, plane by plane, into a buffer of its
+                   own size, so that it does not keep the whole [frames]-frame
+                   destination alive — as many element moves as compacting the
+                   planes in place, give or take one plane. *)
+                let kind = kind_of_dtype r.dt in
+                let chunk = Rig.Buffer.create Rig.host (elt * r.channels * n) in
+                Rig.Buffer.read dst kind (fun s ->
+                    Rig.Buffer.write chunk kind (fun d ->
+                        for c = 0 to r.channels - 1 do
+                          Bigarray.Array1.blit
+                            (Bigarray.Array1.sub s (c * frames) n)
+                            (Bigarray.Array1.sub d (c * n) n)
+                        done ) ) ;
+                Ok (Some (Nx.of_buffer r.dt [|r.channels; n|] chunk))
+              end )
+  end
+
+  let shape op x =
+    check_dtype op (Nx.dtype x) ;
+    match Nx.shape x with
+    | [|frames|] ->
+        (1, frames)
+    | [|channels; frames|] ->
+        check_channels op channels ; (channels, frames)
+    | shape ->
+        invalid_arg
+          (Printf.sprintf
+             "%s: rank-%d audio (raw audio is [channels; frames] or rank-one \
+              mono)"
+             op (Array.length shape) )
+
+  (* Encode [x] a staging block at a time; [emit st ~pos n] takes the block's
+     [n] bytes, the frames from [pos] on. [x] is read in place when contiguous
+     ([Nx.to_buffer]), as {!write} reads it. *)
+  let encode_blocks e x ~channels ~frames emit =
+    if frames > 0 then begin
+      let fb = frame_bytes e ~channels in
+      let st = Pcm.staging ~frames ~frame_bytes:fb () in
+      let block = Pcm.capacity st / fb in
+      let src = Nx.to_buffer x and dt = Nx.dtype x in
+      let pos = ref 0 in
+      while !pos < frames do
+        let n = Int.min block (frames - !pos) in
+        Pcm.encode e dt src st ~channels ~frames:n ~total:frames ~off:!pos ;
+        emit st ~pos:!pos (n * fb) ;
+        pos := !pos + n
+      done
+    end
+
+  let encode e x =
+    let channels, frames = shape "Soundml_io.Raw.encode" x in
+    let fb = frame_bytes e ~channels in
+    let out = Bytes.create (frames * fb) in
+    encode_blocks e x ~channels ~frames (fun st ~pos n ->
+        Rig.Buffer.blit_to_bytes st.Pcm.buffer 0 out (pos * fb) n ) ;
+    (* fresh, filled, and never written again *)
+    Bytes.unsafe_to_string out
+
+  let write ?(name = default_name) e oc x =
+    let channels, frames = shape "Soundml_io.Raw.write" x in
+    match
+      Out_channel.set_binary_mode oc true ;
+      encode_blocks e x ~channels ~frames (fun st ~pos:_ n ->
+          Out_channel.output_bigarray oc st.Pcm.bytes 0 n ) ;
+      Out_channel.flush oc
+    with
+    | () ->
+        Ok ()
+    | exception Sys_error details ->
+        Error (Io {path= name; op= "write"; details})
+    | exception Sys_blocked_io ->
+        Error (Io {path= name; op= "write"; details= not_ready})
+end
