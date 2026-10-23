@@ -175,6 +175,20 @@ let chroma_cqt cqt_config ?n_chroma ?norm x =
 let resample ?quality ~sample_rate ~target x =
   Resample.(apply (Config.cached ?quality ~sample_rate ~target ()) x)
 
+(* Tonal features: flat delegations to the private [Tonal] module. *)
+
+let chroma_cens = Tonal.chroma_cens
+
+let chroma_cens_of_chroma = Tonal.chroma_cens_of_chroma
+
+let chroma_cens_stage = Tonal.chroma_cens_stage
+
+let tonnetz = Tonal.tonnetz
+
+let tonnetz_of_chroma = Tonal.tonnetz_of_chroma
+
+let tonnetz_stage = Tonal.tonnetz_stage
+
 (* Spectral-shape features: flat delegations to the private [Spectral]
    module. *)
 

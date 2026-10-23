@@ -78,6 +78,7 @@ SUITE_DIRECTORIES = {
     "tuning": "soundml/test/tuning/vectors",
     "onset_detect": "soundml/test/onset_detect/vectors",
     "rhythm": "soundml/test/rhythm/vectors",
+    "tonal": "soundml/test/tonal/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -6718,6 +6719,402 @@ class RhythmVectorGenerator:
         write_suite(self.SUITE, "tempo", self.tempo_cases())
         write_suite(self.SUITE, "beat_track", self.beat_cases())
         write_suite(self.SUITE, "plp", self.plp_cases())
+class TonalVectorGenerator:
+    """Golden vectors for the tonal features: Soundml.chroma_cens,
+    chroma_cens_of_chroma, tonnetz and tonnetz_of_chroma.
+
+    Four files:
+
+    - cens_chroma: librosa.feature.chroma_cens of given chromagrams, passed
+      as C with bins_per_octave = n_chroma = K and fmin = C1, where the
+      cq_to_chroma fold is exactly the identity (asserted), so the feature
+      quantises the chromagram itself. The chromagrams are non-negative:
+      chord, scale and tie templates separated by silent (all-zero) frames,
+      |LCG| noise under this suite's seed, all zeros, a batch, 24 bands and
+      sequences shorter than the window, under every smoothing (odd, even,
+      2, 1 and none; Hann, Hamming and the rectangular window, whose
+      endpoints are kept, Kaiser, and Blackman, whose endpoints lie below
+      the double-precision epsilon) and every normalisation. The tie
+      templates put shares exactly on 0.4, 0.2, 0.1 and 0.05, which pins
+      librosa's strict comparison; elsewhere both sides compute the same
+      shares by the same arithmetic, so no other decision can differ.
+    - cens_audio: librosa.feature.chroma_cens over a constant-Q transform
+      computed with sparsity=0 and passed as C, as the chroma suite's
+      chroma_cqt cases: chords, a scale, noise and silence (all-zero audio).
+    - tonnetz_chroma: librosa.feature.tonnetz of given chromagrams: the
+      templates, signed LCG values, the identity (each band one-hot, the
+      projection itself), 24, 36, 13 and 1 bands, a batch and zeros.
+    - tonnetz_audio: librosa.feature.tonnetz of chroma_cqt, at its default
+      inf normalisation, over such a transform.
+
+    CENS quantises: a share of a frame's energy just above a threshold lands
+    on another level than one just below, and the constant-Q transform
+    beneath differs from librosa's — by the single-precision basis at an odd
+    hop, where neither side resamples, and by the octave recursion's
+    resampler at hop 512. Each cens_audio case therefore takes the first
+    length of LENGTHS whose reference L1 chroma lies at least the case's
+    margin from every threshold, and records that distance as "margin".
+    The signals carry a low LCG floor and no digital silence, so that no
+    frame holds only rounding residue, whose L1 profile is arbitrary.
+
+    float32 cases quantize the signal or the chromagram to float32 and
+    compute the reference in float64.
+    """
+
+    SUITE = "tonal"
+
+    SEED = 20261113
+
+    SR = CqtVectorGenerator.SR
+
+    C1 = CqtVectorGenerator.C1
+
+    STEPS = np.array([0.4, 0.2, 0.1, 0.05])
+
+    NORMS = {"inf": np.inf, "l1": 1, "l2": 2, "none": None}
+
+    # The I-vi-IV-V progression and the ascending C-major scale, as MIDI
+    # notes; the notes of each chord are weighted 1, 0.8 and 0.6 in turn.
+    CHORDS = ((60, 64, 67), (57, 60, 64), (53, 57, 60), (55, 59, 62))
+
+    SCALE = (60, 62, 64, 65, 67, 69, 71, 72)
+
+    LENGTHS = [44100 + 1024 * k for k in range(40)]
+
+    # Chromagram templates, {pitch class (C = 0): weight}: triads and a
+    # seventh chord, the diminished seventh and the augmented triad, a single
+    # note, the uniform frame, and ties — shares of exactly 0.4 and 0.2 (2/5
+    # and 1/5), 0.1 (1/10) and 0.05 (1/20).
+    TEMPLATES = [
+        {0: 1.0, 4: 0.8, 7: 0.6},
+        {9: 1.0, 0: 0.8, 4: 0.6},
+        {5: 1.0, 9: 0.8, 0: 0.6},
+        {7: 1.0, 11: 0.8, 2: 0.6, 5: 0.4},
+        {0: 1.0, 3: 1.0, 6: 1.0, 9: 1.0},
+        {0: 1.0, 4: 1.0, 8: 1.0},
+        {2: 1.0},
+        {k: 1.0 for k in range(12)},
+        {0: 2.0, 4: 1.0, 7: 1.0, 11: 1.0},
+        {k: 1.0 for k in range(10)},
+        {0: 9.0, **{k: 1.0 for k in range(1, 12)}},
+    ]
+
+    # Frames per template, then silent frames after each.
+    TEMPLATE_FRAMES = 8
+
+    TEMPLATE_GAP = 4
+
+    # The scale chromagram: six frames per degree, the previous degree
+    # ringing on at 0.3.
+    SCALE_CLASSES = (0, 2, 4, 5, 7, 9, 11, 0)
+
+    def lcg(self, n):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED)
+
+    @classmethod
+    def tone(cls, y, midi, weight, onset, offset):
+        """Adds to y the note midi over samples [onset, offset): six partials
+        below 0.45 * sr, partial h at weight * 0.6 ** (h - 1)."""
+        n = len(y)
+        t = np.arange(n) / cls.SR
+        f0 = 440.0 * 2.0 ** ((midi - 69) / 12.0)
+        v = np.zeros(n)
+        for h in range(1, 7):
+            if f0 * h < 0.45 * cls.SR:
+                v += (weight * 0.6 ** (h - 1)) * np.sin(2.0 * np.pi * f0 * h * t)
+        y[onset:offset] += v[onset:offset]
+
+    def signal(self, name, n):
+        """The audio recipes, reproduced on the OCaml side."""
+        y = np.zeros(n)
+        if name == "chords":
+            for k, chord in enumerate(self.CHORDS):
+                for j, midi in enumerate(chord):
+                    self.tone(y, midi, 1.0 - 0.2 * j, k * n // 4, (k + 1) * n // 4)
+            return 0.1 * y + 0.002 * self.lcg(n)
+        if name == "scale":
+            for k, midi in enumerate(self.SCALE):
+                self.tone(y, midi, 1.0, k * n // 8, (k + 1) * n // 8)
+            return 0.2 * y + 0.002 * self.lcg(n)
+        if name == "noise":
+            return 0.1 * self.lcg(n)
+        assert name == "silence", name
+        return y
+
+    def chroma(self, name, shape):
+        """The given chromagrams, reproduced on the OCaml side."""
+        size = int(np.prod(shape))
+        if name == "lcg":
+            return np.abs(self.lcg(size)).reshape(shape)
+        if name == "signed":
+            return self.lcg(size).reshape(shape)
+        if name == "zeros":
+            return np.zeros(shape)
+        if name == "identity":
+            assert shape[-1] == shape[-2]
+            return np.eye(shape[-1])
+        if name == "templates":
+            block = self.TEMPLATE_FRAMES + self.TEMPLATE_GAP
+            assert shape == [12, block * len(self.TEMPLATES)]
+            c = np.zeros(shape)
+            for i, template in enumerate(self.TEMPLATES):
+                for k, weight in template.items():
+                    c[k, i * block:i * block + self.TEMPLATE_FRAMES] = weight
+            return c
+        assert name == "scale" and len(shape) == 2 and shape[0] == 12, name
+        c = np.zeros(shape)
+        for t in range(shape[1]):
+            step = (t // 6) % len(self.SCALE_CLASSES)
+            c[self.SCALE_CLASSES[step], t] += 1.0
+            if step > 0:
+                c[self.SCALE_CLASSES[step - 1], t] += 0.3
+        return c
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def margin(self, raw):
+        """The distance of the L1-normalised chromagram raw to the nearest
+        quantisation threshold."""
+        shares = librosa.util.normalize(raw, norm=1, axis=-2)
+        return float(np.min(np.abs(shares[..., None] - self.STEPS)))
+
+    def magnitudes(self, y, n_bins, bpo, hop):
+        return np.abs(
+            librosa.vqt(
+                y,
+                sr=self.SR,
+                hop_length=hop,
+                fmin=self.C1,
+                n_bins=n_bins,
+                bins_per_octave=bpo,
+                gamma=0,
+                scale=True,
+                **CqtVectorGenerator.COMMON,
+            )
+        )
+
+    def chroma_cqt(self, C, bpo, hop, **kwargs):
+        return librosa.feature.chroma_cqt(
+            C=C,
+            sr=self.SR,
+            hop_length=hop,
+            fmin=self.C1,
+            bins_per_octave=bpo,
+            threshold=0.0,
+            **kwargs,
+        )
+
+    def smoothing_params(self, kwargs):
+        norm = kwargs.get("norm", 2)
+        window = kwargs.get("smoothing_window", "hann")
+        params = {
+            "norm": next(k for k, v in self.NORMS.items() if v == norm),
+            "smoothing": kwargs.get("win_len_smooth", 41),
+            "window": window if isinstance(window, str) else window[0],
+        }
+        if not isinstance(window, str):
+            params["beta"] = window[1]
+        return params
+
+    TEMPLATES_SHAPE = [12, 132]
+
+    # (case key, chromagram, shape, chroma_cens keyword arguments, dtypes)
+    CENS_CHROMA = [
+        ("templates", "templates", TEMPLATES_SHAPE, {}, ["float64", "float32"]),
+        ("templates_unsmoothed_none", "templates", TEMPLATES_SHAPE,
+         {"win_len_smooth": None, "norm": None}, ["float64"]),
+        ("templates_s9_inf", "templates", TEMPLATES_SHAPE,
+         {"win_len_smooth": 9, "norm": np.inf}, ["float64"]),
+        ("scale", "scale", [12, 60], {}, ["float64", "float32"]),
+        ("lcg", "lcg", [12, 90], {}, ["float64", "float32"]),
+        ("lcg_s40", "lcg", [12, 90], {"win_len_smooth": 40}, ["float64"]),
+        ("lcg_s9", "lcg", [12, 90], {"win_len_smooth": 9}, ["float64"]),
+        ("lcg_s2", "lcg", [12, 90], {"win_len_smooth": 2}, ["float64"]),
+        ("lcg_s1", "lcg", [12, 90], {"win_len_smooth": 1}, ["float64"]),
+        ("lcg_unsmoothed", "lcg", [12, 90], {"win_len_smooth": None},
+         ["float64", "float32"]),
+        ("lcg_hamming41", "lcg", [12, 90], {"smoothing_window": "hamming"},
+         ["float64"]),
+        ("lcg_hamming8", "lcg", [12, 90],
+         {"win_len_smooth": 8, "smoothing_window": "hamming"}, ["float64"]),
+        ("lcg_boxcar4", "lcg", [12, 90],
+         {"win_len_smooth": 4, "smoothing_window": "boxcar"}, ["float64"]),
+        ("lcg_kaiser20", "lcg", [12, 90],
+         {"win_len_smooth": 20, "smoothing_window": ("kaiser", 8.6)},
+         ["float64"]),
+        ("lcg_blackman8", "lcg", [12, 90],
+         {"win_len_smooth": 8, "smoothing_window": "blackman"}, ["float64"]),
+        ("lcg_inf", "lcg", [12, 90], {"norm": np.inf}, ["float64"]),
+        ("lcg_l1", "lcg", [12, 90], {"norm": 1}, ["float64"]),
+        ("lcg_none", "lcg", [12, 90], {"norm": None}, ["float64"]),
+        ("zeros", "zeros", [12, 50], {}, ["float64"]),
+        ("short10", "lcg", [12, 10], {}, ["float64"]),
+        ("short1", "lcg", [12, 1], {}, ["float64"]),
+        ("batched", "lcg", [2, 12, 60], {}, ["float64", "float32"]),
+        ("bands24", "lcg", [24, 50], {}, ["float64"]),
+    ]
+
+    def cens_chroma_cases(self):
+        cases = []
+        for key, recipe, shape, kwargs, dtypes in self.CENS_CHROMA:
+            K = shape[-2]
+            fold = librosa.filters.cq_to_chroma(
+                K, bins_per_octave=K, n_chroma=K, fmin=self.C1)
+            assert np.array_equal(fold, np.eye(K)), K
+            for dtype in dtypes:
+                c = self.quantize(self.chroma(recipe, shape), dtype)
+                expected = librosa.feature.chroma_cens(
+                    C=c, sr=self.SR, fmin=self.C1, bins_per_octave=K,
+                    n_chroma=K, **kwargs)
+                assert expected.dtype == np.float64
+                assert expected.shape == c.shape
+                assert np.isfinite(expected).all()
+                params = {"kind": "cens_chroma", "chroma": recipe,
+                          "input_shape": shape, "dtype": dtype}
+                params.update(self.smoothing_params(kwargs))
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    # (case key, signal, n_bins, bins_per_octave, hop, chroma_cens keyword
+    #  arguments, dtypes, required margin). The margin is the distance every
+    #  reference share must keep from the nearest threshold, set against this
+    #  library's shares on these signals, measured: they agree to 3.3e-8 at
+    #  an odd hop, at either dtype, which 1e-6 clears thirty times over, and
+    #  to 5e-6 at hop 512 and 12 bins per octave, cleared twenty times. At
+    #  hop 512 the chords deviate by 1.7e-5 (12 bins per octave) and 4.4e-5
+    #  (36), more than a tenth of the margin any length of LENGTHS reaches,
+    #  so the chords are quantised at the odd hop only.
+    CENS_AUDIO = [
+        ("chords_cqt252_bpo36_hop511", "chords", 252, 36, 511, {},
+         ["float64", "float32"], 1e-6),
+        ("scale_cqt84_hop511", "scale", 84, 12, 511, {},
+         ["float64", "float32"], 1e-6),
+        ("scale_cqt84_hop512", "scale", 84, 12, 512, {}, ["float64"], 1e-4),
+        ("noise_cqt84_hop511", "noise", 84, 12, 511, {}, ["float64"], 1e-6),
+        ("chords_cqt84_hop511_s9_inf", "chords", 84, 12, 511,
+         {"win_len_smooth": 9, "norm": np.inf}, ["float64"], 1e-6),
+        ("silence_cqt84_hop512", "silence", 84, 12, 512, {}, ["float64"],
+         None),
+    ]
+
+    def cens_audio_cases(self):
+        cases = []
+        for (key, signal, n_bins, bpo, hop, kwargs, dtypes,
+             need) in self.CENS_AUDIO:
+            for dtype in dtypes:
+                for length in self.LENGTHS:
+                    y = self.quantize(self.signal(signal, length), dtype)
+                    C = self.magnitudes(y, n_bins, bpo, hop)
+                    if signal == "silence":
+                        assert not C.any()
+                        margin = None
+                        break
+                    margin = self.margin(self.chroma_cqt(C, bpo, hop, norm=None))
+                    if margin >= need:
+                        break
+                else:
+                    raise AssertionError(f"{key}_{dtype}: no length clears {need}")
+                expected = librosa.feature.chroma_cens(
+                    C=C,
+                    sr=self.SR,
+                    hop_length=hop,
+                    fmin=self.C1,
+                    bins_per_octave=bpo,
+                    **kwargs,
+                )
+                assert expected.dtype == np.float64
+                if signal == "silence":
+                    assert not expected.any()
+                print(f"  {key}_{dtype}: length {length}, margin {margin}")
+                params = {"kind": "cens_audio", "signal": signal,
+                          "length": length, "sample_rate": self.SR,
+                          "n_bins": n_bins, "bins_per_octave": bpo,
+                          "fmin": self.C1, "hop": hop, "n_chroma": 12,
+                          "tuning": 0.0, "dtype": dtype, "margin": margin}
+                params.update(self.smoothing_params(kwargs))
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    # (case key, chromagram, shape, dtypes)
+    TONNETZ_CHROMA = [
+        ("templates", "templates", TEMPLATES_SHAPE, ["float64", "float32"]),
+        ("scale", "scale", [12, 60], ["float64"]),
+        ("lcg", "lcg", [12, 40], ["float64", "float32"]),
+        ("signed", "signed", [12, 40], ["float64"]),
+        ("identity", "identity", [12, 12], ["float64"]),
+        ("zeros", "zeros", [12, 5], ["float64"]),
+        ("batched", "lcg", [2, 12, 30], ["float64"]),
+        ("bands24", "lcg", [24, 40], ["float64"]),
+        ("bands36", "lcg", [36, 20], ["float64"]),
+        ("bands13", "lcg", [13, 40], ["float64"]),
+        ("bands1", "lcg", [1, 10], ["float64"]),
+    ]
+
+    def tonnetz_chroma_cases(self):
+        cases = []
+        for key, recipe, shape, dtypes in self.TONNETZ_CHROMA:
+            for dtype in dtypes:
+                c = self.quantize(self.chroma(recipe, shape), dtype)
+                expected = librosa.feature.tonnetz(chroma=c)
+                assert expected.dtype == np.float64
+                cases.append({"name": f"{key}_{dtype}",
+                              "params": {"kind": "tonnetz_chroma",
+                                         "chroma": recipe,
+                                         "input_shape": shape,
+                                         "dtype": dtype},
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    TONNETZ_LENGTH = 44100
+
+    # (case key, signal, n_bins, bins_per_octave, hop, dtypes)
+    TONNETZ_AUDIO = [
+        ("chords_cqt252_bpo36_hop511", "chords", 252, 36, 511,
+         ["float64", "float32"]),
+        ("chords_cqt252_bpo36_hop512", "chords", 252, 36, 512, ["float64"]),
+        ("scale_cqt84_hop512", "scale", 84, 12, 512, ["float64", "float32"]),
+        ("noise_cqt84_hop511", "noise", 84, 12, 511, ["float64"]),
+        ("silence_cqt84_hop511", "silence", 84, 12, 511, ["float64"]),
+    ]
+
+    def tonnetz_audio_cases(self):
+        cases = []
+        for key, signal, n_bins, bpo, hop, dtypes in self.TONNETZ_AUDIO:
+            for dtype in dtypes:
+                length = self.TONNETZ_LENGTH
+                y = self.quantize(self.signal(signal, length), dtype)
+                C = self.magnitudes(y, n_bins, bpo, hop)
+                expected = librosa.feature.tonnetz(
+                    chroma=self.chroma_cqt(C, bpo, hop)
+                )
+                assert expected.dtype == np.float64
+                if signal == "silence":
+                    assert not expected.any()
+                cases.append({"name": f"{key}_{dtype}",
+                              "params": {"kind": "tonnetz_audio",
+                                         "signal": signal, "length": length,
+                                         "sample_rate": self.SR,
+                                         "n_bins": n_bins,
+                                         "bins_per_octave": bpo,
+                                         "fmin": self.C1, "hop": hop,
+                                         "n_chroma": 12, "tuning": 0.0,
+                                         "dtype": dtype},
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "cens_chroma", self.cens_chroma_cases())
+        write_suite(self.SUITE, "cens_audio", self.cens_audio_cases())
+        write_suite(self.SUITE, "tonnetz_chroma", self.tonnetz_chroma_cases())
+        write_suite(self.SUITE, "tonnetz_audio", self.tonnetz_audio_cases())
 
 
 GENERATORS = [
@@ -6744,6 +7141,7 @@ GENERATORS = [
     TuningVectorGenerator,
     OnsetDetectVectorGenerator,
     RhythmVectorGenerator,
+    TonalVectorGenerator,
 ]
 
 if __name__ == "__main__":

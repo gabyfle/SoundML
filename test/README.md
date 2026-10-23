@@ -174,6 +174,17 @@ Current suites:
   thresholds, each plp frame's peak and the sign of its real part) and the
   beats unmoved under perturbations of the envelope; the plp `unit` case is
   a numpy reimplementation with unit-modulus kernels, not librosa.
+- `tonal` — `librosa.feature.chroma_cens` and `librosa.feature.tonnetz`, of
+  given chromagrams (chord, scale and tie templates between silent frames,
+  |LCG| noise, signed values for the centroid, 1 to 36 bands, batches,
+  sequences shorter than the smoothing window; CENS reaches librosa through
+  its constant-Q path with an identity fold) across every smoothing length
+  parity, window and normalisation, and of constant-Q chromagrams computed
+  from chords, a scale, noise and silence at both element dtypes. CENS
+  quantises, so each audio case records the distance of every reference
+  share to the nearest threshold, which the generator asserts to exceed the
+  measured constant-Q share deviation many times over; the chords are
+  quantised at an odd hop only, where neither side resamples.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which
