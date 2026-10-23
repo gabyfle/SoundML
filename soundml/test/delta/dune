@@ -1,0 +1,7 @@
+(test
+ (name test_delta)
+ (package soundml)
+ (modules delta_goldens delta_law test_delta)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

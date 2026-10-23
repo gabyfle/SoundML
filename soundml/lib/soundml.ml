@@ -205,6 +205,14 @@ let zero_crossing_rate = Energy.zero_crossing_rate
 
 let zero_crossing_rate_stage = Energy.zero_crossing_rate_stage
 
+(* Delta features: flat delegations to the private [Delta] module. *)
+
+type delta_mode = Delta.mode
+
+let delta = Delta.delta
+
+let delta_stage = Delta.stage
+
 (* Spectral contrast and onset strength: flat delegations to the private
    [Contrast] and [Onset] modules. *)
 
