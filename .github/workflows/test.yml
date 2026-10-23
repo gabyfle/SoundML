@@ -24,6 +24,12 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    # The macOS runner keeps its own bit fingerprints, apart from those recorded
+    # on a developer's Mac: another chip, OS and Xcode (Accelerate's matrix
+    # product, libm, Nx's C kernels) need not give the same bits.
+    env:
+      SOUNDML_FINGERPRINT_TAG: ${{ matrix.os == 'macos-latest' && '-ci' || '' }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -60,4 +66,34 @@ jobs:
 
       - name: Run tests
         run: dune runtest
+        shell: bash
+
+      # The bit fingerprints are recorded per platform: when this platform's
+      # disagree with its expectation file, or it has none yet, print them
+      # whole, in the log and in the job summary, ready to be saved as that file.
+      - name: Print the fingerprints this platform produced
+        if: failure()
+        run: |
+            out=_build/default/soundml/test/fingerprint/fingerprints.out
+            [ -f "$out" ] || exit 0
+            case "$(uname -s)-$(uname -m)" in
+              Linux-x86_64) key=linux-amd64 ;;
+              Darwin-arm64) key=macosx-arm64 ;;
+              *) exit 0 ;;
+            esac
+            file=soundml/test/fingerprint/fingerprints.$key$SOUNDML_FINGERPRINT_TAG.expected
+            if cmp -s "$out" "$file"; then exit 0; fi
+            echo "The fingerprints below differ from $file (or it is missing):"
+            cat "$out"
+            {
+              echo "### Fingerprints for \`$file\`"
+              echo
+              echo "This platform's bits differ from the committed file, or it has none."
+              echo "Once the diff in the Run tests step is reviewed, save this block as"
+              echo "that file, with a final newline."
+              echo
+              echo '```'
+              cat "$out"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
         shell: bash
