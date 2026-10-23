@@ -263,6 +263,26 @@ let onset_detect_of_envelope = Onset.onset_detect_of_envelope
 
 let onset_backtrack = Onset.onset_backtrack
 
+(* Tempo and beat: flat delegations to the private [Rhythm] module. *)
+
+let tempo_frequencies = Rhythm.tempo_frequencies
+
+let fourier_tempo_frequencies = Rhythm.fourier_tempo_frequencies
+
+let tempogram = Rhythm.tempogram
+
+let tempogram_stage = Rhythm.tempogram_stage
+
+let fourier_tempogram = Rhythm.fourier_tempogram
+
+let fourier_tempogram_stage = Rhythm.fourier_tempogram_stage
+
+let tempo = Rhythm.tempo
+
+let beat_track = Rhythm.beat_track
+
+let plp = Rhythm.plp
+
 (* Harmonic/percussive separation: flat delegations to the private [Hpss]
    module. *)
 

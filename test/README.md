@@ -157,6 +157,23 @@ Current suites:
   2^-40 relative perturbation of the input unchanged. pyin cases stack
   the frequency (NaN where unvoiced, written as JSON `NaN`), the voiced
   flag and the voiced probability.
+- `rhythm` — `librosa.feature.tempogram`, `fourier_tempogram` and `tempo`,
+  `librosa.beat.beat_track` and `plp`, and `librosa.tempo_frequencies` /
+  `fourier_tempo_frequencies`, over onset envelopes given directly (LCG
+  floors with spike trains, their fourth power, zeros, a negated train, a
+  spike on the first frame that pins librosa's exclusion of it) and over
+  click tracks — steady at 90 to 150 BPM, in noise, changing from 100 to
+  140 BPM, swung, noise alone, 16 kHz at a hop of 256 — both through
+  librosa's envelopes (`envelopes.json`, which also checks
+  `Soundml.onset_strength` on the rebuilt audio) and from the audio itself.
+  The click envelopes are onset_strength's mean over mel bands, passed as
+  `onset_envelope=`, since librosa's beat functions take the median from
+  audio. Tempograms are stored at a few frames per case; beats compare
+  exactly, with the tempo as a sibling case. The generator asserts every
+  discrete decision away from ties (tempo scores, the beat path and its
+  thresholds, each plp frame's peak and the sign of its real part) and the
+  beats unmoved under perturbations of the envelope; the plp `unit` case is
+  a numpy reimplementation with unit-modulus kernels, not librosa.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which

@@ -1548,6 +1548,331 @@ val onset_backtrack : int array -> (float, 'a) Nx.t -> int array
     rank zero, a leading axis of size other than [1] or a dtype other than
     float32 and float64. *)
 
+(** {2:features_rhythm Tempo and beat}
+
+    The rhythm of an onset envelope — {!onset_strength} output, [[...; frames]]
+    at one value per hop: its local periodicities as the autocorrelation and
+    Fourier tempograms, the tempo they imply, the beats of Ellis'
+    dynamic-programming tracker and the predominant local pulse. Every function
+    consumes the envelope rather than audio, so the analysis of a signal is a
+    composition —
+    [beat_track ~sample_rate ~hop:(Stft.Config.hop s) (onset_strength s m x)]
+    — and an envelope from elsewhere is analysed the same way. librosa's
+    [beat_track] and [plp] aggregate the envelope they compute from audio by
+    the median over mel bands, which {!onset_strength} does not offer: the
+    composition is librosa given the mean-aggregated envelope
+    ([onset_envelope=onset_strength(y=y, ...)]), not given [y=y] itself, and a
+    beat can move between the two. The tempograms and {!tempo}, whose audio
+    path in librosa takes the mean, compose exactly.
+
+    Values are computed in double precision from the envelope's values,
+    whatever its dtype, and rounded to it once: a float32 envelope gives the
+    float64 result on its own values, rounded. The tempograms stream; the
+    tempo, the beats and the pulse read the whole envelope and have no
+    stage. *)
+
+val tempo_frequencies :
+  (float, 'a) Nx.dtype -> ?hop:int -> sample_rate:int -> int -> (float, 'a) Nx.t
+(** [tempo_frequencies dtype ~sample_rate n] is the tempo, in beats per
+    minute, of each of the [n] lag bins of a {!tempogram}, as a rank-one
+    tensor: lag [k] of an envelope at [sample_rate / hop] values per second
+    repeats every [k] values, [60 * sample_rate / (hop * k)] beats per minute,
+    and the zero lag is [Float.infinity]. [hop] defaults to [512]. The values
+    are those of [librosa.tempo_frequencies], computed in its order and
+    rounded to [dtype].
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], or if
+    [n < 1]. *)
+
+val fourier_tempo_frequencies :
+  (float, 'a) Nx.dtype -> ?hop:int -> sample_rate:int -> int -> (float, 'a) Nx.t
+(** [fourier_tempo_frequencies dtype ~sample_rate win] is the tempo, in beats
+    per minute, of each of the [win / 2 + 1] bins of a [win]-frame
+    {!fourier_tempogram}, as a rank-one tensor: bin [k] completes [k] cycles
+    over [win] envelope values, [k * 60 * sample_rate / (hop * win)] beats per
+    minute, from [0] up. [hop] defaults to [512]. The values are those of
+    [librosa.fourier_tempo_frequencies], numpy's [rfftfreq] at the envelope's
+    rate in values per minute, rounded to [dtype].
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], or if
+    [win < 1]. *)
+
+val tempogram :
+     ?win_length:int
+  -> ?alignment:[`Centered | `Left]
+  -> ?window:Window.t
+  -> ?norm:Chroma.norm
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [tempogram x] is the autocorrelation tempogram of the onset envelope [x],
+    shaped [[...; win_length; frames]], as [librosa.feature.tempogram]
+    computes it (Grosche, Müller and Kurth, {e Cyclic tempogram — a mid-level
+    tempo representation for music signals}, ICASSP 2010): each frame is the
+    autocorrelation, at lags [0] to [win_length - 1], of [win_length] envelope
+    values under the periodic [window], normalised. Lag [k] measures how
+    strongly the envelope repeats every [k] values; {!tempo_frequencies}
+    names its tempo. Leading axes broadcast, so a batch of envelopes is one
+    call; the function is rate-agnostic.
+
+    [win_length] defaults to [384] values — 8.9 s at 22050 Hz and a hop of
+    512 — [window] to {!Window.Hann} and [norm] to [`Inf], which divides each
+    frame by its largest magnitude, the zero lag's. [`P p] divides by the
+    frame's [p]-norm and [`None] keeps the raw autocorrelation; a frame whose
+    length falls below the smallest normal double is left alone, so a silent
+    frame stays zero.
+
+    [alignment] defaults to [`Centered]: frame [t] starts [win_length / 2]
+    values before value [t], one frame per envelope value, and the envelope
+    is extended at each end by a linear ramp to zero over [win_length / 2]
+    values, as librosa pads it with numpy's [linear_ramp]. [`Left] starts
+    frame [t] at value [t], without padding, for the [n - win_length + 1]
+    frames of an [n]-value envelope.
+
+    The autocorrelation is the direct sum over the frame, each lag adding its
+    products in ascending order, where librosa transforms: the two agree to a
+    few units in the last place of each frame's zero lag. A frame costs
+    [win_length * (win_length + 1) / 2] multiply-adds — some 74 000 at the
+    default length — and frames are spread over domains. An empty envelope
+    has no frames, [[...; win_length; 0]], where librosa's padding rejects
+    it.
+
+    Raises [Invalid_argument] if [win_length < 1], if [norm] is [`P p] with [p]
+    not finite and positive, if [x] has rank zero, a dtype other than float32
+    and float64 or a non-finite value, or if [alignment] is [`Left] and [x]
+    holds fewer than [win_length] values. *)
+
+val tempogram_stage :
+     ?win_length:int
+  -> ?alignment:[`Centered | `Left]
+  -> ?window:Window.t
+  -> ?norm:Chroma.norm
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [tempogram_stage ()] is {!tempogram} as a pipeline stage: rate 1:1 and
+    format-preserving, consuming envelope chunks [[...; frames]] and emitting
+    tempogram chunks [[...; win_length; frames]] — compose it after
+    {!onset_strength_stage} to stream the tempogram of a signal's envelope
+    (without the centred shift of {!onset_strength}, which that stage leaves
+    to the caller). Every partitioning of an envelope yields the bits
+    {!tempogram} computes on the whole of it.
+
+    A frame is emitted once every envelope value it reads has arrived, and
+    the left ramp needs only the first. Under [`Centered] the stage declares
+    [win_length - 1 - win_length / 2] frames of latency — 191 at the default
+    length, 4.4 s at 22050 Hz and a hop of 512 — and the flush emits the last
+    frames of the stream, whose windows read the ramp towards its last value.
+    Under [`Left] it declares [win_length - 1] frames, and the flush emits
+    nothing but raises [Invalid_argument] if the stream held fewer than
+    [win_length] values, as {!tempogram} raises on such an envelope. A push
+    that completes no frame emits no chunk. The state is the first value and
+    the last [win_length - 1] values of each row.
+
+    Raises [Invalid_argument] for the parameters as {!tempogram} does, when
+    the stage is built, and, at the chunk concerned, for a chunk {!tempogram}
+    would refuse, one whose leading shape differs from the first chunk's, or
+    one pushed after the flush — reset the stream before reusing it. *)
+
+val fourier_tempogram :
+     (Complex.t, 'c) Nx.dtype
+  -> ?win_length:int
+  -> ?alignment:[`Centered | `Left]
+  -> ?window:Window.t
+  -> (float, 'a) Nx.t
+  -> (Complex.t, 'c) Nx.t
+(** [fourier_tempogram cdtype x] is the Fourier tempogram of the onset
+    envelope [x], shaped [[...; win_length / 2 + 1; frames]], as
+    [librosa.feature.fourier_tempogram] computes it: the short-time Fourier
+    transform of the envelope over [win_length]-value windows advancing one
+    value at a time, {!Stft.transform}[ cdtype] on the configuration of
+    [fft_size = win_length], [hop = 1], [window] and [alignment] over zero
+    padding. Bin [k] measures the envelope's periodicity at the tempo
+    {!fourier_tempo_frequencies} names, and its phase where the beats fall.
+    [win_length] defaults to [384], [alignment] to [`Centered] and [window] to
+    {!Window.Hann}. Centred frames number [n + 1] for an even [win_length]
+    and [n] for an odd one, as librosa's do; the transform is computed in
+    double precision and rounded into [cdtype]. An envelope shorter than a
+    [`Left] frame has no frames, the convention of {!Stft}, where librosa
+    rejects it.
+
+    Raises [Invalid_argument] if [win_length < 1], or if [x] has rank zero, a
+    dtype other than float32 and float64 or a non-finite value. *)
+
+val fourier_tempogram_stage :
+     (Complex.t, 'c) Nx.dtype
+  -> ?win_length:int
+  -> ?alignment:[`Centered | `Left]
+  -> ?window:Window.t
+  -> unit
+  -> ((float, 'a) Nx.t, (Complex.t, 'c) Nx.t, 'k) Pipeline.t
+(** [fourier_tempogram_stage cdtype ()] is {!fourier_tempogram} as a pipeline
+    stage: {!Stft.stage}[ cdtype] on the same configuration, which streams the
+    transform bit for bit, with [win_length / 2] frames of latency under
+    [`Centered] and none under [`Left], and joins chunks as {!Stft.stage}
+    does. Chunks are not scanned for non-finite values.
+
+    Raises [Invalid_argument] if [win_length < 1]. *)
+
+val tempo :
+     ?hop:int
+  -> ?start_bpm:float
+  -> ?std_bpm:float
+  -> ?ac_size:float
+  -> ?tempo_max:float
+  -> ?aggregate:[`Mean | `Median | `None]
+  -> ?prior:(float -> float)
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [tempo ~sample_rate x] is the tempo of the onset envelope [x], in beats
+    per minute, as [librosa.feature.tempo] estimates it. The {!tempogram} of
+    [x] over [ac_size] seconds — [ac_size * sample_rate] truncated to whole
+    samples, then floor-divided by [hop]: [344] values at the defaults —
+    centred, Hann-windowed and normalised to its zero lag, is aggregated over
+    frames into [a], and the tempo is that of the lag [k] maximising
+    [log1p (1e6 * a k) + log_prior k], read off {!tempo_frequencies}. The
+    result is shaped [[...; 1]], one tempo per envelope; under
+    [aggregate = `None] every frame is estimated alone and the result is
+    [[...; frames]]. Leading axes broadcast.
+
+    [hop] defaults to [512], [start_bpm] to [120.], [std_bpm] to [1.],
+    [ac_size] to [8.], [tempo_max] (librosa's [max_tempo]) to [320.] and [aggregate] to [`Mean];
+    [`Median] takes numpy's median over frames instead. The prior is
+    log-normal in tempo,
+    [log_prior k = -0.5 * ((log2 bpm k - log2 start_bpm) / std_bpm) ^ 2], a
+    preference for [start_bpm] with [std_bpm] octaves of spread. [prior], a
+    log-density over beats per minute, replaces it, as scipy's
+    [prior.logpdf] does in librosa: it is evaluated at every bin's tempo, the
+    zero lag's [Float.infinity] included, and [start_bpm] and [std_bpm] are
+    then validated but not used. Bins faster than [tempo_max] are excluded,
+    up to the first slower one; when no bin is slower nothing is excluded, as
+    in librosa, and [Float.infinity] excludes nothing at all, librosa's
+    [None]. Equal scores go to the faster tempo, and a NaN score wins, as
+    numpy's [argmax] decides.
+
+    The result is in the dtype of [x], where librosa's is float64 whatever
+    the input; a precomputed tempogram ([tg=]) is not accepted in place of
+    the envelope, and a zero [std_bpm], which librosa takes, is refused.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], if
+    [start_bpm], [std_bpm] or [ac_size] is not finite and positive, if
+    [ac_size] seconds span less than one hop, if [tempo_max] is not positive,
+    if [x] has rank zero, a dtype other than float32 and float64 or a
+    non-finite value, or if [x] has no frames and [aggregate] is not
+    [`None]. *)
+
+val beat_track :
+     ?hop:int
+  -> ?start_bpm:float
+  -> ?tightness:float
+  -> ?trim:bool
+  -> ?bpm:float
+  -> ?prior:(float -> float)
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> float * int array
+(** [beat_track ~sample_rate x] is [(bpm, beats)]: the tempo of the onset
+    envelope [x], in beats per minute, and the frames of its beats in
+    ascending order, as [librosa.beat.beat_track] tracks them (Ellis,
+    {e Beat tracking by dynamic programming}, J. New Music Research 36(1),
+    2007). [x] is one envelope along its last axis, every leading axis of
+    size [1] (as {!onset_detect_of_envelope} reads it), as librosa's default
+    sparse output requires — a batch is tracked row by row, its beats being
+    of no common count — and {!Convert.frames_to_time} turns the frames into
+    seconds.
+
+    The tempo is [bpm] when given, otherwise {!tempo} of [x] at [hop],
+    [start_bpm] and [prior], its other parameters at their defaults; it fixes
+    the beat period [p], [sample_rate / hop * 60 / bpm] frames rounded half to
+    even. The envelope, divided by its standard deviation, is smoothed into a
+    local score by a Gaussian of standard deviation [p / 32] over [p] frames
+    each side. The dynamic program then scores, at each frame, the best beat
+    sequence ending there: the frame's local score plus the best cumulative
+    score of a predecessor between [p / 2] (rounded half to even) and [2 p]
+    frames back, less [tightness * (log gap - log p) ^ 2], the latest
+    predecessor winning among equal scores; frames before the first whose
+    local score reaches a hundredth of the maximum start no sequence. The
+    last beat is the last local maximum of the cumulative score that reaches
+    half the median of its local maxima, the beats are its backtrace, and
+    [trim] drops the beats of the leading and trailing frames whose local
+    score does not exceed half the root mean square of the beats' local
+    scores smoothed by the 5-point Hann window — without [trim], of those
+    whose local score does not exceed zero.
+
+    [hop] defaults to [512], [start_bpm] to [120.], [tightness] to [100.] and
+    [trim] to [true]. An envelope of zeros has no beats and tempo [0.], even
+    with [bpm] given, as in librosa.
+
+    librosa's arithmetic is followed comparison for comparison, its quirks
+    included: the envelope's first value never enters the local score (an
+    off-by-one bound in librosa's loop), the tightness is rounded to single
+    precision, and the trim threshold averages the smoothed scores over two
+    more terms than there are beats where the frames allow. Its trim scans
+    run past the ends of the envelope when every local score sits at or below
+    the threshold; here they stop there, and such an envelope — a negative
+    one, say — keeps no beat. The standard deviation and the means are sums in
+    ascending order where numpy's are pairwise, so a decision can differ only
+    where two scores agree to their last few bits.
+
+    Deviations, each absent rather than renamed: no dense output
+    ([sparse=False]), multichannel or time-varying tempo, and no [units].
+    Parameters are validated before an envelope of zeros returns, and
+    [start_bpm] even when [bpm] is given, where librosa skips the checks
+    then.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], if
+    [start_bpm] or [tightness] is not finite and positive (the tightness in
+    single precision too), if [bpm] is given and not finite and positive, if
+    [x] has rank zero, a leading axis of size other than [1] or fewer than
+    two frames, a dtype other than
+    float32 and float64 or a non-finite value, or if the tempo is too fast
+    for a beat to span one frame. *)
+
+val plp :
+     ?hop:int
+  -> ?win_length:int
+  -> ?tempo_min:float
+  -> ?tempo_max:float
+  -> ?prior:(float -> float)
+  -> ?kernels:[`Reference | `Unit]
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [plp ~sample_rate x] is the predominant local pulse of the onset envelope
+    [x], in its shape and dtype, as [librosa.beat.plp] computes it (Grosche
+    and Müller, {e Extracting predominant local pulse information from music
+    recordings}, IEEE TASLP 19(6), 2011). Each frame of the
+    {!fourier_tempogram} of [x] keeps only its strongest tempo between
+    [tempo_min] and [tempo_max] — the coefficients whose [log1p (1e6 * |F|)],
+    plus [prior] at their tempo, is the frame's greatest — and is divided by
+    a modulus; the least-squares inverse ({!Stft.invert}) of the result,
+    clipped at zero and divided by its maximum, is the pulse: one windowed
+    sinusoid per frame at that frame's tempo and phase, overlap-added. Its
+    peaks are beat candidates that follow a changing tempo. Leading axes
+    broadcast.
+
+    [hop] defaults to [512], [win_length] to [384], [tempo_min] to [30.],
+    [tempo_max] to [300.] and [kernels] to [`Reference]; [tempo_min = 0.] and
+    [tempo_max = Float.infinity] lift the bounds as librosa's [None] does.
+    [prior] is a log-density over beats per minute, evaluated at every bin's
+    tempo, zero included.
+
+    [kernels] chooses the modulus. [`Reference] is librosa's: the modulus of
+    the frame's greatest coefficient in numpy's lexicographic order of complex
+    values, real part first. A frame whose strongest coefficient has a
+    negative real part therefore finds a zeroed coefficient greater and is
+    divided by [sqrt 2^-1022] alone, outweighing every other frame by some
+    150 orders of magnitude — the pulse follows those frames. [`Unit]
+    divides every frame by its own strongest modulus, kernels of unit
+    amplitude: the method as Grosche and Müller publish it, a named deviation
+    from librosa.
+
+    An empty envelope gives an empty pulse, where librosa rejects it.
+
+    Raises [Invalid_argument] if [sample_rate] or [hop] is below [1], if
+    [win_length < 1], if [tempo_min] is not finite and non-negative, if
+    [tempo_max] does not exceed [tempo_min], or if [x] has rank zero, a dtype
+    other than float32 and float64 or a non-finite value. *)
+
 (** {2:features_hpss Harmonic/percussive separation}
 
     Median-filtering separation of sustained partials from transients, in the
