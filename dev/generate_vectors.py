@@ -3456,7 +3456,8 @@ class TrimVectorGenerator:
 
     Cases cover the defaults, a smaller geometry, lower thresholds, fixed
     references, a stereo signal whose channels are loud at different times
-    (librosa's aggregate=np.max), a signal of zeros (kept whole under
+    (librosa's aggregate=np.max), batches of rank three and four whose clips
+    each take their own maximum as the reference, a signal of zeros (kept whole under
     ref=np.max, the floors cancelling), one shorter than a frame and one
     entirely below a fixed reference. The fixed-reference cases also pin
     Effects.split_stage, which takes only those: among them an odd frame
@@ -3501,6 +3502,32 @@ class TrimVectorGenerator:
          {"ref": 0.5, "top_db": 40}, ["float64", "float32"]),
     ]
 
+    # Batches of rank three or more, each row its own segments: librosa 1.0's
+    # amplitude_to_db takes ref=np.max over the last two axes, so every
+    # [channels; samples] clip is measured against its own maximum, and a clip
+    # quiet next to another (-74 dB here) still has non-silent frames. The
+    # second case puts each row in a clip of its own.
+    BATCH_ROWS = [
+        [[3000, 0.0], [5000, 0.5], [10000, 0.0]],
+        [[3000, 0.0], [5000, 0.3], [10000, 0.0]],
+        [[12000, 0.0], [4000, 1e-4], [2000, 0.0]],
+        [[12000, 0.0], [4000, 5e-5], [2000, 0.0]],
+    ]
+
+    # (case key, rows, leading shape, kwargs, dtypes)
+    BATCH_CASES = [
+        ("batch2x2", BATCH_ROWS, [2, 2], {}, ["float64", "float32"]),
+        ("batch2x2x1", BATCH_ROWS, [2, 2, 1], {}, ["float64"]),
+    ]
+
+    def batch_signal(self, rows, lead):
+        n = sum(length for length, _ in rows[0])
+        stream = StftVectorGenerator.lcg_signal(len(rows) * n, seed=self.SEED)
+        scales = np.concatenate(
+            [np.concatenate([np.full(length, scale) for length, scale in row])
+             for row in rows])
+        return (stream * scales).reshape(*lead, n)
+
     def signal(self, segments, channels):
         n = sum(length for length, _ in segments)
         stream = StftVectorGenerator.lcg_signal(channels * n, seed=self.SEED)
@@ -3534,6 +3561,24 @@ class TrimVectorGenerator:
                 params = {"segments": segments, "channels": channels, "dtype": dtype}
                 params.update({{"hop_length": "hop", "ref": "reference"}.get(k, k): v
                                for k, v in kwargs.items()})
+                cases.append({"name": f"trim_{key}_{dtype}", "params": params,
+                              "shape": [2],
+                              "values": [float(v) for v in index]})
+                cases.append({"name": f"split_{key}_{dtype}", "params": params,
+                              "shape": list(intervals.shape),
+                              "values": [float(v) for v in intervals.ravel()]})
+        for key, rows, lead, kwargs, dtypes in self.BATCH_CASES:
+            for dtype in dtypes:
+                y = self.quantize(self.batch_signal(rows, lead), dtype)
+                assert self.margin(y, kwargs) > 0.1, (key, self.margin(y, kwargs))
+                _, index = librosa.effects.trim(y, **kwargs)
+                intervals = librosa.effects.split(y, **kwargs)
+                # One reference for the whole batch would decide otherwise.
+                whole = float(librosa.feature.rms(y=y).max())
+                assert not np.array_equal(
+                    librosa.effects.split(y, ref=whole), intervals), key
+                params = {"row_segments": rows, "lead": lead, "dtype": dtype}
+                params.update(kwargs)
                 cases.append({"name": f"trim_{key}_{dtype}", "params": params,
                               "shape": [2],
                               "values": [float(v) for v in index]})

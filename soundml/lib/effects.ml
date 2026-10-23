@@ -1266,9 +1266,9 @@ let pitch_shift_stage ?(phase = `Independent) ?quality c
    librosa's non-silence test: the RMS energy of each frame (constant-zero
    centered framing, {!Energy.rms}), in decibels against the reference as
    [amplitude_to_db] computes them — squared and floored at [1e-10] on both
-   sides — reduced over the leading axes by their maximum, and compared with
-   [-top_db]. The decibels are double precision whatever the dtype of the
-   signal.
+   sides, a [`Maximum] reference taken per clip ({!maximum_offsets}) — reduced
+   over the leading axes by their maximum, and compared with [-top_db]. The
+   decibels are double precision whatever the dtype of the signal.
 
    Once the reference is fixed the verdicts are frame-local, so a [`Value]
    reference streams: {!split_stage} judges the frames of the RMS carry as they
@@ -1318,19 +1318,49 @@ let energies rms =
 
 (* [loud_frames ~offset ~top_db ~frames mse] is, for each of the [frames] frames
    whose energies [mse] holds row after row, whether its loudest row lies above
-   [-top_db] decibels relative to the reference of decibels [offset]. The
-   offline and the streaming faces both decide through this one function, so a
-   frame's verdict is the same arithmetic on both. *)
+   [-top_db] decibels relative to its reference, of decibels [offset r] for row
+   [r]. The offline and the streaming faces both decide through this one
+   function, so a frame's verdict is the same arithmetic on both. *)
 let loud_frames ~offset ~top_db ~frames mse =
   let rows = if frames = 0 then 0 else Array.length mse / frames in
+  let offsets = Array.init rows offset in
   Array.init frames (fun t ->
       let loudest = ref Float.neg_infinity in
       for r = 0 to rows - 1 do
         let v = mse.((r * frames) + t) in
-        let db = (10. *. Float.log10 (Float.max amin (v *. v))) -. offset in
+        let db =
+          (10. *. Float.log10 (Float.max amin (v *. v))) -. offsets.(r)
+        in
         if db > !loudest then loudest := db
       done ;
       !loudest > -.top_db )
+
+(* [maximum_offsets x ~frames mse] is the decibels of the [`Maximum] reference
+   of each row of the energies [mse] of [x]: librosa 1.0's [amplitude_to_db]
+   takes [ref=np.max] over the last two axes of the [[...; frames]] decibels, so
+   each [[channels; samples]] clip of a signal of rank three or more has its own
+   reference, the largest frame RMS over its channels, and a signal of rank one
+   or two has one. *)
+let maximum_offsets x ~frames mse =
+  let rows = if frames = 0 then 0 else Array.length mse / frames in
+  let group =
+    if Nx.ndim x >= 3 then Int.max 1 (Nx.dim (Nx.ndim x - 2) x)
+    else Int.max 1 rows
+  in
+  let offsets =
+    Array.init
+      ((rows + group - 1) / group)
+      (fun g ->
+        let m = ref 0. in
+        for
+          i = g * group * frames
+          to (Int.min rows ((g + 1) * group) * frames) - 1
+        do
+          m := Float.max !m (Float.abs mse.(i))
+        done ;
+        offset_of !m )
+  in
+  fun r -> offsets.(r / group)
 
 (* [nonsilent op ~top_db ~reference ~frame_length ~hop x] is, for each frame of
    [x], whether it is above the threshold. *)
@@ -1338,14 +1368,15 @@ let nonsilent op ~top_db ~reference ~frame_length ~hop x =
   check_rank op x ;
   check_silence op ~top_db ~reference ~frame_length ~hop ;
   let frames, mse = energies (Energy.rms ~frame_length ~hop x) in
-  let reference =
+  let offset =
     match reference with
     | `Value r ->
-        r
+        let offset = offset_of r in
+        fun _ -> offset
     | `Maximum ->
-        Array.fold_left (fun m v -> Float.max m (Float.abs v)) 0. mse
+        maximum_offsets x ~frames mse
   in
-  loud_frames ~offset:(offset_of reference) ~top_db ~frames mse
+  loud_frames ~offset ~top_db ~frames mse
 
 (* An interval tracker over the verdicts of the frames in stream order: [frame]
    counts the verdicts read, and [opened] is the first frame of the run of
@@ -1457,7 +1488,7 @@ let split_stage ?(top_db = 60.) ?(frame_length = 2048) ?(hop = 512) ~reference
   let offset = offset_of r in
   let judge rms =
     let frames, mse = energies rms in
-    loud_frames ~offset ~top_db ~frames mse
+    loud_frames ~offset:(fun _ -> offset) ~top_db ~frames mse
   in
   let step s chunk =
     check_rank fn chunk ;
