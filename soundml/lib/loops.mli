@@ -145,9 +145,18 @@ val flatness :
 
 (** {1 Synthesis} *)
 
+val widen_rows :
+  (Complex.t, 'c) Nx.t -> (Complex.t, Nx.complex64_elt) Nx.t option
+(** [widen_rows z] is the spectrum [z] ([[...; bins; frames]]) widened to
+    complex128 and transposed over its last two axes, [[...; frames; bins]]:
+    [Some] when [z] is complex64, [None] otherwise. The widening is exact. A
+    [z] that views frames-major storage transposed, as the analysis returns
+    it, is read in place. *)
+
 val overlap_add :
      ?into:Store.buffer
   -> window:Float.Array.t
+  -> scale:float
   -> hop:int
   -> period:Float.Array.t
   -> partial:(int -> float)
@@ -158,14 +167,34 @@ val overlap_add :
   -> valid:int
   -> (float, Nx.float64_elt) Nx.t
   -> (float, Nx.float64_elt) Nx.t
-(** [overlap_add ~window ~hop ~period ~partial ~head ~stop ~left ~out_len
-    ~valid frames] is the least-squares synthesis of the inverse-transformed
-    frames [frames] ([[...; count; fft]]): [[...; out_len]], output [i] being
-    padded position [left + i]. Its numerator adds the windowed taps of the
-    frames reaching the position, the frame opening latest first; its
-    denominator is the envelope, [period.(q mod hop)] at padded positions
-    [q] in [\[head, stop)] and [partial q] elsewhere. Outputs from [valid]
-    on are zero. [into] is {!Store.make64}'s. *)
+(** [overlap_add ~window ~scale ~hop ~period ~partial ~head ~stop ~left
+    ~out_len ~valid frames] is the least-squares synthesis of the unscaled
+    inverse-transformed frames [frames] ([[...; count; fft]]): [[...;
+    out_len]], output [i] being padded position [left + i]. Its numerator adds
+    the taps of the frames reaching the position, the frame opening latest
+    first, a tap being the frame's sample times [scale], then times the
+    window — the values [Nx.mul] forms from a transform scaled by [scale] and
+    the window, in that order; its denominator is the envelope,
+    [period.(q mod hop)] at padded positions [q] in [\[head, stop)] and
+    [partial q] elsewhere. Outputs from [valid] on are zero. [into] is
+    {!Store.make64}'s. *)
+
+val overlap_add32 :
+     window:Float.Array.t
+  -> scale:float
+  -> hop:int
+  -> period:Float.Array.t
+  -> partial:(int -> float)
+  -> head:int
+  -> stop:int
+  -> left:int
+  -> out_len:int
+  -> valid:int
+  -> (float, Nx.float64_elt) Nx.t
+  -> (float, Nx.float32_elt) Nx.t
+(** [overlap_add32] is {!overlap_add} rounded once into float32: the values
+    [Nx.cast Nx.float32] makes of {!overlap_add}'s, without the float64
+    intermediate. *)
 
 val gl_update :
      ?into:Store.buffer

@@ -951,17 +951,68 @@ let flatness ~amin ~power ~invalid x =
 
 (* {1 Synthesis}
 
-   [ola64] carries one range of output positions of one plane. Output [i] is
+   The synthesis reads its spectrum frames-major at complex128. A complex64
+   spectrum the analysis wrote is frames-major in memory already, viewed
+   transposed, so [widen_run] widens its components in place, one contiguous
+   run; any other layout is read bins-major and [widen_band] transposes it one
+   band of [band] bins at a time, the spectrum powers' traversal the other way
+   round: each frame's band is written contiguous, and the band's [band] input
+   rows advance one element per frame. Widening a float32 to a double is
+   exact. *)
+
+let widen_run (src : f32) (dst : f64) lo hi =
+  for i = lo to hi - 1 do
+    Array1.unsafe_set dst i (Array1.unsafe_get src i)
+  done
+
+let widen_band (src : f32) (dst : f64) ~frames ~bins o b0 b1 =
+  let sbase = o * bins * frames * 2 and dbase = o * frames * bins * 2 in
+  for f = 0 to frames - 1 do
+    let row = dbase + (2 * f * bins) in
+    for b = b0 to b1 - 1 do
+      let i = sbase + (2 * ((b * frames) + f)) and d = row + (2 * b) in
+      Array1.unsafe_set dst d (Array1.unsafe_get src i) ;
+      Array1.unsafe_set dst (d + 1) (Array1.unsafe_get src (i + 1))
+    done
+  done
+
+let widen_rows (type c) (z : (Complex.t, c) Nx.t) :
+    (Complex.t, Nx.complex64_elt) Nx.t option =
+  match Nx.dtype z with
+  | Nx.Complex64 ->
+      let rows = Nx.swapaxes (-1) (-2) z in
+      let lead, outer, frames, bins = planes_of rows in
+      Some
+        (Store.make_c128
+           (Array.append lead [|frames; bins|])
+           (fun dst ->
+             if Nx.is_c_contiguous rows then
+               Store.read_parts32 rows (fun src ->
+                   (* about 64 Kcomponents per chunk *)
+                   Par.ranges
+                     ~n:(2 * outer * frames * bins)
+                     ~grain:65_536 (widen_run src dst) )
+             else
+               Store.read_parts32 z (fun src ->
+                   transpose_units ~outer ~frames ~bins
+                     (widen_band src dst ~frames ~bins) ) ) )
+  | _ ->
+      None
+
+(* [ola64] carries one range of output positions of one plane. Output [i] is
    padded position [q = left + i]: block [m = q / hop], residue [r]. Frame [m -
    k] reaches it with its sample [k * hop + r], for [k] from [0] to [blocks -
-   1]; the windowed taps are added in that order, a missing frame or a sample
-   past the window adding an exact zero, which is the association the
-   whole-signal overlap-add of shifted hop blocks performs. The sum is divided
-   by the envelope: one period of complete taps in [[head, stop)], the [partial]
-   sum of the frames that exist elsewhere. Positions past [valid] are the zero
-   extension of a requested length. *)
-let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
-    ~period ~partial ~head ~stop ~left ~out_len ~valid o lo hi =
+   1]. A tap is that sample of the unscaled inverse transform times [scale],
+   then times the window: the product a scaled transform followed by a window
+   multiply forms, in that order. The taps are added in the order of [k], a
+   missing frame or a sample past the window adding an exact zero, which is the
+   association the whole-signal overlap-add of shifted hop blocks performs. The
+   sum is divided by the envelope: one period of complete taps in [[head,
+   stop)], the [partial] sum of the frames that exist elsewhere. Positions past
+   [valid] are the zero extension of a requested length. A tap is bound before
+   it is added, so the sum never contracts into a fused multiply-add. *)
+let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~scale ~fft ~hop ~count
+    ~blocks ~period ~partial ~head ~stop ~left ~out_len ~valid o lo hi =
   let sbase = o * count * fft and dbase = o * out_len in
   for i = lo to hi - 1 do
     if i >= valid then Array1.unsafe_set dst (dbase + i) 0.
@@ -975,7 +1026,7 @@ let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
         let v =
           if p >= 0 && p < count && j < fft then
             Array1.unsafe_get src (sbase + (p * fft) + j)
-            *. Float.Array.unsafe_get w j
+            *. scale *. Float.Array.unsafe_get w j
           else 0.
         in
         if k = 0 then acc := v else acc := !acc +. v
@@ -988,30 +1039,80 @@ let ola64 (src : f64) (dst : f64) (w : Float.Array.t) ~fft ~hop ~count ~blocks
     end
   done
 
-let overlap_add ?into ~window ~hop ~period ~partial ~head ~stop ~left ~out_len
-    ~valid frames =
+(* [ola32] is [ola64] storing into float32: each quotient is rounded once, as
+   casting [ola64]'s result rounds it. *)
+let ola32 (src : f64) (dst : f32) (w : Float.Array.t) ~scale ~fft ~hop ~count
+    ~blocks ~period ~partial ~head ~stop ~left ~out_len ~valid o lo hi =
+  let sbase = o * count * fft and dbase = o * out_len in
+  for i = lo to hi - 1 do
+    if i >= valid then Array1.unsafe_set dst (dbase + i) 0.
+    else begin
+      let q = left + i in
+      let m = q / hop in
+      let r = q - (m * hop) in
+      let acc = ref 0. in
+      for k = 0 to blocks - 1 do
+        let p = m - k and j = (k * hop) + r in
+        let v =
+          if p >= 0 && p < count && j < fft then
+            Array1.unsafe_get src (sbase + (p * fft) + j)
+            *. scale *. Float.Array.unsafe_get w j
+          else 0.
+        in
+        if k = 0 then acc := v else acc := !acc +. v
+      done ;
+      let env =
+        if q < head || q >= stop then partial q
+        else Float.Array.unsafe_get period (q mod hop)
+      in
+      Array1.unsafe_set dst (dbase + i) (!acc /. env)
+    end
+  done
+
+(* [ola_layout ~window ~hop frames] is the output's leading shape, its plane
+   count, the frame count, [fft] and [blocks]; [ola_units ~outer ~out_len
+   ~blocks f] runs [f o lo hi] over every output position, a range never
+   crossing a plane. *)
+let ola_layout ~window ~hop frames =
   let fft = Float.Array.length window in
   let shape = Nx.shape frames in
   let nd = Array.length shape in
-  let count = shape.(nd - 2) in
   let lead = Array.sub shape 0 (nd - 2) in
-  let outer = Array.fold_left ( * ) 1 lead in
-  let blocks = (fft + hop - 1) / hop in
+  ( lead
+  , Array.fold_left ( * ) 1 lead
+  , shape.(nd - 2)
+  , fft
+  , (fft + hop - 1) / hop )
+
+let ola_units ~outer ~out_len ~blocks f =
   (* a position costs [blocks] taps; about 64 Ktaps per chunk *)
   let grain = Int.max 1 (65_536 / Int.max 1 blocks) in
+  Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
+      let u = ref lo in
+      while !u < hi do
+        let o = !u / out_len in
+        let stop_u = Int.min hi ((o + 1) * out_len) in
+        f o (!u - (o * out_len)) (stop_u - (o * out_len)) ;
+        u := stop_u
+      done )
+
+let overlap_add ?into ~window ~scale ~hop ~period ~partial ~head ~stop ~left
+    ~out_len ~valid frames =
+  let lead, outer, count, fft, blocks = ola_layout ~window ~hop frames in
   Store.make64 ?into (Array.append lead [|out_len|]) (fun dst ->
       Store.read64 frames (fun src ->
-          Par.ranges ~n:(outer * out_len) ~grain (fun lo hi ->
-              let u = ref lo in
-              while !u < hi do
-                let o = !u / out_len in
-                let stop_u = Int.min hi ((o + 1) * out_len) in
-                ola64 src dst window ~fft ~hop ~count ~blocks ~period ~partial
-                  ~head ~stop ~left ~out_len ~valid o
-                  (!u - (o * out_len))
-                  (stop_u - (o * out_len)) ;
-                u := stop_u
-              done ) ) )
+          ola_units ~outer ~out_len ~blocks
+            (ola64 src dst window ~scale ~fft ~hop ~count ~blocks ~period
+               ~partial ~head ~stop ~left ~out_len ~valid ) ) )
+
+let overlap_add32 ~window ~scale ~hop ~period ~partial ~head ~stop ~left
+    ~out_len ~valid frames =
+  let lead, outer, count, fft, blocks = ola_layout ~window ~hop frames in
+  Store.make32 (Array.append lead [|out_len|]) (fun dst ->
+      Store.read64 frames (fun src ->
+          ola_units ~outer ~out_len ~blocks
+            (ola32 src dst window ~scale ~fft ~hop ~count ~blocks ~period
+               ~partial ~head ~stop ~left ~out_len ~valid ) ) )
 
 (* [update64] carries one range of elements of the Griffin-Lim step: [e] is the
    rebuilt spectrum less [beta] times the previous one, its unit-modulus value

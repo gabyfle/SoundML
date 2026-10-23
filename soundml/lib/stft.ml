@@ -45,7 +45,12 @@
    the envelope position by position, each position adding its taps in a fixed
    order. The envelope is periodic with the hop over all but its two borders, so
    it is read from one period there and summed at the borders, and neither side
-   of the quotient is ever materialised. *)
+   of the quotient is ever materialised. The transform is left unscaled and the
+   loop multiplies each sample by [1 / fft_size] before the window, the product
+   the default normalisation and a window multiply form, and at float32 it
+   rounds each position into the caller's dtype: no whole-signal pass scales the
+   frames or casts the result. A complex64 spectrum is widened to complex128 by
+   one fused loop as well ({!Loops.widen_rows}). *)
 
 module Config = struct
   type t =
@@ -858,18 +863,23 @@ let to_complex128 : type c.
  fun t ->
   match Nx.dtype t with Nx.Complex128 -> t | _ -> Nx.cast Nx.complex128 t
 
-(* [synthesise_rows c ?length rows] is the synthesis equation above, on a
-   complex128 spectrum [rows] laid out frames-major, [[...; frames; bins]].
+(* [synthesise_rows dtype c ?length rows] is the synthesis equation above, on a
+   complex128 spectrum [rows] laid out frames-major, [[...; frames; bins]], in
+   [dtype].
 
    Only the frames the output can reach are inverted: a named [length] keeps
    padded positions [[left, left + length)], and frame [p] opens at padded
    position [p * hop], so the frames from [ceil ((length + left) / hop)] on lie
    entirely past the output and are dropped before any transform runs. The
-   retained frames are inverted in one batched real transform; one fused loop
-   ({!Loops.overlap_add}) then windows them, overlap-adds them and divides by
+   retained frames are inverted in one batched real transform, left unscaled;
+   one fused loop ({!Loops.overlap_add}) then applies the [1 / fft_size] the
+   default normalisation would, windows them, overlap-adds them and divides by
    the envelope in padded coordinates, keeping only the positions past the left
-   extension, and zero-extends the result to the requested length. *)
-let synthesise_rows ?into (c : Config.t) ?length rows =
+   extension, and zero-extends the result to the requested length. At float32
+   the same loop rounds each position on its way out; [into] holds a float64
+   result. *)
+let synthesise_rows (type a) ?into (dtype : (float, a) Nx.dtype) (c : Config.t)
+    ?length rows : (float, a) Nx.t =
   let fft = Config.fft_size c and hop = Config.hop c in
   let left = left_width c in
   let nd = Nx.ndim rows in
@@ -886,7 +896,7 @@ let synthesise_rows ?into (c : Config.t) ?length rows =
         Int.min frames (ceil_div (n + left) hop)
   in
   if count = 0 || out_len = 0 || Array.exists (fun d -> d = 0) lead then
-    Nx.zeros Nx.float64 (Array.append lead [|out_len|])
+    Nx.zeros dtype (Array.append lead [|out_len|])
   else
     let rows =
       if count = frames then rows
@@ -901,22 +911,40 @@ let synthesise_rows ?into (c : Config.t) ?length rows =
     let head = Int.min span (fft - hop) in
     let stop = Int.max head (Int.min span (count * hop)) in
     let period = Float.Array.init hop (fun r -> guard complete.(r)) in
-    Loops.overlap_add ?into ~window:c.window_values ~hop ~period
-      ~partial:(partial_envelope c w ~last:(count - 1))
-      ~head ~stop ~left ~out_len
-      ~valid:(Int.min span (left + out_len) - left)
-      (Nx.irfft Nx.float64 ~axis:(-1) ~n:fft rows)
+    let window = c.window_values and scale = 1. /. Float.of_int fft in
+    let partial = partial_envelope c w ~last:(count - 1) in
+    let valid = Int.min span (left + out_len) - left in
+    let inverted = Nx.irfft Nx.float64 ~norm:`Forward ~axis:(-1) ~n:fft rows in
+    match dtype with
+    | Nx.Float64 ->
+        Loops.overlap_add ?into ~window ~scale ~hop ~period ~partial ~head ~stop
+          ~left ~out_len ~valid inverted
+    | Nx.Float32 ->
+        Loops.overlap_add32 ~window ~scale ~hop ~period ~partial ~head ~stop
+          ~left ~out_len ~valid inverted
+    | _ ->
+        Nx.cast dtype
+          (Loops.overlap_add ~window ~scale ~hop ~period ~partial ~head ~stop
+             ~left ~out_len ~valid inverted )
 
-(* [synthesise c ?length z] is {!synthesise_rows} on a spectrum [z] shaped
-   [[...; bins; frames]], viewed frames-major and then widened to complex128, so
-   the widening reads the layout the analysis writes and the inverse transform
-   receives contiguous rows. *)
-let synthesise (c : Config.t) ?length z =
-  synthesise_rows c ?length (to_complex128 (Nx.swapaxes (-1) (-2) z))
+(* [synthesise dtype c ?length z] is {!synthesise_rows} on a spectrum [z] shaped
+   [[...; bins; frames]], viewed frames-major at complex128 so that the inverse
+   transform receives contiguous rows: a complex64 spectrum is widened by one
+   fused loop ({!Loops.widen_rows}), which reads the layout the analysis writes
+   in place. *)
+let synthesise dtype (c : Config.t) ?length z =
+  let rows =
+    match Loops.widen_rows z with
+    | Some rows ->
+        rows
+    | None ->
+        to_complex128 (Nx.swapaxes (-1) (-2) z)
+  in
+  synthesise_rows dtype c ?length rows
 
 let invert dtype c ?length z =
   check_synthesis "invert" c ?length z ;
-  Nx.cast dtype (synthesise c ?length z)
+  synthesise dtype c ?length z
 
 (* {1 Griffin-Lim phase reconstruction}
 
@@ -1002,7 +1030,7 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
       let rec run k spectrum previous =
         if k = 0 then spectrum
         else
-          let signal = synthesise_rows ~into:signals c spectrum in
+          let signal = synthesise_rows ~into:signals Nx.float64 c spectrum in
           let rebuilt =
             analyse_signal ~into:windowed c Nx.complex128 signal ~first:0
               ~count:frames
@@ -1014,7 +1042,7 @@ let griffin_lim ?(n_iter = 32) ?(momentum = 0.99) ?(init = `Zero_phase) ?length
       run n_iter spectrum None
     end
   in
-  Nx.cast dtype (synthesise_rows c ?length spectrum)
+  synthesise_rows dtype c ?length spectrum
 
 (* {1 Incremental synthesis}
 
