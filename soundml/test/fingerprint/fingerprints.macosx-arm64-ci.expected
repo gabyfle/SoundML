@@ -282,3 +282,242 @@ effects.trim top-60 maximum 1024-256 mono f64                35328+2            
 effects.trim top-40 value-0.5 2048-512 stereo f64            2x36352+2            a7f01508a3a9295d703599fd4ec98bf1
 effects.split top-30 maximum 1024-256 mono f64               4                    bd66b371ccf73bc483c16d81e11bec99
 effects.split top-20 value-0.25 512-128 stereo f64           4                    670f6d6497ea0172d82f352240ce4936
+pipeline.latency effects.split_stage                         8                    071d8c5ca6c3a1e83e12e764f17f41f7
+pipeline.latency hpss stages                                 20                   df4abfdb3a65f892180d604abb9d55d1
+pipeline.latency effects modification stages                 28                   75d1ac02194c8efa2c1369a77a3ff49f
+filter.butter lowpass-1000 o4                                5+5                  cfbacb9b1592f289d25bb38f3129f2a6
+filter.lfilter_zi lowpass-1000 o4                            4                    0d575398cdc0a5ba0e879d4b9125e7c3
+filter.butter highpass-80 o2                                 3+3                  2a0f20ba47264eed3cdff51b620a9442
+filter.lfilter_zi highpass-80 o2                             2                    b7d81e258ad884e89352901b32e27f1b
+filter.butter bandpass-300-3400 o3                           7+7                  8a8a8ccae79f91d3d15c9e04729d94b5
+filter.lfilter_zi bandpass-300-3400 o3                       6                    f1f45ccac0f82c663639c5f37bea5776
+filter.butter bandstop-50-60 o2                              5+5                  651f2e73f735c04d0a88f55f83a41ba0
+filter.lfilter_zi bandstop-50-60 o2                          4                    1f4de31c10ae6fbef1dc90d83525352e
+filter.butter_sos lowpass-2000 o8                            4x6                  4eb02f89b9d29b64ce74ba2901cfd1ce
+filter.sosfilt_zi lowpass-2000 o8                            4x2                  80a2efd81761edf9c73673e871277b74
+filter.butter_sos bandpass-500-2000 o4                       4x6                  8a1bf771affa79cb19bebf531e8a25d0
+filter.sosfilt_zi bandpass-500-2000 o4                       4x2                  3b09eae51b9b25ab8f52c069cb4053aa
+filter.butter_sos highpass-40 o5                             3x6                  c30e98598770417f9aeb1b5af98d63ab
+filter.sosfilt_zi highpass-40 o5                             3x2                  0c6806b79e31dfaa041b061cafae14a1
+filter.lfilter_zi unnormalised                               2                    3e9e9f97c55beb3abcd318d19cd18d10
+pipeline.latency filter stages                               24                   49066b76a2d86229080d5710288c0daa
+pipeline.latency yin_stage                                   12                   74834ef89aac2de450bdd6bc3e84833d
+pipeline.latency piptrack_stage                              4                    4ff415681eaf1bc4b4d328f8ccaa9a4d
+pipeline.latency peak_pick_stage                             8                    151da52fdba02392d4503b8df731dac1
+pipeline.latency rhythm stages                               16                   6e34130cef8107eb18fa6b402c43c443
+pipeline.latency tonal stages                                16                   29eb5d0d20326914ef7800f0a225c7cc
+pipeline.latency analysis and inverse stages                 16                   9252344d22faa4cca43896fb2991e6b7
+effects.split top-35 value-0.1 1023-300 mono f32             4                    36e4432f96b7af887a0685f57c7e74eb
+hpss_of_spectrogram hann k31x31 p2 m1x1 excerpt f32          2x513x49+2x513x49    d45db7fc958ecba4daf5712277a9170d
+hpss_of_spectrogram hann k16x30 pinf m1x2 excerpt f32        2x513x49+2x513x49    52fff2d771229ff543a1ebf8bf9b17de
+hpss_masks hann k31x31 p2 m1.5x1.5 excerpt f32               2x513x49+2x513x49    d8d6af2c1defbb75fc8e56c9906353b6
+hpss_of_stft hann k31x31 p2 m1x1 excerpt c64                 2x513x49+2x513x49    dc73314a496d8ddbc436f76bc1cc95c8
+effects.phase_vocoder hann independent 1.5 excerpt c64       2x513x33             bda758295c27db66c0144dc1eadf5bee
+effects.phase_vocoder hann locked 0.75 excerpt c64           2x513x66             c7ba4e983922e0c816d1e63384db231e
+effects.time_stretch hann independent 1.25 excerpt f32       2x9830               69b0e9c678378452357e5a5a6889e6c7
+effects.time_stretch hann locked 0.8 excerpt f32             2x15360              850797fccc4b4d014ccbadc60666423b
+effects.time_stretch hann independent 1 excerpt f32          2x12288              406d1af64b2c0d22e51dddf79cc9a2b3
+effects.pitch_shift hann locked high +3 excerpt f32          2x12288              b016a1d000efdf088fee36e084f75d8f
+effects.pitch_shift hann independent fast -5 excerpt f32     2x12288              3fb72373678eee74ab3ea91b99758861
+stft.invert hann length-8000 excerpt f32                     2x8000               a281ca369045ddcc7f85ba5b4270e2b5
+stft.invert hann length-13000 excerpt f32                    2x13000              a5dab701732a273b2cc88dbdf169c712
+stft.invert odd length-12500 excerpt f32                     2x12500              569225bdc7c8a0e4d2563875cf286a4b
+effects.trim top-30 maximum 1024-256 batch f32               2x2x36352+2          b9567e7b9421795a5a33f5c095fa69b0
+effects.split top-30 maximum 1024-256 batch f32              2                    7471de93a06b838e690a74c26ba1e3f6
+tone 440 length-4096 phase-0.3 f32                           4096                 eb1f940957a26949a3fd13fe90a9dad5
+tone -3000.25 duration-0.3 phase--pi/2 f32                   6615                 2e28fb673ac370ca5e72eb84511b7bfd
+chirp linear 100-8000 length-8192 phase-0 f32                8192                 e2441a6589afae995eb16b760249600c
+chirp exponential 55-7040 duration-0.5 phase-0.7 f32         11025                32a94ef9df33cd821ed1d1c90e8b1c82
+chirp exponential 9000-200 length-5000 phase--pi/2 f32       5000                 c8f1c4b9f80c43590e9196647e168790
+clicks times hop-512 f1000 d0.1 length-n f32                 44100                d9b72226757e33956da35b992d69b65a
+clicks frames hop-256 f2500 d0.03 f32                        44181                9a29cbe18de2b058d699751cca49008f
+clicks samples custom-stereo length-30000 f32                2x30000              e195d6906d5ed0b7a10219cd0c9273d9
+mu_compress mu-255 quantize excerpt f32                      2x12288              4d884389c9ee9b8737c7e342d70a40fc
+mu_expand mu-255 quantize excerpt f32                        2x12288              59308144cc1b82baedada0112c0c7bea
+mu_compress mu-255 continuous excerpt f32                    2x12288              e60a57e56af81b96eb700c6d7d050f79
+mu_expand mu-255 continuous excerpt f32                      2x12288              2a10b8fd6d047a0f1dbc12c02cfd1553
+mu_compress mu-15 quantize excerpt f32                       2x12288              13e24d42634578bfb0e557563fdc9fb2
+mu_expand mu-15 quantize excerpt f32                         2x12288              9ebfd7a15e947fc33850bfdb384e889e
+filter.lfilter lowpass-1000 o4 excerpt f32                   2x12288              0e7fbba87cc9abcb29f50479c8f274eb
+filter.lfilter highpass-80 o2 zi-0.25 excerpt f32            2x12288              b1ee305b442da648fd7f0d743e96f65e
+filter.lfilter bandstop-50-60 o2 excerpt f32                 2x12288              03337d2c5a8a115d87804720b99ce3e8
+filter.lfilter fir-5 excerpt f32                             2x12288              88f991f9f2746d0f9628b46a8a399402
+filter.lfilter unnormalised excerpt f32                      2x12288              df6a652723b2954a328df39895e305b8
+filter.sosfilt lowpass-2000 o8 excerpt f32                   2x12288              0ad0551bb4c260bbb9bd41ec7b58f825
+filter.sosfilt bandpass-500-2000 o4 zi-0.5 excerpt f32       2x12288              cc576659a1a61a49e5bbf3fefe1f239c
+filter.filtfilt lowpass-1000 o4 odd-15 excerpt f32           2x12288              c9a4a1c7a932af186f02b01212f68da6
+filter.filtfilt highpass-80 o2 reflect-0 excerpt f32         2x12288              9a5e21f0edfea95ea427048d59328582
+filter.filtfilt bandpass-300-3400 o3 edge-100 excerpt f32    2x12288              e4b13633f85c33609408629323ac9692
+filter.sosfiltfilt lowpass-2000 o8 odd-27 excerpt f32        2x12288              5a002556d148e53c11f7296ddf70299b
+filter.sosfiltfilt highpass-40 o5 reflect-500 excerpt f32    2x12288              fc86e33be0fd34eabc3e048a615afbf7
+filter.lfilter_zf bandpass-300-3400 o3 zi--0.5 excerpt f32   2x12288+2x6          aa094687b3c27f8e0df25bed406aa446
+filter.sosfilt_zf bandpass-500-2000 o4 zi-0.5 excerpt f32    2x12288+2x4x2        a2d09a9eeb92a5046d13a1b9d391cb8c
+filter.preemphasis coef-0.97 librosa-start excerpt f32       1x12288              62a799392e32d73ff8a70fd751024687
+filter.deemphasis coef-0.97 librosa-start excerpt f32        1x12288              a0bd3a92a080b47acc0b57a72569702f
+filter.preemphasis_zf coef-0.97 librosa-start excerpt f32    1x12288+1x1          7597fb29710de2bf121b907818039a9c
+filter.deemphasis_zf coef-0.97 librosa-start excerpt f32     1x12288+1x1          56940ee681b4721365bb90585efdceb8
+filter.preemphasis coef-0.95 zi-0.1 excerpt f32              2x12288              56e2fa191ce4f021c047f814c78c3903
+filter.deemphasis coef-0.95 zi-0.1 excerpt f32               2x12288              cd9846d8f26dee16d94cfa900d8ae19b
+filter.preemphasis_zf coef-0.95 zi-0.1 excerpt f32           2x12288+2x1          2224c2a3038d5a4ecfbad8204e7d9889
+filter.deemphasis_zf coef-0.95 zi-0.1 excerpt f32            2x12288+2x1          b6a292c2612e7dad43839d5237f503cd
+yin 2048-512 t0.1 centered constant-0 60-1000 excerpt f32    2x25                 2f4e222f5840be5ba694c53846204390
+yin 1023-300 t0.2 left edge 80-2000 excerpt f32              2x38                 a4f3915cc765e6678393a1584e4e8925
+yin 1500-256 t0.15 centered reflect 100-800 excerpt f32      2x49                 894427242fd4975d16a7ed7784e27ba6
+pyin 2048-512 60-1000 r0.1 nan pruned excerpt f32            2x25+2x25+2x25       6acf0c92388b6f1f780afdcc08370c67
+pyin 1024-256 100-400 r0.25 decoded exact excerpt f32        2x45+2x45+2x45       da7464736d1ce125e3864ee629c4cc6b
+piptrack hann f150-4000 t0.1 maximum excerpt f32             2x513x49+2x513x49    b7722842b8d14ba05f3cc1178f78db9b
+piptrack hann f0-11025 t0.1 value-0.5 excerpt f32            2x513x49+2x513x49    04248f6627be3dc1f6bf3b6ba6d18cec
+pitch_tuning piptrack r0.01 b12 excerpt f32                  1                    52f2bb130f7d11adbffaa3ed488948ce
+pitch_tuning piptrack r0.03 b36 excerpt f32                  1                    a6edc5f82c76c216e2808b912e3e2c5f
+estimate_tuning hann r0.01 b12 t0.1 maximum excerpt f32      1                    52f2bb130f7d11adbffaa3ed488948ce
+estimate_tuning odd r0.001 b36 t0.2 value-1e-4 excerpt f32   1                    a9718822442c79065fff38117298195a
+estimate_tuning_of_spectrogram hann r0.01 b12 excerpt f32    1                    52f2bb130f7d11adbffaa3ed488948ce
+peak_pick noise greedy 3-1-10-1 d0.1 w3 f32                  15                   edc75a4284b4540b4500de6daf70ead2
+peak_pick noise greedy 2-3-4-6 d0.05 w4 f32                  17                   ddae76e4544b58ceb001d1122b47b919
+peak_pick noise dp_count 1-1-3-3 d0 w2 f32                   42                   10079505dbd52231ccfe2f3704df1d77
+peak_pick noise dp_value 1-1-3-3 d0 w2 f32                   30                   f5a7aa0701641911922550d420346f78
+onset_detect hann slaney norm greedy 1-1-4-5 d0.02 w1 f32    9                    043fde416138ac978fdf50df803492fc
+onset_detect hann slaney norm rms dp_count 3-2-10-11 w3 f32  8                    642ed2eba0d7c027f93125d51e9ef31d
+onset_detect_of_envelope raw envelope dp_value 2-3-4-6 f32   9                    843f02c7dd220de6c4f2e330623914ee
+onset_backtrack peak_pick greedy 3-1-10-1 d0.5 w3 rms f32    9                    4668325642630b30de8dfb83b0f28d43
+tempo_frequencies hop-256 n64 f32                            64                   81940e6521628f551a3609c48aca44a5
+fourier_tempo_frequencies hop-256 win64 f32                  33                   5f6220404b7825828a672ea87d829572
+tempogram centered hann w64 inf f32                          2x64x173             d9ffd4488e47d83abe3a5ee8fa2301e0
+tempogram left hamming w33 l2 f32                            2x33x141             3c6de3eda37829853c099291a0b8061d
+fourier_tempogram centered hann w64 c64                      2x33x174             61df3b001d03d13ab01ce4246b4c294c
+fourier_tempogram left hamming w33 c64                       2x17x141             3fd0b981fd19924d0f60c64b22166267
+tempo hop-256 120-1 ac2 max320 mean f32                      2x1                  db6b6a0e8742d35023a20f3fd357e8d3
+tempo hop-256 100-0.5 ac1.5 max200 median f32                2x1                  efed81fd450c5e43684c6bf0a59487d7
+tempo hop-256 ac1 max-inf none uniform-prior f32             2x173                e40ca04384f80b808db0dc50b2ad7d2e
+beat_track hop-256 120 t100 trim f32                         1+2                  af801b49d928f5a2a6b6ee53bf397a35
+beat_track hop-256 bpm-150 t400 no-trim f32                  1+6                  ae8c66e94f9d8f939651cdb7a45d2636
+plp hop-256 w64 30-300 reference f32                         2x173                30560b7cc51c6478a7d49291b70a33e7
+plp hop-256 w96 60-240 unit f32                              2x173                65170c5f2b9c48ccacbeaf8341980f0b
+chroma_cens cqt c12 l2 s41 hann f32                          2x12x173             a69ffd5c009e7ab640535f9f3a82f559
+chroma_cens_of_chroma cqt c12 inf s10 hamming f32            2x12x173             46bf0c3064b7dda97e152fc0f8cd6aa0
+chroma_cens_of_chroma cqt c12 l1 none f32                    2x12x173             33f96484f6a4a5c987801a406c0b4dbe
+chroma_cens_of_chroma stft a24 l2 s41 hann f32               2x24x173             a7db615f98d7354bfbd600f59d320c9a
+tonnetz cqt c12 f32                                          2x6x173              6be48b1bc1362e3aa8d023e3615936d3
+tonnetz_of_chroma stft c12 inf f32                           2x6x173              6258cb3d03a0a15099f1b9fe914aca13
+tonnetz_of_chroma stft a24 none f32                          2x6x173              4241278cedb755815a736f14a5cff521
+autocorrelate max-100000 f32                                 2x44100              cb0d17957a53a916459fc99ab11300cd
+autocorrelate max-2048 f32                                   2x2048               97fbe3a905d80f134542b745d678ca91
+lpc order-16 f32                                             2x17                 da5abafed38f738bfcd3a57fa49a5390
+lpc order-5 noise f32                                        1x6                  15af9dd1e3e502a0c318fc5683eedff5
+poly_features hann o1 f32                                    2x2x173              57c353983985aa4ec01c94f8fd1301f0
+poly_features odd o3 f32                                     2x4x393              98f517adee1412fb7a337a208214c9e7
+poly_features_of_spectrogram hann o2 custom-freqs f32        2x3x173              f39c9c93ada37c1c5942951feabc523a
+poly_features_of_spectrogram hann o0 f32                     2x1x173              e9d2ba2d9ef658e71e0623ffb4c849f2
+mfcc_to_mel slaney n13 lifter-22 ref-1 excerpt f32           2x64x49              8e6b1d867d48010ca2db4a0a0b09fa92
+mfcc_to_mel htk n20 lifter-0 ref-2 excerpt f32               2x40x49              b4f7f4d0ecf63b6caa34a1d6eba28ffa
+mel_to_stft slaney p2 excerpt f32                            2x513x49             0cadce16ca8d6b621c2ca64db31ac4c6
+mel_to_stft htk p1 excerpt f32                               2x513x49             5c410b7ebb4ea27ea586d1f0f1fcfcac
+mel_to_audio hann slaney p2 i4 excerpt f32                   2x12288              f230d55f8109d06d2f2ad6a1daeb6755
+mfcc_to_audio hann slaney lifter-22 ref-1 p2 i4 excerpt f32  2x12288              1cfc1402e72bf747b384ad0dc9b6cbcc
+effects.split top-35 value-0.1 1023-300 mono f64             4                    36e4432f96b7af887a0685f57c7e74eb
+hpss_of_spectrogram hann k31x31 p2 m1x1 excerpt f64          2x513x49+2x513x49    c53586f17ac115d7de5c80bc49d39b8a
+hpss_of_spectrogram hann k16x30 pinf m1x2 excerpt f64        2x513x49+2x513x49    26677d93382dc0089d8bfa8be8d4271f
+hpss_masks hann k31x31 p2 m1.5x1.5 excerpt f64               2x513x49+2x513x49    b703458a7fa5fcd523a2ff7c369fe377
+hpss_of_stft hann k31x31 p2 m1x1 excerpt c128                2x513x49+2x513x49    2b4e747628e62b17dd85832303ac9fbf
+effects.phase_vocoder hann independent 1.5 excerpt c128      2x513x33             5bb0468b10245e53107c3d66e596668e
+effects.phase_vocoder hann locked 0.75 excerpt c128          2x513x66             c6127af0fc7be1bd030328c9a37bfedd
+effects.time_stretch hann independent 1.25 excerpt f64       2x9830               44ca4a69f1cf8542a76db168220c3a44
+effects.time_stretch hann locked 0.8 excerpt f64             2x15360              fd0079ea497a311445bf1b8bc021fbdc
+effects.time_stretch hann independent 1 excerpt f64          2x12288              9bc6f26614a69b641eb51246ca2baaf0
+effects.pitch_shift hann locked high +3 excerpt f64          2x12288              73cd1fbd18c02afe34050cbd1adeb806
+effects.pitch_shift hann independent fast -5 excerpt f64     2x12288              0721f71f1b32ce74665a89c3073ef6a8
+stft.invert hann length-8000 excerpt f64                     2x8000               2ace3d0720e05bb0b9aa2db200445411
+stft.invert hann length-13000 excerpt f64                    2x13000              2967661ad47952b6a46ea4fbad6ab9fb
+stft.invert odd length-12500 excerpt f64                     2x12500              2aa74fec6f8cfd4256ce2d6b423f7975
+effects.trim top-30 maximum 1024-256 batch f64               2x2x36352+2          f518c94daf6eab3f47acf11a73e91b1a
+effects.split top-30 maximum 1024-256 batch f64              2                    7471de93a06b838e690a74c26ba1e3f6
+tone 440 length-4096 phase-0.3 f64                           4096                 d0b69d0a726517ae03e6308edd9ed4a2
+tone -3000.25 duration-0.3 phase--pi/2 f64                   6615                 7701c97a7f49ebf039fd2889deeeed3e
+chirp linear 100-8000 length-8192 phase-0 f64                8192                 e6fe40ddbf0041efc4d57a8706eb6e80
+chirp exponential 55-7040 duration-0.5 phase-0.7 f64         11025                b18f60e124c6dfbe5e53c1517707ffa9
+chirp exponential 9000-200 length-5000 phase--pi/2 f64       5000                 22b086dd735871268509383ad95124fc
+clicks times hop-512 f1000 d0.1 length-n f64                 44100                7f8fe7042846220e8117d7e2d45add62
+clicks frames hop-256 f2500 d0.03 f64                        44181                b5f883d9dd06c5f1a8043254e9b1d4e0
+clicks samples custom-stereo length-30000 f64                2x30000              54a88c0caf46eaaab770ab341f3b0d80
+mu_compress mu-255 quantize excerpt f64                      2x12288              4d884389c9ee9b8737c7e342d70a40fc
+mu_expand mu-255 quantize excerpt f64                        2x12288              04f7b8efebf9dc7ee0e2d4c530bdc669
+mu_compress mu-255 continuous excerpt f64                    2x12288              9d64663be8b8793af71933e20d5f4bba
+mu_expand mu-255 continuous excerpt f64                      2x12288              1231282eb0e9a3283ee77a6becb49e92
+mu_compress mu-15 quantize excerpt f64                       2x12288              13e24d42634578bfb0e557563fdc9fb2
+mu_expand mu-15 quantize excerpt f64                         2x12288              702fa0543b0ea1be68df59b1c7f73d5f
+filter.lfilter lowpass-1000 o4 excerpt f64                   2x12288              5442a06b8119aa6ce2aa5b32f37ad0e3
+filter.lfilter highpass-80 o2 zi-0.25 excerpt f64            2x12288              e134251b2f0fab3fccbd55b497b4a4b4
+filter.lfilter bandstop-50-60 o2 excerpt f64                 2x12288              93117e66bfea3facf7c2d7ec25d44836
+filter.lfilter fir-5 excerpt f64                             2x12288              06609b2762859426a3f31812a07c689b
+filter.lfilter unnormalised excerpt f64                      2x12288              6025be85cb96e14c3c77e862021c1e59
+filter.sosfilt lowpass-2000 o8 excerpt f64                   2x12288              a9e730992259890b65c40924de47b374
+filter.sosfilt bandpass-500-2000 o4 zi-0.5 excerpt f64       2x12288              74d95a2edc70d58373c2ea5e80a25850
+filter.filtfilt lowpass-1000 o4 odd-15 excerpt f64           2x12288              429d48d8e7dd1cf23bd3b849f8b9b523
+filter.filtfilt highpass-80 o2 reflect-0 excerpt f64         2x12288              3dc84762c101d3b7f6ceb910369d63d4
+filter.filtfilt bandpass-300-3400 o3 edge-100 excerpt f64    2x12288              20ad25698f81665bc3a61b27e31b83d7
+filter.sosfiltfilt lowpass-2000 o8 odd-27 excerpt f64        2x12288              fdefca3627067c2b096b6b29bf5426a3
+filter.sosfiltfilt highpass-40 o5 reflect-500 excerpt f64    2x12288              ee609d2077986f310081920f892a03c3
+filter.lfilter_zf bandpass-300-3400 o3 zi--0.5 excerpt f64   2x12288+2x6          100b17d9ecfa9cd2f2af56a2684dfe90
+filter.sosfilt_zf bandpass-500-2000 o4 zi-0.5 excerpt f64    2x12288+2x4x2        8829a4d0a0e5d9ccf357edc25d766998
+filter.preemphasis coef-0.97 librosa-start excerpt f64       1x12288              7f1139c5a5011d63d23176502b295192
+filter.deemphasis coef-0.97 librosa-start excerpt f64        1x12288              a9dc466145ae61aefefbe7bfa47b7967
+filter.preemphasis_zf coef-0.97 librosa-start excerpt f64    1x12288+1x1          8681588106b7234fee74047ba60133d2
+filter.deemphasis_zf coef-0.97 librosa-start excerpt f64     1x12288+1x1          a200a0ea2808a3f96252e06f6d319048
+filter.preemphasis coef-0.95 zi-0.1 excerpt f64              2x12288              429004de31004d06dc3c0a52145051d2
+filter.deemphasis coef-0.95 zi-0.1 excerpt f64               2x12288              8d59403974b9dc48dd6e6406df8eddb3
+filter.preemphasis_zf coef-0.95 zi-0.1 excerpt f64           2x12288+2x1          dacc5e1ab1549adbd6cdb19241e149f4
+filter.deemphasis_zf coef-0.95 zi-0.1 excerpt f64            2x12288+2x1          8d13c549498d223b6351faf23af0ffb0
+yin 2048-512 t0.1 centered constant-0 60-1000 excerpt f64    2x25                 7246bab948d8ea7bed9b88511712460c
+yin 1023-300 t0.2 left edge 80-2000 excerpt f64              2x38                 820afe3d96afa761b556754fb29ad257
+yin 1500-256 t0.15 centered reflect 100-800 excerpt f64      2x49                 3e3b7a6b2b659f549e9e6a0c0caee81e
+pyin 2048-512 60-1000 r0.1 nan pruned excerpt f64            2x25+2x25+2x25       1b49ddaa027854faa3dc42dba939d9d6
+pyin 1024-256 100-400 r0.25 decoded exact excerpt f64        2x45+2x45+2x45       e803103d487bf993175f26937cef2556
+piptrack hann f150-4000 t0.1 maximum excerpt f64             2x513x49+2x513x49    5fc32da93a17f33851ad6181936e39bb
+piptrack hann f0-11025 t0.1 value-0.5 excerpt f64            2x513x49+2x513x49    3f242fa59432140e53512d7a687c1506
+pitch_tuning piptrack r0.01 b12 excerpt f64                  1                    52f2bb130f7d11adbffaa3ed488948ce
+pitch_tuning piptrack r0.03 b36 excerpt f64                  1                    a6edc5f82c76c216e2808b912e3e2c5f
+estimate_tuning hann r0.01 b12 t0.1 maximum excerpt f64      1                    52f2bb130f7d11adbffaa3ed488948ce
+estimate_tuning odd r0.001 b36 t0.2 value-1e-4 excerpt f64   1                    a9718822442c79065fff38117298195a
+estimate_tuning_of_spectrogram hann r0.01 b12 excerpt f64    1                    52f2bb130f7d11adbffaa3ed488948ce
+peak_pick noise greedy 3-1-10-1 d0.1 w3 f64                  15                   edc75a4284b4540b4500de6daf70ead2
+peak_pick noise greedy 2-3-4-6 d0.05 w4 f64                  17                   ddae76e4544b58ceb001d1122b47b919
+peak_pick noise dp_count 1-1-3-3 d0 w2 f64                   42                   10079505dbd52231ccfe2f3704df1d77
+peak_pick noise dp_value 1-1-3-3 d0 w2 f64                   30                   f5a7aa0701641911922550d420346f78
+onset_detect hann slaney norm greedy 1-1-4-5 d0.02 w1 f64    9                    043fde416138ac978fdf50df803492fc
+onset_detect hann slaney norm rms dp_count 3-2-10-11 w3 f64  8                    642ed2eba0d7c027f93125d51e9ef31d
+onset_detect_of_envelope raw envelope dp_value 2-3-4-6 f64   9                    843f02c7dd220de6c4f2e330623914ee
+onset_backtrack peak_pick greedy 3-1-10-1 d0.5 w3 rms f64    9                    4668325642630b30de8dfb83b0f28d43
+tempo_frequencies hop-256 n64 f64                            64                   2e236d5ba40174e5b060e4cf3c9afda8
+fourier_tempo_frequencies hop-256 win64 f64                  33                   5f6220404b7825828a672ea87d829572
+tempogram centered hann w64 inf f64                          2x64x173             7b205faef4d0f76841a2cd8c4d2dfb86
+tempogram left hamming w33 l2 f64                            2x33x141             09497f4c37f833fd6b89c0eabd3457d8
+fourier_tempogram centered hann w64 c128                     2x33x174             0332a0aa3fd1c78d21be322b86744c8e
+fourier_tempogram left hamming w33 c128                      2x17x141             c0641c0b424391401dc884e95f03f07d
+tempo hop-256 120-1 ac2 max320 mean f64                      2x1                  25064577f90ff7bddfdd8fb0d8d315ff
+tempo hop-256 100-0.5 ac1.5 max200 median f64                2x1                  293888602bd89554ecf3978294b7c327
+tempo hop-256 ac1 max-inf none uniform-prior f64             2x173                e40ca04384f80b808db0dc50b2ad7d2e
+beat_track hop-256 120 t100 trim f64                         1+2                  af801b49d928f5a2a6b6ee53bf397a35
+beat_track hop-256 bpm-150 t400 no-trim f64                  1+6                  ae8c66e94f9d8f939651cdb7a45d2636
+plp hop-256 w64 30-300 reference f64                         2x173                8e51069a10cc20006a24202e038e6fe7
+plp hop-256 w96 60-240 unit f64                              2x173                c6e0648f7fd1b84b79e2d8bda611744d
+chroma_cens cqt c12 l2 s41 hann f64                          2x12x173             3f2998367068cd04c6fee9e55eb11e04
+chroma_cens_of_chroma cqt c12 inf s10 hamming f64            2x12x173             6395d2de6d4d6bd7fe46aba224536e6a
+chroma_cens_of_chroma cqt c12 l1 none f64                    2x12x173             8e38021d9abe296a12e88841a485f0d9
+chroma_cens_of_chroma stft a24 l2 s41 hann f64               2x24x173             1bbaad6c759df904b07e24e7920d48ad
+tonnetz cqt c12 f64                                          2x6x173              06602c2fc70d27243a1b24be915253e2
+tonnetz_of_chroma stft c12 inf f64                           2x6x173              79e1401b190f08941e9f6b9e42344ee8
+tonnetz_of_chroma stft a24 none f64                          2x6x173              68ab9351b9dae5e0baab15110901521a
+autocorrelate max-100000 f64                                 2x44100              6709bad735d5cfdbb36144d759a4b248
+autocorrelate max-2048 f64                                   2x2048               fe46240ac08c9a3dcb98629c6720f131
+lpc order-16 f64                                             2x17                 539a8074eba93dcfc3ec874c71bbb404
+lpc order-5 noise f64                                        1x6                  23326bde05f95fcfe6f11cc6df1b07e2
+poly_features hann o1 f64                                    2x2x173              dd7ab13fe63fc650ec9c5e183b530827
+poly_features odd o3 f64                                     2x4x393              9de20789855450678d60d0b69445e04d
+poly_features_of_spectrogram hann o2 custom-freqs f64        2x3x173              4f951bf4a60c17678c476b2df7079a82
+poly_features_of_spectrogram hann o0 f64                     2x1x173              ef2160f342e3f5db4c86b5bf736ba356
+mfcc_to_mel slaney n13 lifter-22 ref-1 excerpt f64           2x64x49              a31aeb569eae2301e819fd512206bb33
+mfcc_to_mel htk n20 lifter-0 ref-2 excerpt f64               2x40x49              013e0afbaa4a08228d8866868b950dcb
+mel_to_stft slaney p2 excerpt f64                            2x513x49             d0640c96bc7944958d66f9c58f3e66cd
+mel_to_stft htk p1 excerpt f64                               2x513x49             b3fea62b78b5e099c71c7af110ddff5a
+mel_to_audio hann slaney p2 i4 excerpt f64                   2x12288              6aa2a6b7e39b92a48f343faf71accc69
+mfcc_to_audio hann slaney lifter-22 ref-1 p2 i4 excerpt f64  2x12288              6c945050ad867e1a099638b71225ba42
