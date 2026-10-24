@@ -42,9 +42,10 @@
     Numerical parity with the reference implementation
     is enforced against committed golden vectors in the test suite; the
     compatibility contract, and its one
-    deliberate departure, live under {!section:parity}. Chroma energy
-    normalisation ([chroma_cens]) and the variable-Q chromagram are deliberately
-    outside this module. *)
+    deliberate departure, live under {!section:parity}. The tonal features
+    built on the constant-Q chromagram — chroma energy normalised statistics
+    and the tonal centroid — are [Soundml.chroma_cens] and [Soundml.tonnetz];
+    the variable-Q chromagram is deliberately outside this module. *)
 
 (** The type for the per-frame normalisation applied along the chroma axis.
 
@@ -279,3 +280,21 @@ val power_chromagram :
 (* Library-internal: [apply ?norm c (Stft.power_spectrum stft x)] at float32 and
    float64, bit for bit, without materializing the power spectrum; [None]
    otherwise. *)
+
+val check_norm : string -> norm -> unit
+(* Library-internal: raises [Invalid_argument], naming the operation, if the
+   norm is [`P p] with [p] not finite and positive. *)
+
+val smallest_normal : (float, 'b) Nx.dtype -> float
+(* Library-internal: the smallest positive normal value of the dtype, the
+   underflow guard of the per-frame normalisation. *)
+
+val normalise :
+     norm:norm
+  -> tiny:float
+  -> (float, Nx.float64_elt) Nx.t
+  -> (float, Nx.float64_elt) Nx.t
+(* Library-internal: the per-frame normalisation along the second-to-last axis
+   of a double-precision [[...; bands; frames]] tensor, every projection's last
+   step: each frame divided by its length in [norm], added in ascending order,
+   and a frame whose length lies below [tiny] left untouched. *)

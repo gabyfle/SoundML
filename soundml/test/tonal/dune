@@ -1,0 +1,7 @@
+(test
+ (name test_tonal)
+ (package soundml)
+ (modules tonal_inputs tonal_goldens tonal_law test_tonal)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))

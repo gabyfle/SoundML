@@ -241,6 +241,221 @@ val resample :
     others built most recently (up to 8 MB of designed filters), so a
     conversion repeated over a corpus is designed once. *)
 
+(** {2:features_tonal Tonal features}
+
+    Two descriptors of harmony over the constant-Q chromagram of
+    {!chroma_cqt}: chroma energy normalised statistics (CENS), the
+    dynamics- and timbre-robust chroma of audio matching, and the tonal
+    centroid, the six-dimensional pitch-space embedding of harmonic-change
+    detection. Each takes audio through a constant-Q configuration, or an
+    already-computed chromagram through its [_of_chroma] form, and each has
+    a {!Pipeline} stage over chromagram chunks.
+
+    librosa analyses seven octaves at 36 bins per octave from C1, at hop
+    512, by default; the matching configuration is
+    [Cqt.Config.create ~bins_per_octave:36 ~n_bins:252 ~pad:(`Constant 0.)
+    ~sample_rate ()], whose tuning is explicit and whose filter basis is
+    exact where librosa estimates the one and sparsifies the other (see the
+    parity sections of {!Chroma} and {!Cqt}).
+
+    Parity with librosa 1.0: given the same chromagram, the features match
+    [librosa.feature.chroma_cens] and [librosa.feature.tonnetz] to
+    double-precision rounding — the quantisation decisions are exact, and
+    the smoothing window is {!Window.make}'s exactly symmetric evaluation, a
+    rounding away from scipy's. The named deviations:
+
+    - {b The interior is double precision, rounded once.} librosa run
+      natively on float32 rounds its L1-normalised chroma to float32,
+      compares it against thresholds rounded to float32 and rounds the
+      smoothed sequence before its final normalisation; here every step
+      stays in double, which is librosa's float64 path on the same values.
+      A quantisation level can differ from librosa's own float32 output
+      only where a share lies within one float32 rounding of a threshold.
+    - {b The tonal centroid keeps the dtype of its input}, where librosa
+      promotes float32 chroma to float64.
+    - {b Non-finite chroma raise} [Invalid_argument], as librosa's
+      normalisation raises its own error; propagating them instead would
+      quantise a NaN frame to silence. CENS also refuses negative chroma,
+      which librosa's constant-Q chromagram clips to zero before quantising.
+    - {b The quantiser amplifies the chromagram's own departures.} From
+      audio, the chromagram carries the constant-Q departures named under
+      {!Cqt}'s parity, the octave decimation's resampler above all: on the
+      test suite's music and noise, the L1 shares differ from librosa's by up
+      to [4.4e-5] at hop 512 and [3.3e-8] at an odd hop, where neither side
+      resamples (measured). A share that close to [0.05], [0.1], [0.2] or
+      [0.4] can land on the other level, which moves every CENS frame whose
+      smoothing window covers it, by up to about [1e-2] at the defaults. The
+      tonal centroid has no threshold and follows the chromagram
+      proportionally: within [9.3e-5] and [4e-8] of librosa's on the same
+      signals.
+
+    librosa's [cq_to_chroma] window, its hybrid constant-Q mode and its
+    chroma threshold are not offered, as for {!chroma_cqt}. CENS
+    downsampling — the literature's [CENS(w, d)] keeps every [d]-th frame —
+    is implemented by neither: slice the result. *)
+
+val chroma_cens :
+     Cqt.Config.t
+  -> ?n_chroma:int
+  -> ?norm:Chroma.norm
+  -> ?smoothing:int option
+  -> ?smoothing_window:Window.t
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [chroma_cens cqt x] is the CENS chromagram of the audio [x], shaped
+    [[...; n_chroma; frames]] (Müller, Kurth & Clausen, {e Audio matching via
+    chroma-based statistical features}, ISMIR 2005): {!chroma_cens_of_chroma}
+    of the unnormalised constant-Q chromagram
+    [chroma_cqt cqt ?n_chroma ~norm:`None x], bit for bit — the chromagram
+    librosa quantises. The time axis is the last axis of [x]; leading axes
+    broadcast, so a batch of clips is one call. [n_chroma] defaults to
+    [12]; [norm], [smoothing] and [smoothing_window] are those of
+    {!chroma_cens_of_chroma}.
+
+    The constant-Q transform has no pipeline stage, so this function is
+    offline over audio; {!chroma_cens_stage} streams the chromagram's side.
+
+    Raises [Invalid_argument] on the parameters as {!chroma_cens_of_chroma}
+    does, as {!chroma_cqt} does on [n_chroma] and [x], or if [x] holds an
+    infinite or NaN value. *)
+
+val chroma_cens_of_chroma :
+     ?norm:Chroma.norm
+  -> ?smoothing:int option
+  -> ?smoothing_window:Window.t
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [chroma_cens_of_chroma c] is the CENS chromagram of the non-negative
+    chromagram [c] — any [[...; n_chroma; frames]] tensor, raw or normalised
+    — in the shape and dtype of [c], as [librosa.feature.chroma_cens]
+    computes it from its chromagram:
+
+    + Each frame is divided by its L1 length, giving each pitch class its
+      share of the frame's energy. A frame whose length lies below the
+      smallest normal of the dtype is left as it is, so a silent frame stays
+      silent.
+    + Each share [v] is quantised to [0.25] times the number of the
+      thresholds [0.4], [0.2], [0.1] and [0.05] it strictly exceeds: five
+      levels from [0] to [1], a logarithmic compression of the energy
+      distribution.
+    + With [smoothing = Some l], the quantised sequence [q] is smoothed along
+      the frames by the symmetric [l + 2]-point [smoothing_window]
+      ({!Window.make}[ ~periodic:false]) divided by its sum: output frame [t]
+      is the sum over the window's points [m] of [w m * q (t + n / 2 - m)],
+      [n = l + 2], with [q] zero beyond either end of the sequence and the
+      points weighing at most the double-precision epsilon — Hann's zero
+      endpoints — left out. An odd [l] centres the window, the default
+      reading the [20] frames on either side; an even [l] reads one frame
+      more ahead than behind. This is scipy's [ndimage.convolve] with
+      [mode="constant"], librosa's own smoothing.
+    + Each frame is divided by its length in [norm], with the guard of the
+      first step: a frame of zeros — one whose whole window is silent —
+      stays zero.
+
+    [norm] defaults to [`P 2.], a unit vector per frame; [smoothing] to
+    [Some 41], librosa's [win_len_smooth], and [~smoothing:None] skips the
+    third step; [smoothing_window] to {!Window.Hann}. Pass an unnormalised
+    chromagram ([Chroma.of_cqt ~norm:`None]) to reproduce librosa's bits:
+    normalising it first changes the shares by a rounding, which a
+    threshold can amplify.
+
+    Every step runs in double precision — the lengths added in ascending
+    order over the chroma axis, each smoothed value from [0.] in ascending
+    frame order — and the result is rounded to the dtype of [c] once; any
+    float dtype is accepted. The smoothing costs one multiply-add per window
+    point, frame and band.
+
+    Raises [Invalid_argument] if [c] has rank below two or holds a negative,
+    infinite or NaN value, if [smoothing] is [Some l] with [l < 1], if
+    [norm] is [`P p] with [p] not finite and positive, if the shape
+    parameter of [smoothing_window] is invalid as documented for
+    {!Window.make}, or if its [l + 2] points do not have a positive sum. *)
+
+val chroma_cens_stage :
+     ?norm:Chroma.norm
+  -> ?smoothing:int option
+  -> ?smoothing_window:Window.t
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [chroma_cens_stage ()] is {!chroma_cens_of_chroma} as a pipeline stage:
+    rate 1:1 in frames and format-preserving, consuming and emitting
+    [[...; n_chroma; frames]] chunks — compose
+    [Chroma.of_cqt_stage ~norm:`None cqt >> chroma_cens_stage ()] over
+    magnitude constant-Q chunks, or
+    [Stft.power_stage s >> Chroma.stage ~norm:`None c >> chroma_cens_stage ()]
+    for CENS of the linear-frequency chromagram. Every partitioning of a
+    chromagram yields the bits {!chroma_cens_of_chroma} computes on the
+    whole of it.
+
+    An output frame is emitted once every frame its window reads has
+    arrived, so the stage withholds the window's reach ahead and declares it
+    as its latency: [l / 2] frames for a window whose endpoints are zero,
+    such as Hann — [20] at the default [l = 41] (0.46 s at 22050 Hz and hop
+    512), and [20] at [l = 40] too — and [(l + 2) / 2] for one whose
+    endpoints are not, such as Hamming. The flush emits the last frames
+    against the zero extension past the end. With [~smoothing:None] the
+    stage is memoryless, with latency zero.
+
+    Streaming from audio passes through {!Cqt.Kernel}, whose columns agree
+    with {!Cqt.transform} to [1e-13] of the frame peak in float64 rather than
+    bit for bit, so a share that close to a threshold can quantise
+    differently from {!chroma_cens} on the same audio.
+
+    Raises [Invalid_argument] on the parameters as {!chroma_cens_of_chroma}
+    does, and, at the chunk concerned, for a chunk {!chroma_cens_of_chroma}
+    would refuse or one whose leading shape — the chroma axis included —
+    differs from the first chunk's. *)
+
+val tonnetz :
+  Cqt.Config.t -> ?n_chroma:int -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [tonnetz cqt x] is the tonal centroid of the audio [x], shaped
+    [[...; 6; frames]]: {!tonnetz_of_chroma} of the constant-Q chromagram
+    [chroma_cqt cqt ?n_chroma x] at its default [`Inf] normalisation, bit for
+    bit — librosa's default chromagram. The time axis is the last axis of
+    [x]; leading axes broadcast. [n_chroma] defaults to [12].
+
+    Raises [Invalid_argument] as {!chroma_cqt} does, or if [x] holds an
+    infinite or NaN value. *)
+
+val tonnetz_of_chroma : (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [tonnetz_of_chroma c] is the tonal centroid of the chromagram [c]
+    (Harte, Sandler & Gasser, {e Detecting harmonic change in musical
+    audio}, AMCMM 2006), as [librosa.feature.tonnetz] computes it, mapping
+    [[...; n_chroma; frames]] to [[...; 6; frames]]. Each frame, divided by
+    its L1 length, is projected onto three circles of pitch space — fifths,
+    minor thirds and major thirds, of radii [1], [1] and [0.5] — as a sine
+    and a cosine coordinate each: rows [2i] and [2i + 1] weigh band [c] by
+    [r_i sin (pi a_i d_c)] and [r_i cos (pi a_i d_c)], with
+    [a = 7/6, 3/2, 2/3] and [d_c = 12 c / n_chroma] the band's position in
+    semitones above the chromagram's first band — so a band count other
+    than 12 is spread over the octave, as librosa spreads it. The sines are
+    evaluated as librosa evaluates them, as cosines a quarter turn back.
+
+    The L1 length and the projection add their terms in ascending order over
+    the chroma axis, in double precision, and the result is rounded to the
+    dtype of [c] once — a frame's centroid is the same bits alone or among
+    others. A frame whose L1 length lies below the smallest normal of the
+    dtype is left unnormalised, so a silent frame maps to zero; signed input
+    is accepted, its length counting magnitudes. The projection costs six
+    multiply-adds per band and frame.
+
+    Raises [Invalid_argument] if [c] has rank below two or holds an infinite
+    or NaN value. *)
+
+val tonnetz_stage : unit -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [tonnetz_stage ()] is {!tonnetz_of_chroma} as a memoryless pipeline
+    stage: rate 1:1 in frames, latency zero and format-preserving, mapping
+    [[...; n_chroma; frames]] chunks to [[...; 6; frames]] — compose
+    [Chroma.of_cqt_stage cqt >> tonnetz_stage ()] over magnitude constant-Q
+    chunks for the streaming form of {!tonnetz}'s chain. Each frame is
+    projected alone, so every partitioning yields {!tonnetz_of_chroma}'s
+    bits, and an empty chunk maps to [[...; 6; 0]]. The twelve-band
+    projection is prepared once, when the stage is built; another band
+    count is prepared at each chunk.
+
+    Raises [Invalid_argument], at the chunk concerned, for a chunk
+    {!tonnetz_of_chroma} would refuse. *)
+
 (** {2:features_spectral Spectral-shape features}
 
     Each function summarises every frame of an already-computed {e magnitude}
