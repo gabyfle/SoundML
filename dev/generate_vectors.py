@@ -48,6 +48,7 @@ import numpy as np
 import scipy
 import scipy.interpolate
 import scipy.signal
+import scipy.stats
 import soundfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,6 +77,7 @@ SUITE_DIRECTORIES = {
     "f0": "soundml/test/f0/vectors",
     "tuning": "soundml/test/tuning/vectors",
     "onset_detect": "soundml/test/onset_detect/vectors",
+    "rhythm": "soundml/test/rhythm/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -5939,6 +5941,783 @@ class OnsetDetectVectorGenerator:
         write_suite(self.SUITE, "onset_backtrack", self.backtrack_cases())
         write_suite(self.SUITE, "onset_detect_envelope", self.envelope_cases())
         write_suite(self.SUITE, "onset_detect", self.audio_cases())
+class RhythmVectorGenerator:
+    """Golden vectors for the tempo and beat features: librosa.feature.tempogram,
+    fourier_tempogram and tempo, librosa.beat.beat_track and plp, and
+    librosa.tempo_frequencies / fourier_tempo_frequencies.
+
+    Inputs are onset envelopes given directly -- formula envelopes (a floor of
+    |LCG values| under this suite's seed with spikes added at given frames,
+    the fourth power of |LCG values|, zeros, negated spikes) and the
+    envelopes librosa.onset.onset_strength computes from click tracks -- and
+    the click tracks themselves, whose envelope the OCaml side computes with
+    Soundml.onset_strength. A click is a 220-sample burst of the LCG stream
+    under a ramp, scale (1 - i / 220), at integer sample positions stored in
+    the case; a track may add LCG noise. Scenarios: steady clicks at 90, 120,
+    128 and 150 BPM, 110 BPM in noise, a change from 100 to 140 BPM, a swung
+    rhythm, noise alone and a 16 kHz track at a hop of 256. The click
+    envelopes take onset_strength's mean over mel bands with every analysis
+    argument explicit (n_fft 2048, constant zero padding, 128 Slaney mel
+    bands in float64); librosa's beat_track and plp take the median when
+    given audio, which the library does not offer, so the references pass
+    onset_envelope= throughout. envelopes.json records each click envelope,
+    which the envelope-given cases read back.
+
+    Discrete decisions are asserted away from ties: every tempo's two best
+    scores (every frame's under aggregate=None), the first-beat, last-beat
+    and trim thresholds and every predecessor choice along each beat path,
+    every plp frame's peak and the sign of its real part. Predecessors may
+    tie exactly where both scores extend one cumulative score through the
+    same penalty, which is the same bits on either side; the beats are also
+    asserted unmoved under relative perturbations of the envelope (1e-9, 1e-7
+    for audio cases, 1e-3 for float32 audio) that keep its zeros. A
+    pure-python replica of the beat tracker reproduces librosa exactly on
+    every case (asserted) and measures those margins; it also asserts that
+    the first_spike case pins librosa's exclusion of the envelope's first
+    value, and the bpm 123 case its half-to-even rounding of half a beat.
+    The variant cases named in TEMPO_PINS and BEAT_PINS are asserted to
+    change the default result. The tempograms are stored at a few frames
+    each (both ramps and the interior) or whole, as the "columns" parameter
+    lists. float32 cases quantize the envelope (or the audio) to float32 and
+    compute the reference in float64; plp's "unit" case is a numpy
+    reimplementation of the method with unit-modulus kernels, not librosa.
+    """
+
+    SUITE = "rhythm"
+
+    SEED = 20261107
+
+    SR = 22050
+
+    HOP = 512
+
+    CLICK_LEN = 220
+
+    # the variants asserted to change the default result
+    TEMPO_PINS = {"start60", "start200", "std2", "ac4", "max100", "median"}
+
+    BEAT_PINS = {"notrim", "tight400", "tight680", "start80"}
+
+    def lcg(self, n, seed):
+        return StftVectorGenerator.lcg_signal(n, seed=seed)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    # {1 Inputs}
+
+    def envelope(self, spec):
+        """A formula envelope: zeros, a floor of |LCG| or the fourth power of
+        |LCG|, spikes added one at a time in order, optionally negated."""
+        n = spec["n"]
+        if spec["kind"] == "zeros":
+            o = np.zeros(n)
+        elif spec["kind"] == "abs":
+            o = spec["floor"] * np.abs(self.lcg(n, spec["seed"]))
+        elif spec["kind"] == "pow4":
+            a = np.abs(self.lcg(n, spec["seed"]))
+            s = a * a
+            o = s * s
+        else:
+            raise ValueError(spec["kind"])
+        for frame, height in spec.get("spikes", []):
+            o[frame] += height
+        if spec.get("negate", False):
+            o = -o
+        return o
+
+    def spikes(self, first, period, n, height=1.0):
+        return [[f, height] for f in range(first, n, period)]
+
+    def audio(self, spec):
+        n, length = spec["length"], self.CLICK_LEN
+        burst = self.lcg(length, spec["seed"])
+        ramp = 1.0 - np.arange(length) / length
+        y = np.zeros(n)
+        for p in spec["positions"]:
+            m = min(length, n - p)
+            y[p:p + m] += spec["scale"] * ramp[:m] * burst[:m]
+        if spec["noise"] > 0:
+            y = y + spec["noise"] * self.lcg(n, spec["seed"] + 1)
+        return y
+
+    @staticmethod
+    def steady(bpm, sr, n, offset=0.1):
+        period = 60.0 / bpm
+        out, t = [], offset
+        while int(round(t * sr)) < n:
+            out.append(int(round(t * sr)))
+            t += period
+        return out
+
+    def scenarios(self):
+        sr = self.SR
+        n = 12 * sr
+        out = {}
+
+        def track(key, positions, seed, noise=0.0, sample_rate=sr, length=n,
+                  hop=self.HOP):
+            out[key] = {"sample_rate": sample_rate, "hop": hop,
+                        "length": length, "positions": positions,
+                        "seed": seed, "scale": 0.8, "noise": noise}
+
+        for i, bpm in enumerate([90.0, 120.0, 128.0, 150.0]):
+            track(f"clicks{bpm:g}", self.steady(bpm, sr, n), self.SEED + i)
+        track("clicks110_noise", self.steady(110.0, sr, n), self.SEED + 10,
+              noise=0.05)
+        first = self.steady(100.0, sr, n // 2)
+        t0 = first[-1] / sr + 60.0 / 140.0
+        second = [int(round((t0 + k * 60.0 / 140.0) * sr)) for k in range(100)]
+        track("change100to140", first + [p for p in second if p < n],
+              self.SEED + 11)
+        swing, t = [], 0.1
+        while int(round(t * sr)) < n:
+            swing.append(int(round(t * sr)))
+            late = int(round((t + 1.0 / 3.0) * sr))
+            if late < n:
+                swing.append(late)
+            t += 0.5
+        track("swing120", swing, self.SEED + 12)
+        track("noise", [], self.SEED + 13, noise=0.3)
+        sr16 = 16000
+        track("clicks100_16k", self.steady(100.0, sr16, 10 * sr16),
+              self.SEED + 14, sample_rate=sr16, length=10 * sr16, hop=256)
+        return out
+
+    def onset(self, y, sr, hop):
+        return librosa.onset.onset_strength(
+            y=y, sr=sr, n_fft=2048, hop_length=hop, center=True,
+            pad_mode="constant",
+            **MelVectorGenerator.mel_kwargs(128, 0.0, 0.5 * sr, "slaney",
+                                            "slaney"))
+
+    def formula_envelopes(self):
+        s = self.SEED
+        spiky = {"kind": "abs", "n": 600, "floor": 0.05, "seed": s + 20,
+                 "spikes": self.spikes(3, 21, 600)}
+        return {
+            "spiky_p21": spiky,
+            "spiky_p25": {"kind": "abs", "n": 600, "floor": 0.05,
+                          "seed": s + 22, "spikes": self.spikes(7, 25, 600)},
+            "spiky_p10": {"kind": "abs", "n": 300, "floor": 0.05,
+                          "seed": s + 28, "spikes": self.spikes(4, 10, 300)},
+            "pow4": {"kind": "pow4", "n": 600, "seed": s + 21},
+            "first_spike": {"kind": "abs", "n": 400, "floor": 0.02,
+                            "seed": s + 23,
+                            "spikes": [[0, 12.0]]
+                            + self.spikes(150, 23, 400, 0.4)},
+            "zeros": {"kind": "zeros", "n": 300},
+            "negative": dict(spiky, negate=True),
+            "short2": {"kind": "abs", "n": 2, "floor": 0.5, "seed": s + 24},
+            "short3": {"kind": "abs", "n": 3, "floor": 0.5, "seed": s + 25},
+            "short1": {"kind": "abs", "n": 1, "floor": 0.5, "seed": s + 26},
+            "small": {"kind": "abs", "n": 40, "floor": 0.1, "seed": s + 27,
+                      "spikes": self.spikes(2, 5, 40)},
+        }
+
+    def prepare(self):
+        self.tracks = self.scenarios()
+        self.formulas = self.formula_envelopes()
+        self.click_envelopes = {}
+        self.audio_cache = {}
+        for key, spec in self.tracks.items():
+            y = self.audio(spec)
+            self.audio_cache[key] = y
+            self.click_envelopes[key] = self.onset(y, spec["sample_rate"],
+                                                   spec["hop"])
+
+    def source(self, key, dtype, origin):
+        """The input of a case and the parameters that rebuild it: (envelope,
+        sample_rate, hop, params). origin is "formula", "envelope" (librosa's
+        click envelope, read back from envelopes.json) or "audio" (the click
+        track, whose envelope each side computes)."""
+        if origin == "formula":
+            o = self.quantize(self.envelope(self.formulas[key]), dtype)
+            return o, self.SR, self.HOP, {"envelope": self.formulas[key]}
+        spec = self.tracks[key]
+        if origin == "envelope":
+            o = self.quantize(self.click_envelopes[key], dtype)
+        else:
+            y = self.quantize(self.audio_cache[key], dtype)
+            o = self.onset(y, spec["sample_rate"], spec["hop"])
+        return o, spec["sample_rate"], spec["hop"], {"clicks": key,
+                                                     "origin": origin}
+
+    def stack(self, keys, dtype):
+        rows = [self.source(k, dtype, "formula")[0] for k in keys]
+        return np.stack(rows), {"envelopes": [self.formulas[k] for k in keys]}
+
+    # {1 Decisions}
+
+    @staticmethod
+    def top_gap(scores):
+        """The gap between the two best finite scores (inf when only one)."""
+        finite = np.sort(scores[np.isfinite(scores)])[::-1]
+        return np.inf if finite.size < 2 else finite[0] - finite[1]
+
+    def tempo_scores(self, o, sr, hop, start_bpm=120.0, std_bpm=1.0,
+                     ac_size=8.0, max_tempo=320.0, aggregate=np.mean,
+                     prior=None):
+        win = int(int(ac_size * sr) // hop)
+        tg = librosa.feature.tempogram(onset_envelope=o, sr=sr,
+                                       hop_length=hop, win_length=win)
+        if aggregate is not None:
+            tg = aggregate(tg, axis=-1, keepdims=True)
+        bpms = librosa.tempo_frequencies(win, hop_length=hop, sr=sr)
+        if prior is None:
+            logprior = -0.5 * ((np.log2(bpms) - np.log2(start_bpm))
+                               / std_bpm) ** 2
+        else:
+            logprior = prior.logpdf(bpms)
+        if max_tempo is not None:
+            logprior[:int(np.argmax(bpms < max_tempo))] = -np.inf
+        return np.log1p(1e6 * tg) + logprior[..., :, None]
+
+    def check_tempo(self, name, scores):
+        """Every column's two best scores at least 1e-6 apart."""
+        flat = scores.reshape(-1, scores.shape[-2], scores.shape[-1])
+        gap = min(self.top_gap(flat[r, :, t]) for r in range(flat.shape[0])
+                  for t in range(flat.shape[2]))
+        assert gap >= 1e-6, (name, gap)
+        return gap
+
+    @staticmethod
+    def replica(o, sr, hop, bpm, tightness=100.0, trim=True,
+                include_first=False, half_away=False):
+        """librosa's beat tracker in python, with the margins of every
+        decision the result depends on. include_first and half_away switch
+        off the two quirks the goldens pin."""
+        n = len(o)
+        fpb = float(np.round(float(sr) / hop * 60.0 / bpm))
+        on = o / (o.std(ddof=1) + np.finfo(o.dtype).tiny)
+        window = np.exp(-0.5 * (np.arange(-fpb, fpb + 1) * 32.0 / fpb) ** 2)
+        k_len = len(window)
+        ls = np.zeros(n)
+        upper = (lambda i: min(i + k_len // 2 + 1, k_len)) if include_first \
+            else (lambda i: min(i + k_len // 2, k_len))
+        for i in range(n):
+            acc = 0.0
+            for k in range(max(0, i + k_len // 2 - n + 1), upper(i)):
+                acc += window[k] * on[i + k_len // 2 - k]
+            ls[i] = acc
+        tight = float(np.float32(tightness))
+        half = int(np.floor(fpb / 2 + 0.5)) if half_away else int(np.rint(fpb / 2))
+        thresh = 0.01 * ls.max()
+        back = np.zeros(n, dtype=int)
+        cum = np.zeros(n)
+        margin = np.full(n, np.inf)
+        first = True
+        first_margin = np.inf
+        for i in range(n):
+            cands = []
+            for loc in range(i - half, int(i - 2 * fpb - 1), -1):
+                if loc < 0:
+                    break
+                cands.append((cum[loc] - tight * (np.log(i - loc)
+                                                  - np.log(fpb)) ** 2, loc))
+            best, loc_b = -np.inf, -1
+            for score, loc in cands:
+                if score > best:
+                    best, loc_b = score, loc
+            rest = [s for s, loc in cands if loc != loc_b and np.isfinite(s)]
+            if rest:
+                margin[i] = (best - max(rest)) / max(1.0, abs(best))
+            cum[i] = ls[i] + best if loc_b >= 0 else ls[i]
+            if first:
+                first_margin = min(first_margin,
+                                   abs(ls[i] - thresh) / max(thresh, 1e-300))
+            if first and ls[i] < thresh:
+                back[i] = -1
+            else:
+                back[i] = loc_b
+                first = False
+        is_max = np.zeros(n, dtype=bool)
+        is_max[1:-1] = (cum[1:-1] > cum[:-2]) & (cum[1:-1] >= cum[2:])
+        is_max[-1] = cum[-1] > cum[-2]
+        values = np.sort(cum[is_max])
+        c = len(values)
+        median = (values[(c - 1) // 2] + values[c // 2]) / 2.0 if c else 0.0
+        threshold = 0.5 * median
+        tail = n - 1
+        for i in range(n - 1, -1, -1):
+            if is_max[i] and cum[i] >= threshold:
+                tail = i
+                break
+        last_margin = (np.min(np.abs(cum[is_max] - threshold))
+                       / max(abs(threshold), 1e-300)) if c else np.inf
+        path = []
+        i = tail
+        while i >= 0:
+            path.append(i)
+            i = back[i]
+        path_margin = min(margin[i] for i in path)
+        beats = np.zeros(n, dtype=bool)
+        beats[path] = True
+        a = ls[beats]
+        smooth = np.convolve(a, np.hanning(5))[2:n + 2]
+        th = 0.5 * np.sqrt(np.mean(smooth ** 2)) if trim else 0.0
+        keep = beats.copy()
+        i = 0
+        while i < n and ls[i] <= th:
+            keep[i] = False
+            i += 1
+        lead = i
+        i = n - 1
+        while i >= 0 and ls[i] <= th:
+            keep[i] = False
+            i -= 1
+        trail = i
+        rel = lambda v: abs(v - th) / max(abs(th), 1e-300)
+        trim_frames = list(range(0, min(lead + 1, n))) + list(range(max(trail, 0), n))
+        trim_margin = min(rel(ls[j]) for j in trim_frames) if th != 0.0 else np.inf
+        return np.flatnonzero(keep), {
+            "path": path_margin, "first": first_margin, "last": last_margin,
+            "trim": trim_margin}
+
+    def check_beats(self, name, o, sr, hop, kwargs, scale=1e-9):
+        tempo, beats = librosa.beat.beat_track(onset_envelope=o, sr=sr,
+                                               hop_length=hop, **kwargs)
+        if not o.any():
+            return tempo, beats, {}
+        bpm = kwargs.get("bpm")
+        tempo_margin = np.inf
+        if bpm is None:
+            tempo_margin = self.check_tempo(name, self.tempo_scores(
+                o, sr, hop, start_bpm=kwargs.get("start_bpm", 120.0),
+                prior=kwargs.get("prior")))
+            bpm = float(np.atleast_1d(tempo)[0])
+        mine, margins = self.replica(o, sr, hop, bpm,
+                                     tightness=kwargs.get("tightness", 100.0),
+                                     trim=kwargs.get("trim", True))
+        assert np.array_equal(mine, beats), (name, mine, beats)
+        margins["tempo"] = tempo_margin
+        # Predecessors tie exactly where both scores extend one cumulative
+        # score through the same penalty, the local scores between them
+        # vanishing below its last place: such a tie is the same bits on
+        # both sides and breaks the same way. Every other decision keeps a
+        # relative margin of 1e-6, and the beats survive perturbations of
+        # the envelope far above the two sides' disagreement, which keep its
+        # zeros.
+        assert margins["path"] == 0.0 or margins["path"] >= 1e-6, (
+            name, margins["path"])
+        for key in ("first", "last", "trim"):
+            assert margins[key] >= 1e-6, (name, key, margins[key])
+        call = dict(kwargs, bpm=bpm)
+        for seed in range(3):
+            r = self.lcg(len(o), self.SEED + 90 + seed)
+            _, moved = librosa.beat.beat_track(
+                onset_envelope=o * (1.0 + scale * r), sr=sr, hop_length=hop,
+                **call)
+            assert np.array_equal(moved, beats), (name, seed)
+        return tempo, beats, margins
+
+    def check_plp(self, name, o, sr, hop, win=384, tempo_min=30.0,
+                  tempo_max=300.0, prior=None):
+        ft = librosa.feature.fourier_tempogram(onset_envelope=o, sr=sr,
+                                               hop_length=hop, win_length=win)
+        f = librosa.fourier_tempo_frequencies(sr=sr, hop_length=hop,
+                                              win_length=win)
+        if tempo_min is not None:
+            ft[..., f < tempo_min, :] = 0
+        if tempo_max is not None:
+            ft[..., f > tempo_max, :] = 0
+        mag = np.log1p(1e6 * np.abs(ft))
+        if prior is not None:
+            mag = mag + prior.logpdf(f)[:, None]
+        flat = mag.reshape(-1, mag.shape[-2], mag.shape[-1])
+        flat_ft = ft.reshape(flat.shape)
+        gap, sign = np.inf, np.inf
+        for r in range(flat.shape[0]):
+            for t in range(flat.shape[2]):
+                col = flat[r, :, t]
+                if not np.any(flat_ft[r, :, t]):
+                    continue
+                gap = min(gap, self.top_gap(col))
+                k = int(np.argmax(col))
+                z = flat_ft[r, k, t]
+                sign = min(sign, abs(z.real) / abs(z))
+        assert gap >= 1e-6 and sign >= 1e-6, (name, gap, sign)
+        return gap, sign
+
+    @staticmethod
+    def plp_unit(o, sr, hop, win=384, tempo_min=30.0, tempo_max=300.0):
+        """plp with every frame divided by its own peak modulus: kernels of
+        unit amplitude, Grosche and Mueller's method (not librosa)."""
+        ft = librosa.feature.fourier_tempogram(onset_envelope=o, sr=sr,
+                                               hop_length=hop, win_length=win)
+        f = librosa.fourier_tempo_frequencies(sr=sr, hop_length=hop,
+                                              win_length=win)
+        ft[..., f < tempo_min, :] = 0
+        ft[..., f > tempo_max, :] = 0
+        mag = np.log1p(1e6 * np.abs(ft))
+        ft[mag < mag.max(axis=-2, keepdims=True)] = 0
+        ft /= librosa.util.tiny(ft) ** 0.5 + np.abs(ft).max(axis=-2,
+                                                            keepdims=True)
+        pulse = librosa.istft(ft, hop_length=1, n_fft=win, length=o.shape[-1])
+        return librosa.util.normalize(np.clip(pulse, 0, None), axis=-1)
+
+    # {1 Files}
+
+    def frequency_cases(self):
+        cases = []
+        for n, sr, hop in [(4, 22050, 512), (344, 22050, 512),
+                           (384, 22050, 512), (256, 16000, 256),
+                           (100, 44100, 1024)]:
+            values = librosa.tempo_frequencies(n, hop_length=hop, sr=sr)
+            assert np.isinf(values[0])
+            cases.append({"name": f"tempo_n{n}_sr{sr}_hop{hop}",
+                          "params": {"kind": "tempo", "n": n,
+                                     "sample_rate": sr, "hop": hop},
+                          "shape": [n - 1], "values": values[1:].tolist()})
+        for win, sr, hop in [(6, 22050, 512), (384, 22050, 512),
+                             (383, 22050, 512), (256, 16000, 256),
+                             (1, 22050, 512)]:
+            values = librosa.fourier_tempo_frequencies(sr=sr, hop_length=hop,
+                                                       win_length=win)
+            cases.append({"name": f"fourier_win{win}_sr{sr}_hop{hop}",
+                          "params": {"kind": "fourier", "n": win,
+                                     "sample_rate": sr, "hop": hop},
+                          "shape": [len(values)], "values": values.tolist()})
+        return cases
+
+    @staticmethod
+    def columns(frames, win):
+        p = win // 2
+        picks = [0, p - 1, p, frames // 2, frames - p, frames - 1]
+        return sorted({c for c in picks if 0 <= c < frames})
+
+    def tempogram_cases(self):
+        cases = []
+        # (case key, input key, origin, win, center, norm, dtypes, all columns)
+        specs = [
+            ("spiky_p21", "spiky_p21", "formula", 384, True, "inf",
+             ["float64", "float32"], False),
+            ("pow4_win383", "pow4", "formula", 383, True, "inf", ["float64"],
+             False),
+            ("small_win8", "small", "formula", 8, True, "inf",
+             ["float64", "float32"], True),
+            ("small_win7", "small", "formula", 7, True, "inf", ["float64"],
+             True),
+            ("small_win1", "small", "formula", 1, True, "inf", ["float64"],
+             True),
+            ("small_win40", "small", "formula", 40, True, "inf", ["float64"],
+             True),
+            ("short3_win8", "short3", "formula", 8, True, "inf", ["float64"],
+             True),
+            ("short1_win8", "short1", "formula", 8, True, "inf", ["float64"],
+             True),
+            ("small_left_win8", "small", "formula", 8, False, "inf",
+             ["float64"], True),
+            ("small_left_win40", "small", "formula", 40, False, "inf",
+             ["float64"], True),
+            ("small_none", "small", "formula", 16, True, "none", ["float64"],
+             True),
+            ("small_l2", "small", "formula", 16, True, "2", ["float64"], True),
+            ("small_l1", "small", "formula", 16, True, "1", ["float64"], True),
+            ("small_l3", "small", "formula", 16, True, "3", ["float64"], True),
+            ("clicks120_envelope", "clicks120", "envelope", 384, True, "inf",
+             ["float64"], False),
+            ("clicks120_audio", "clicks120", "audio", 384, True, "inf",
+             ["float64"], False),
+            ("clicks100_16k_audio", "clicks100_16k", "audio", 64, True, "inf",
+             ["float64"], False),
+        ]
+        norms = {"inf": np.inf, "none": None, "1": 1.0, "2": 2.0, "3": 3.0}
+        for key, src, origin, win, center, norm, dtypes, full in specs:
+            for dtype in dtypes:
+                o, sr, hop, params = self.source(src, dtype, origin)
+                tg = librosa.feature.tempogram(onset_envelope=o, sr=sr,
+                                               hop_length=hop, win_length=win,
+                                               center=center,
+                                               norm=norms[norm])
+                frames = tg.shape[-1]
+                cols = list(range(frames)) if full else self.columns(frames,
+                                                                     win)
+                expected = tg[..., cols]
+                params.update({"win_length": win,
+                               "alignment": "centered" if center else "left",
+                               "norm": norm, "columns": cols, "dtype": dtype,
+                               "sample_rate": sr, "hop": hop})
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        # a batch of two envelopes, [2; 600]
+        o, params = self.stack(["spiky_p21", "pow4"], "float64")
+        tg = librosa.feature.tempogram(onset_envelope=o, win_length=64)
+        cols = self.columns(tg.shape[-1], 64)
+        params.update({"win_length": 64, "alignment": "centered",
+                       "norm": "inf", "columns": cols, "dtype": "float64"})
+        cases.append({"name": "batch_float64", "params": params,
+                      "shape": list(tg[..., cols].shape),
+                      "values": tg[..., cols].ravel().tolist()})
+        return cases
+
+    def fourier_cases(self):
+        cases = []
+        specs = [
+            ("spiky_p21", "spiky_p21", 384, True, ["float64", "float32"]),
+            ("small_win15", "small", 15, True, ["float64"]),
+            ("small_left_win16", "small", 16, False, ["float64"]),
+            ("short3_win8", "short3", 8, True, ["float64"]),
+        ]
+        for key, src, win, center, dtypes in specs:
+            for dtype in dtypes:
+                o, sr, hop, params = self.source(src, dtype, "formula")
+                ft = librosa.feature.fourier_tempogram(
+                    onset_envelope=o, sr=sr, hop_length=hop, win_length=win,
+                    center=center)
+                frames = ft.shape[-1]
+                cols = (self.columns(frames, win) if win > 64
+                        else list(range(frames)))
+                z = ft[..., cols]
+                expected = np.stack([z.real, z.imag], axis=-1)
+                params.update({"win_length": win,
+                               "alignment": "centered" if center else "left",
+                               "columns": cols, "dtype": dtype})
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    def tempo_cases(self):
+        cases = []
+        uniform = scipy.stats.uniform(30, 300)
+        lognorm = scipy.stats.lognorm(s=1.0, loc=np.log(120.0), scale=120.0)
+        priors = {"uniform": uniform, "lognorm": lognorm}
+        # (case key, input key, origin, kwargs, dtypes)
+        specs = [
+            ("clicks90", "clicks90", "envelope", {}, ["float64"]),
+            ("clicks120", "clicks120", "envelope", {}, ["float64", "float32"]),
+            ("clicks128", "clicks128", "envelope", {}, ["float64"]),
+            ("clicks150", "clicks150", "envelope", {}, ["float64"]),
+            ("clicks110_noise", "clicks110_noise", "envelope", {},
+             ["float64"]),
+            ("change100to140", "change100to140", "envelope", {}, ["float64"]),
+            ("swing120", "swing120", "envelope", {}, ["float64"]),
+            ("noise", "noise", "envelope", {}, ["float64"]),
+            ("clicks100_16k", "clicks100_16k", "envelope", {}, ["float64"]),
+            ("clicks90_audio", "clicks90", "audio", {}, ["float64"]),
+            ("clicks150_audio", "clicks150", "audio", {}, ["float64",
+                                                            "float32"]),
+            ("change_audio", "change100to140", "audio", {}, ["float64"]),
+            ("spiky_p21", "spiky_p21", "formula", {}, ["float64", "float32"]),
+            ("start60", "spiky_p25", "formula", {"start_bpm": 60.0},
+             ["float64"]),
+            ("start200", "noise", "envelope", {"start_bpm": 200.0},
+             ["float64"]),
+            ("std0.5", "clicks90", "envelope", {"std_bpm": 0.5}, ["float64"]),
+            ("std2", "clicks120", "envelope", {"std_bpm": 2.0}, ["float64"]),
+            ("ac4", "noise", "envelope", {"ac_size": 4.0}, ["float64"]),
+            ("max100", "clicks120", "envelope", {"max_tempo": 100.0},
+             ["float64"]),
+            ("max1", "clicks120", "envelope", {"max_tempo": 1.0},
+             ["float64"]),
+            ("max_none", "clicks120", "envelope", {"max_tempo": None},
+             ["float64"]),
+            ("frames_change", "change100to140", "envelope",
+             {"aggregate": None}, ["float64"]),
+            ("median", "pow4", "formula", {"aggregate": np.median},
+             ["float64"]),
+            ("prior_uniform", "clicks150", "envelope", {"prior": "uniform"},
+             ["float64"]),
+            ("prior_lognorm", "clicks90", "envelope", {"prior": "lognorm"},
+             ["float64"]),
+        ]
+        for key, src, origin, kwargs, dtypes in specs:
+            for dtype in dtypes:
+                o, sr, hop, params = self.source(src, dtype, origin)
+                call = dict(kwargs)
+                if "prior" in call:
+                    call["prior"] = priors[call["prior"]]
+                expected = librosa.feature.tempo(onset_envelope=o, sr=sr,
+                                                 hop_length=hop, **call)
+                if key in self.TEMPO_PINS:
+                    # the parameter decides this case
+                    assert not np.array_equal(expected, librosa.feature.tempo(
+                        onset_envelope=o, sr=sr, hop_length=hop)), key
+                self.check_tempo(f"tempo {key}", self.tempo_scores(
+                    o, sr, hop, **call))
+                params.update({"dtype": dtype, "sample_rate": sr, "hop": hop})
+                for k, v in kwargs.items():
+                    if k == "aggregate":
+                        params["aggregate"] = "none" if v is None else "median"
+                    elif k == "max_tempo" and v is None:
+                        params["max_tempo"] = "none"
+                    else:
+                        params[k] = v
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        o, params = self.stack(["spiky_p21", "spiky_p25"], "float64")
+        expected = librosa.feature.tempo(onset_envelope=o, sr=self.SR)
+        self.check_tempo("tempo batch", self.tempo_scores(o, self.SR,
+                                                          self.HOP))
+        params.update({"dtype": "float64", "sample_rate": self.SR,
+                       "hop": self.HOP})
+        cases.append({"name": "batch_float64", "params": params,
+                      "shape": list(expected.shape),
+                      "values": expected.ravel().tolist()})
+        return cases
+
+    def beat_cases(self):
+        cases = []
+        uniform = scipy.stats.uniform(30, 300)
+        specs = [
+            ("clicks90", "clicks90", "envelope", {}, ["float64", "float32"]),
+            ("clicks120", "clicks120", "envelope", {}, ["float64"]),
+            ("clicks128", "clicks128", "envelope", {}, ["float64"]),
+            ("clicks150", "clicks150", "envelope", {}, ["float64"]),
+            ("clicks110_noise", "clicks110_noise", "envelope", {},
+             ["float64"]),
+            ("change100to140", "change100to140", "envelope", {}, ["float64"]),
+            ("swing120", "swing120", "envelope", {}, ["float64"]),
+            ("noise", "noise", "envelope", {}, ["float64"]),
+            ("clicks100_16k", "clicks100_16k", "envelope", {}, ["float64"]),
+            ("clicks90_audio", "clicks90", "audio", {}, ["float64",
+                                                          "float32"]),
+            ("clicks120_audio", "clicks120", "audio", {}, ["float64"]),
+            ("change_audio", "change100to140", "audio", {}, ["float64"]),
+            ("swing_audio", "swing120", "audio", {}, ["float64"]),
+            ("clicks100_16k_audio", "clicks100_16k", "audio", {},
+             ["float64"]),
+            ("spiky_p21", "spiky_p21", "formula", {}, ["float64", "float32"]),
+            ("first_spike", "first_spike", "formula", {}, ["float64",
+                                                           "float32"]),
+            ("zeros", "zeros", "formula", {}, ["float64"]),
+            ("negative", "negative", "formula", {}, ["float64"]),
+            ("short2", "short2", "formula", {"bpm": 120.0}, ["float64"]),
+            ("bpm118", "clicks120", "envelope", {"bpm": 118.0}, ["float64"]),
+            ("bpm123", "spiky_p10", "formula",
+             {"bpm": 123.0, "tightness": 1.0}, ["float64"]),
+            ("tight400", "clicks110_noise", "envelope", {"tightness": 400.0},
+             ["float64"]),
+            ("tight680", "change100to140", "envelope", {"tightness": 680.0},
+             ["float64"]),
+            ("tight_odd", "swing120", "envelope", {"tightness": 123.456},
+             ["float64"]),
+            ("notrim", "clicks150", "envelope", {"trim": False},
+             ["float64"]),
+            ("start80", "clicks150", "envelope", {"start_bpm": 80.0},
+             ["float64"]),
+            ("prior_uniform", "clicks90", "envelope", {"prior": "uniform"},
+             ["float64"]),
+        ]
+        for key, src, origin, kwargs, dtypes in specs:
+            for dtype in dtypes:
+                o, sr, hop, params = self.source(src, dtype, origin)
+                call = dict(kwargs)
+                if "prior" in call:
+                    call["prior"] = uniform
+                # audio cases cover the onset envelope's own disagreement
+                tempo, beats, margins = self.check_beats(
+                    f"beat {key}_{dtype}", o, sr, hop, call,
+                    scale=1e-7 if origin == "audio" else 1e-9)
+                if origin == "audio" and dtype == "float32":
+                    # The library's float32 envelope differs from the
+                    # reference by up to 1e-4 of the decibel scale, its zeros
+                    # kept: the beats must not move under a relative
+                    # perturbation of 1e-3.
+                    self.check_beats(f"beat {key}_{dtype} perturbed", o, sr,
+                                     hop, call, scale=1e-3)
+                if key in self.BEAT_PINS:
+                    _, plain = librosa.beat.beat_track(onset_envelope=o,
+                                                       sr=sr, hop_length=hop)
+                    assert not np.array_equal(plain, beats), key
+                if key == "first_spike":
+                    bpm = float(np.atleast_1d(tempo)[0])
+                    other, _ = self.replica(o, sr, hop, bpm, include_first=True)
+                    assert not np.array_equal(other, beats), key
+                if key == "bpm123":
+                    other, _ = self.replica(o, sr, hop, 123.0, half_away=True)
+                    assert not np.array_equal(other, beats), key
+                params.update({"dtype": dtype, "sample_rate": sr, "hop": hop})
+                params.update(kwargs)
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": [len(beats)],
+                              "values": [float(b) for b in beats]})
+                cases.append({"name": f"tempo_{key}_{dtype}",
+                              "params": params, "shape": [1],
+                              "values": [float(np.atleast_1d(tempo)[0])]})
+        return cases
+
+    def plp_cases(self):
+        cases = []
+        uniform = scipy.stats.uniform(30, 300)
+        lognorm = scipy.stats.lognorm(s=1.0, loc=np.log(120.0), scale=120.0)
+        priors = {"uniform": uniform, "lognorm": lognorm}
+        specs = [
+            ("clicks120", "clicks120", "envelope", {}, ["float64"]),
+            ("change100to140", "change100to140", "envelope", {}, ["float64"]),
+            ("swing120", "swing120", "envelope", {}, ["float64"]),
+            ("clicks120_audio", "clicks120", "audio", {}, ["float64"]),
+            ("spiky_p21", "spiky_p21", "formula", {}, ["float64", "float32"]),
+            ("range60_180", "clicks90", "envelope",
+             {"tempo_min": 60.0, "tempo_max": 180.0}, ["float64"]),
+            ("unbounded", "spiky_p25", "formula",
+             {"tempo_min": None, "tempo_max": None}, ["float64"]),
+            ("win256", "clicks128", "envelope", {"win_length": 256},
+             ["float64"]),
+            ("win383", "spiky_p25", "formula", {"win_length": 383},
+             ["float64"]),
+            ("prior_uniform", "clicks150", "envelope", {"prior": "uniform"},
+             ["float64"]),
+            ("prior_lognorm", "clicks90", "envelope", {"prior": "lognorm"},
+             ["float64"]),
+        ]
+        for key, src, origin, kwargs, dtypes in specs:
+            for dtype in dtypes:
+                o, sr, hop, params = self.source(src, dtype, origin)
+                call = dict(kwargs)
+                if "prior" in call:
+                    call["prior"] = priors[call["prior"]]
+                expected = librosa.beat.plp(onset_envelope=o, sr=sr,
+                                            hop_length=hop, **call)
+                self.check_plp(f"plp {key}", o, sr, hop,
+                               win=call.get("win_length", 384),
+                               tempo_min=call.get("tempo_min", 30.0),
+                               tempo_max=call.get("tempo_max", 300.0),
+                               prior=call.get("prior"))
+                params.update({"dtype": dtype, "sample_rate": sr, "hop": hop,
+                               "kernels": "reference"})
+                for k, v in kwargs.items():
+                    params[k] = "none" if v is None else v
+                cases.append({"name": f"{key}_{dtype}", "params": params,
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        o, params = self.stack(["spiky_p21", "spiky_p25"], "float64")
+        expected = librosa.beat.plp(onset_envelope=o, sr=self.SR)
+        self.check_plp("plp batch", o, self.SR, self.HOP)
+        params.update({"dtype": "float64", "sample_rate": self.SR,
+                       "hop": self.HOP, "kernels": "reference"})
+        cases.append({"name": "batch_float64", "params": params,
+                      "shape": list(expected.shape),
+                      "values": expected.ravel().tolist()})
+        o, sr, hop, params = self.source("change100to140", "float64",
+                                         "envelope")
+        expected = self.plp_unit(o, sr, hop)
+        params.update({"dtype": "float64", "sample_rate": sr, "hop": hop,
+                       "kernels": "unit"})
+        cases.append({"name": "unit_change100to140_float64", "params": params,
+                      "shape": list(expected.shape),
+                      "values": expected.ravel().tolist()})
+        return cases
+
+    def envelope_cases(self):
+        return [{"name": key, "params": self.tracks[key],
+                 "shape": [len(o)], "values": o.tolist()}
+                for key, o in self.click_envelopes.items()]
+
+    def generate(self):
+        assert np.array_equal(np.hanning(5), [0.0, 0.5, 1.0, 0.5, 0.0])
+        self.prepare()
+        write_suite(self.SUITE, "envelopes", self.envelope_cases())
+        write_suite(self.SUITE, "frequencies", self.frequency_cases())
+        write_suite(self.SUITE, "tempogram", self.tempogram_cases())
+        write_suite(self.SUITE, "fourier_tempogram", self.fourier_cases())
+        write_suite(self.SUITE, "tempo", self.tempo_cases())
+        write_suite(self.SUITE, "beat_track", self.beat_cases())
+        write_suite(self.SUITE, "plp", self.plp_cases())
 
 
 GENERATORS = [
@@ -5964,6 +6743,7 @@ GENERATORS = [
     F0VectorGenerator,
     TuningVectorGenerator,
     OnsetDetectVectorGenerator,
+    RhythmVectorGenerator,
 ]
 
 if __name__ == "__main__":

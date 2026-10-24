@@ -1,0 +1,7 @@
+(test
+ (name test_rhythm)
+ (package soundml)
+ (modules rhythm_goldens rhythm_law test_rhythm)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
