@@ -47,6 +47,7 @@ import librosa
 import numpy as np
 import scipy
 import scipy.interpolate
+import scipy.linalg
 import scipy.signal
 import scipy.stats
 import soundfile
@@ -80,6 +81,7 @@ SUITE_DIRECTORIES = {
     "rhythm": "soundml/test/rhythm/vectors",
     "tonal": "soundml/test/tonal/vectors",
     "analysis": "soundml/test/analysis/vectors",
+    "inverse": "soundml/test/inverse/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -7480,6 +7482,291 @@ class AnalysisVectorGenerator:
         write_suite(self.SUITE, "autocorrelate", self.autocorrelate_cases(signals))
         write_suite(self.SUITE, "lpc", self.lpc_cases(signals))
         write_suite(self.SUITE, "poly_features", self.poly_cases())
+class InverseVectorGenerator:
+    """Golden vectors for the feature inversions Soundml.mfcc_to_mel,
+    mel_to_stft, mel_to_audio and mfcc_to_audio: librosa.feature.inverse over
+    inputs derived from the LCG stream under this suite's seed, plus a
+    sawtooth and two tones. Every input is stored in the params ("input",
+    flattened in C order, and "input_shape"), so the OCaml side never
+    recomputes a librosa feature. Analyses are centered with
+    pad_mode="constant", and mel spectrograms reach librosa's mel_to_stft as
+    float64, the dtype it builds its filterbank in.
+
+    Three files:
+
+    - mfcc_to_mel: librosa.feature.inverse.mfcc_to_mel of
+      librosa.feature.mfcc, at 128, 64 and 40 bands, 13 to 40 coefficients
+      (40 of 40, the complete inverse), lifters 0, 0.5, 3 (whose weights go
+      negative) and 22, a reference of 2.5, a batch of two clips and both
+      dtypes.
+    - mel_to_stft, two kinds. "start" cases invert mfcc_to_mel of a 13-
+      coefficient mfcc of the LCG stream, a broadband envelope whose
+      pseudo-inverse, where librosa starts its L-BFGS-B, is non-negative (a
+      tonal envelope's often is not, as the objective cases show): the
+      generator asserts, on every frame, that the start clears 1e-6 of its
+      maximum on every bin a filter reaches (so neither side's rounding can
+      move the clipping decision) and that librosa returns that start; the
+      expected spectrum has the bins no filter reaches pinned to 0, which is
+      what SoundML returns where scipy's pseudo-inverse leaves ~1e-15.
+      Geometries: the default 22050/2048/128 at power 2 and 1, a 16 kHz
+      300-7600 Hz band (unreached bins at both ends), 22050/512/64 at both
+      dtypes, and a batch. "objective" cases store librosa's output for a
+      frame-wise comparison of fits rather than of spectra: power mel
+      spectrograms of a sawtooth and of two tones at three levels on
+      22050/512/64 (librosa returns its start at the lowest and iterates at
+      the others) and of the sawtooth on the default geometry; targets no
+      non-negative spectrum fits (isolated band peaks over a floor, |LCG|
+      values); mfcc_to_mel envelopes of a 20-coefficient mfcc of a 440 Hz
+      sine on 22050/2048/64 and on the default geometry, on frames whose
+      start the generator asserts goes below -1e-6 of its maximum; and the
+      envelope of a chirp's 20-coefficient mfcc on the rank-deficient
+      22050/512/128 filterbank, where L-BFGS-B reaches the optimum and the
+      two fits agree to rounding.
+    - audio: librosa.griffinlim, at n_iter 1, 8 and 32, of a start case's
+      spectrum on 22050/512/64 (mel_to_audio's body,
+      librosa/feature/inverse.py), which is also the spectrum mfcc_to_audio's
+      chain (mfcc_to_mel, then mel_to_stft) finds from the 13 coefficients
+      stored for its case, at n_iter 8; with init=None, the only
+      deterministic start, and dtype=np.float64, where mel_to_audio itself
+      starts from a random phase and rounds to float32.
+
+    float32 cases quantize the input to float32 and compute the reference in
+    float64.
+    """
+
+    SUITE = "inverse"
+
+    SEED = 20261101
+
+    # Filterbank geometries: (sample rate, n_fft, hop, n_mels, mel kwargs).
+    GEOMETRIES = {
+        "default": (22050, 2048, 512, 128, {}),
+        "mel64": (22050, 2048, 512, 64, {}),
+        "mel40": (22050, 2048, 512, 40, {}),
+        "small": (22050, 512, 128, 64, {}),
+        "band": (16000, 512, 128, 40, {"fmin": 300.0, "fmax": 7600.0}),
+        "rankdef": (22050, 512, 128, 128, {}),
+    }
+
+    def signal(self, n, offset=0):
+        y = StftVectorGenerator.lcg_signal(n + offset, seed=self.SEED)
+        return y[offset:]
+
+    @staticmethod
+    def quantize(x, dtype):
+        return x if dtype == "float64" else x.astype(np.float32).astype(np.float64)
+
+    def geometry_params(self, key):
+        sr, n_fft, hop, n_mels, kwargs = self.GEOMETRIES[key]
+        params = {"sample_rate": sr, "fft_size": n_fft, "hop": hop,
+                  "n_mels": n_mels}
+        if "fmin" in kwargs:
+            params["f_min"] = kwargs["fmin"]
+        if "fmax" in kwargs:
+            params["f_max"] = kwargs["fmax"]
+        return params
+
+    def mfcc(self, key, y, n_mfcc, lifter=0.0):
+        sr, n_fft, hop, n_mels, kwargs = self.GEOMETRIES[key]
+        return librosa.feature.mfcc(
+            y=y, sr=sr, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop,
+            n_mels=n_mels, lifter=lifter, center=True, pad_mode="constant",
+            **kwargs).astype(np.float64)
+
+    def mel(self, key, y):
+        sr, n_fft, hop, n_mels, kwargs = self.GEOMETRIES[key]
+        return librosa.feature.melspectrogram(
+            y=y, sr=sr, n_fft=n_fft, hop_length=hop, n_mels=n_mels,
+            center=True, pad_mode="constant", dtype=np.float64, **kwargs)
+
+    def basis(self, key):
+        sr, n_fft, _, n_mels, kwargs = self.GEOMETRIES[key]
+        return librosa.filters.mel(sr=sr, n_fft=n_fft, n_mels=n_mels,
+                                   dtype=np.float64, **kwargs)
+
+    def mel_to_stft(self, key, M, power=2.0):
+        sr, n_fft, _, _, kwargs = self.GEOMETRIES[key]
+        assert M.dtype == np.float64
+        return librosa.feature.inverse.mel_to_stft(
+            M, sr=sr, n_fft=n_fft, power=power, **kwargs)
+
+    @staticmethod
+    def case(name, params, x, expected):
+        expected = np.asarray(expected, dtype=np.float64)
+        assert np.isfinite(expected).all(), name
+        params = dict(params)
+        params["input_shape"] = list(x.shape)
+        params["input"] = np.asarray(x, dtype=np.float64).ravel().tolist()
+        return {"name": name, "params": params, "shape": list(expected.shape),
+                "values": expected.ravel().tolist()}
+
+    # (case key, geometry, n_mfcc, lifter, ref, clips, dtypes)
+    MFCC_CASES = [
+        ("mel128_mfcc20", "default", 20, 0.0, 1.0, 1, ["float64", "float32"]),
+        ("mel40_mfcc13_lifter22", "mel40", 13, 22.0, 1.0, 1, ["float64"]),
+        ("mel40_mfcc40", "mel40", 40, 0.0, 1.0, 1, ["float64"]),
+        ("mel64_mfcc13_lifter3_ref2.5", "mel64", 13, 3.0, 2.5, 1, ["float64"]),
+        ("mel128_mfcc20_lifter0.5", "default", 20, 0.5, 1.0, 1, ["float64"]),
+        ("mel40_mfcc20_batched", "mel40", 20, 0.0, 1.0, 2,
+         ["float64", "float32"]),
+    ]
+
+    def mfcc_to_mel_cases(self):
+        cases = []
+        for key, geometry, n_mfcc, lifter, ref, clips, dtypes in self.MFCC_CASES:
+            n_mels = self.GEOMETRIES[geometry][3]
+            y = self.signal(2048 * clips).reshape(clips, 2048)
+            if clips == 1:
+                y = y[0]
+            mf = self.mfcc(geometry, y, n_mfcc, lifter)
+            for dtype in dtypes:
+                c = self.quantize(mf, dtype)
+                expected = librosa.feature.inverse.mfcc_to_mel(
+                    c, n_mels=n_mels, lifter=lifter, ref=ref)
+                assert expected.dtype == np.float64
+                params = self.geometry_params(geometry)
+                params.update({"lifter": lifter, "reference": ref,
+                               "dtype": dtype})
+                cases.append(self.case(f"{key}_{dtype}", params, c, expected))
+        return cases
+
+    def start_spectrum(self, key, M, power):
+        """librosa's mel_to_stft of M, asserted to be its clipped
+        pseudo-inverse start with a margin, unreached bins pinned to 0."""
+        A = self.basis(key)
+        reach = np.abs(A).sum(axis=0) > 0
+        start = np.einsum("fm,...mt->...ft",
+                          scipy.linalg.pinv(A, rtol=1e-15), M)
+        inner = start[..., reach, :]
+        margin = np.min(inner / np.max(inner, axis=-2, keepdims=True))
+        assert margin >= 1e-6, (key, margin)
+        expected = self.mel_to_stft(key, M, power)
+        root = np.power(np.clip(start, 0, None), 1.0 / power)
+        moved = np.max(np.abs(expected - root)[..., reach, :])
+        assert moved <= 1e-14 * np.max(expected), (key, moved)
+        expected = expected.copy()
+        expected[..., ~reach, :] = 0.0
+        return expected
+
+    # (case key, geometry, samples, power, clips, dtypes)
+    START_CASES = [
+        ("default_power2", "default", 512, 2.0, 1, ["float64"]),
+        ("default_power1", "default", 512, 1.0, 1, ["float64"]),
+        ("band300_7600", "band", 512, 2.0, 1, ["float64"]),
+        ("small", "small", 512, 2.0, 1, ["float64", "float32"]),
+        ("small_batched", "small", 512, 2.0, 2, ["float64"]),
+    ]
+
+    def start_input(self, key, samples, clips, n_mfcc=13):
+        n_mels = self.GEOMETRIES[key][3]
+        y = self.signal(samples * clips, offset=4096).reshape(clips, samples)
+        if clips == 1:
+            y = y[0]
+        mf = self.mfcc(key, y, n_mfcc)
+        return mf, librosa.feature.inverse.mfcc_to_mel(mf, n_mels=n_mels)
+
+    def objective_inputs(self):
+        sr = self.GEOMETRIES["small"][0]
+        t = np.arange(512) / sr
+        saw = 0.3 * scipy.signal.sawtooth(2 * np.pi * 220 * t)
+        tones = (0.2 * np.sin(2 * np.pi * 440 * t)
+                 + 0.1 * np.sin(2 * np.pi * 1234.5 * t))
+        n_mels = self.GEOMETRIES["small"][3]
+        peaks = np.full((n_mels, 2), 1e-3)
+        peaks[20, 0] = 1.0
+        peaks[[8, 30, 50], 1] = 1.0
+        lcg = np.abs(self.signal(n_mels * 3, offset=8192)).reshape(n_mels, 3)
+        inputs = []
+        for name, y in (("saw", saw), ("tones", tones)):
+            M = self.mel("small", y)[:, 1:4]
+            for scale in (1e-4, 1.0, 1e4):
+                inputs.append((f"{name}_x{scale:g}", "small", M * scale))
+        inputs.append(("isolated_peaks", "small", peaks))
+        inputs.append(("abs_lcg", "small", lcg))
+        t = np.arange(1024) / self.GEOMETRIES["default"][0]
+        saw = 0.3 * scipy.signal.sawtooth(2 * np.pi * 220 * t)
+        inputs.append(("default_saw", "default", self.mel("default", saw)[:, :2]))
+        return inputs + self.envelope_inputs()
+
+    def envelope_inputs(self):
+        """(key, geometry, M) for mfcc_to_mel envelopes of 20-coefficient
+        mfccs of tonal signals, on frames whose start is asserted to go
+        negative where the case says so."""
+        sr = self.GEOMETRIES["default"][0]
+        t = np.arange(2048) / sr
+        sine = 0.5 * np.sin(2 * np.pi * 440 * t)
+        t = np.arange(1024) / sr
+        chirp = 0.5 * scipy.signal.chirp(t, 200, t[-1], 4000)
+        inputs = []
+        for key, geometry, y, frames, negative in (
+                ("sine_envelope_mel64", "mel64", sine, slice(1, 3), True),
+                ("sine_envelope_default", "default", sine, slice(2, 3), True),
+                ("chirp_envelope_rankdef", "rankdef", chirp, slice(None),
+                 False)):
+            n_mels = self.GEOMETRIES[geometry][3]
+            M = librosa.feature.inverse.mfcc_to_mel(
+                self.mfcc(geometry, y, 20), n_mels=n_mels)[:, frames]
+            if negative:
+                A = self.basis(geometry)
+                reach = np.abs(A).sum(axis=0) > 0
+                start = (scipy.linalg.pinv(A, rtol=1e-15) @ M)[reach]
+                low = np.min(start / np.max(start, axis=0), axis=0)
+                assert np.all(low < -1e-6), (key, low)
+            inputs.append((key, geometry, M))
+        return inputs
+
+    def mel_to_stft_cases(self):
+        cases = []
+        for key, geometry, samples, power, clips, dtypes in self.START_CASES:
+            _, M = self.start_input(geometry, samples, clips)
+            for dtype in dtypes:
+                Mq = self.quantize(M, dtype)
+                expected = self.start_spectrum(geometry, Mq, power)
+                params = self.geometry_params(geometry)
+                params.update({"kind": "start", "power": power, "dtype": dtype})
+                cases.append(self.case(f"start_{key}_{dtype}", params, Mq,
+                                       expected))
+        for key, geometry, M in self.objective_inputs():
+            A = self.basis(geometry)
+            start = np.clip(scipy.linalg.pinv(A, rtol=1e-15) @ M, 0, None)
+            expected = self.mel_to_stft(geometry, M)
+            fit = 0.5 * np.sum((A @ expected ** 2 - M) ** 2, axis=0)
+            fit0 = 0.5 * np.sum((A @ start - M) ** 2, axis=0)
+            print(f"  objective {key}: librosa fit / |m|^2 "
+                  f"{np.max(fit / np.sum(M ** 2, axis=0)):.1e} "
+                  f"(start {np.max(fit0 / np.sum(M ** 2, axis=0)):.1e})")
+            params = self.geometry_params(geometry)
+            params.update({"kind": "objective", "power": 2.0,
+                           "dtype": "float64"})
+            cases.append(self.case(f"objective_{key}", params, M, expected))
+        return cases
+
+    def audio_cases(self):
+        cases = []
+        _, n_fft, hop, _, _ = self.GEOMETRIES["small"]
+        mf, M = self.start_input("small", 1024, 1)
+        S = self.start_spectrum("small", M, 2.0)
+
+        def griffinlim(S, n_iter):
+            return librosa.griffinlim(
+                S, n_iter=n_iter, hop_length=hop, n_fft=n_fft, window="hann",
+                center=True, dtype=np.float64, pad_mode="constant",
+                momentum=0.99, init=None)
+
+        params = self.geometry_params("small")
+        for n_iter in (1, 8, 32):
+            p = dict(params, kind="mel_to_audio", n_iter=n_iter,
+                     dtype="float64")
+            cases.append(self.case(f"mel_to_audio_iter{n_iter}", p, M,
+                                   griffinlim(S, n_iter)))
+        p = dict(params, kind="mfcc_to_audio", n_iter=8, dtype="float64")
+        cases.append(self.case("mfcc_to_audio_iter8", p, mf, griffinlim(S, 8)))
+        return cases
+
+    def generate(self):
+        write_suite(self.SUITE, "mfcc_to_mel", self.mfcc_to_mel_cases())
+        write_suite(self.SUITE, "mel_to_stft", self.mel_to_stft_cases())
+        write_suite(self.SUITE, "audio", self.audio_cases())
 
 
 GENERATORS = [
@@ -7508,6 +7795,7 @@ GENERATORS = [
     RhythmVectorGenerator,
     TonalVectorGenerator,
     AnalysisVectorGenerator,
+    InverseVectorGenerator,
 ]
 
 if __name__ == "__main__":

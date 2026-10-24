@@ -1,0 +1,7 @@
+(test
+ (name test_inverse)
+ (package soundml)
+ (modules inverse_goldens inverse_law test_inverse)
+ (libraries nx soundml tutils windtrap yojson)
+ (deps
+  (glob_files vectors/*.json)))
