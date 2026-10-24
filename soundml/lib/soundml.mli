@@ -874,6 +874,242 @@ val pyin :
     prunes every transition into some state, if [x] has rank zero, or if a
     sample of [x] is not finite. *)
 
+(** {2:features_tuning Pitch tracking and tuning estimation}
+
+    The spectral peaks of a magnitude spectrogram, tracked frame by frame
+    with parabolic interpolation, and the tuning of a recording estimated
+    from them: its offset from the equal-tempered ladder through A440, in
+    fractions of a bin — the [tuning] that {!Chroma.Config.create} and
+    {!Cqt.Config.create} take, which they never estimate themselves. *)
+
+(** The magnitude a bin of {!piptrack} must exceed to be detected.
+    - [`Maximum] (librosa's default, [ref=None] or [ref=np.max]) is
+      [threshold] times the largest magnitude of the frame, over every bin
+      and not the band alone: a reference per frame, unlike the whole-signal
+      [`Maximum] of {!Effects.reference}.
+    - [`Value v] (a scalar [ref]) is the fixed magnitude [v] itself; the
+      [threshold] plays no part, as in librosa, which does not scale a
+      scalar [ref].
+
+    librosa's other callables ([ref=np.mean], say) are not offered: a mean's
+    bits depend on the order of its additions, which numpy takes from the
+    memory layout of the spectrogram. *)
+type piptrack_reference = [`Maximum | `Value of float]
+
+val piptrack :
+     ?fmin:float
+  -> ?fmax:float
+  -> ?threshold:float
+  -> ?reference:piptrack_reference
+  -> ?fft_size:int
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t * (float, 'a) Nx.t
+(** [piptrack ~sample_rate s] is [(pitches, magnitudes)], the frequencies in
+    hertz and the magnitudes of the spectral peaks of the magnitude
+    spectrogram [s] — {!Stft.power_spectrum}[ ~power:1.] output, or any
+    non-negative [[...; bins; frames]] tensor — as [librosa.piptrack]
+    computes them: each shaped and typed like [s], zero everywhere but at the
+    peaks. Leading axes broadcast, so a batch of spectrograms is one call.
+
+    Each frame is analysed on its own. Its bins at or below the frame's
+    reference (see {!piptrack_reference}) are zeroed, and bin [k] is a peak
+    when it is then a local maximum along the bin axis — above bin [k - 1]
+    and at least bin [k + 1], so a plateau counts at its lower end — and its
+    frequency lies in [\[fmin, fmax)]. Bin [0] is never a peak, and the top
+    bin is one when it rises above its lower neighbour. At a peak the
+    parabola through the magnitudes [xm], [x0] and [xp] of bins [k - 1], [k]
+    and [k + 1], unthresholded, has its vertex [shift = -b / a] bins away,
+    with [a = (xp + xm) - 2 * x0] and [b = (xp - xm) / 2] — no shift when
+    [|b| >= |a|], nor at the top bin: the pitch is
+    [(k + shift) * sample_rate / fft_size] and the magnitude the vertex's
+    height, [x0 + (b / 2) * shift] (quadratic interpolation of spectral
+    peaks, J. O. Smith III, {e Spectral Audio Signal Processing}).
+
+    [fmin] defaults to [150.] Hz and [fmax] to [4000.] Hz; [fmin] is raised
+    to [0] and [fmax] lowered to [sample_rate / 2], and [fmax <= fmin] leaves
+    the band empty. The band reads bin [k] at [k] times the reciprocal of
+    [fft_size / sample_rate], numpy's [rfftfreq] arithmetic, while the pitch
+    is evaluated as written above: both are librosa's arithmetic, so a bin on
+    an edge of the band is decided as librosa decides it. The Nyquist bin of
+    an even transform, under an [fmax] at or above [sample_rate / 2], is in
+    the band exactly when its rounded frequency falls below
+    [sample_rate / 2], as it does at some rates (12345 Hz) but not at the
+    usual ones with power-of-two transforms. [threshold]
+    defaults to [0.1] and [reference] to [`Maximum]. [fft_size] defaults to
+    the even size [2 * (bins - 1)] the bin count implies; pass it for the
+    spectrogram of an odd-size transform, whose top bin lies below the
+    Nyquist frequency and can be a peak. Values are computed in double
+    precision and rounded to the dtype of [s] once. A spectrogram with no
+    frames, or a zero-size leading axis, maps to a pair of empty tensors.
+
+    The interpolation is biased wherever the peak falls between a bin and a
+    half bin, because the transform of the window is not a parabola: an
+    unpadded Hann analysis of a steady tone places it up to [0.053] bin from
+    its frequency on linear magnitudes, and up to [0.115] bin on a power
+    spectrogram (Smith, {e Bias of Parabolic Peak Interpolation}).
+
+    Documented deviations from the reference implementation: a negative or
+    NaN magnitude raises, where librosa takes absolute values and lets NaN
+    through; an [fft_size] that does not imply the bin count raises, where
+    librosa silently replaces it by [2 * (bins - 1)]; [`Value v] needs [v]
+    finite and non-negative, where librosa takes [|v|]; a NaN [fmin] or
+    [fmax] raises, where librosa detects nothing; a spectrogram without
+    frames is accepted, where librosa raises; and librosa run
+    natively on float32 data interpolates in mixed precision, so its float32
+    results can differ in the last place from the double results rounded
+    once here.
+
+    Raises [Invalid_argument] if [s] has rank below two, fewer than two bins,
+    or a negative or NaN value, if [sample_rate < 1], if [fmin] or [fmax] is
+    NaN, if [threshold] is not finite and non-negative, if [reference] is
+    [`Value v] with [v] not finite and non-negative, or if [fft_size] is
+    below [2] or [fft_size / 2 + 1] is not the bin count of [s]. *)
+
+val piptrack_stage :
+     ?fmin:float
+  -> ?fmax:float
+  -> ?threshold:float
+  -> ?reference:piptrack_reference
+  -> ?fft_size:int
+  -> sample_rate:int
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t * (float, 'a) Nx.t, 'k) Pipeline.t
+(** [piptrack_stage ~sample_rate ()] is {!piptrack} as a memoryless pipeline
+    stage: rate 1:1 in frames, latency zero and format-preserving, consuming
+    {!Stft.power_stage}[ ~power:1.] output ([[...; bins; frames]] magnitude
+    chunks) and emitting each chunk's [(pitches, magnitudes)] pair; an empty
+    chunk maps to a pair of empty chunks. librosa's references are per-frame
+    quantities — the frame's own maximum, or a fixed magnitude — so every
+    partitioning of a spectrogram yields the bits {!piptrack} computes on the
+    whole of it:
+    [Stft.power_stage ~power:1. c >> piptrack_stage ~sample_rate ()] streams
+    [piptrack ~sample_rate (Stft.power_spectrum ~power:1. c x)], and
+    [Pipeline.map fst] or [Pipeline.map snd] keeps one of the two tensors.
+
+    Parameters are validated when the stage is built, raising
+    [Invalid_argument] exactly as {!piptrack} does; the checks that need a
+    chunk — its rank and bin count, their agreement with [fft_size], and the
+    non-negativity of the data — wait for the chunk concerned, since the
+    stream {!Pipeline.Format} carries no bin count. *)
+
+val pitch_tuning :
+  ?resolution:float -> ?bins_per_octave:int -> (float, 'a) Nx.t -> float
+(** [pitch_tuning f] is the tuning of the frequencies [f] — a tensor of any
+    shape and float dtype, read as one collection of hertz values — as
+    [librosa.pitch_tuning] estimates it: their common offset from the
+    equal-tempered ladder of [bins_per_octave] steps per octave through
+    A440, in fractions of a step, in [\[-0.5, 0.5)].
+
+    Each positive frequency [f] has the residual
+    [bins_per_octave * log2 (f / 27.5)] modulo [1], less one when it is at
+    least [0.5]: its signed distance to the nearest step of the ladder. The
+    residuals are counted in the [ceil (1 / resolution)] bins between numpy's
+    [linspace (-0.5, 0.5, ceil (1 / resolution) + 1)] edges, each bin closed
+    below, and the result is the left edge of the fullest bin, the lowest one
+    on a tie — the left edge, not the centre, so the estimate sits up to one
+    bin width below the residuals it counts. NaN and non-positive
+    frequencies are skipped, and when none remains the tuning is [0.],
+    without librosa's warning; an infinite frequency has no residual and
+    counts in no bin, as in librosa.
+
+    [resolution] defaults to [0.01] — cents at the default
+    [bins_per_octave] of [12] — and need not divide [1]: [0.03] makes 34
+    bins of width [1 / 34]. Counting sorts the residuals, so the cost does
+    not grow with the bin count. The residuals are computed in double
+    precision whatever the dtype of [f], where librosa run natively on
+    float32 frequencies computes them in float32.
+
+    The mode is a discrete decision: frequencies tuned exactly onto an edge
+    (a ladder at +25 cents, say) have residuals within rounding of it, and
+    the last bit of their arithmetic picks the side, a whole bin apart.
+
+    Raises [Invalid_argument] if [resolution] does not lie in [\[1e-9, 1)] —
+    librosa documents [(0, 1)], and a histogram finer than [1e-9] would need
+    gigabytes there — or if [bins_per_octave < 1]. *)
+
+val estimate_tuning :
+     Stft.Config.t
+  -> ?resolution:float
+  -> ?bins_per_octave:int
+  -> ?fmin:float
+  -> ?fmax:float
+  -> ?threshold:float
+  -> ?reference:piptrack_reference
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> float
+(** [estimate_tuning c ~sample_rate x] is the tuning of the audio [x] as
+    [librosa.estimate_tuning] estimates it, in fractions of a step of the
+    [bins_per_octave]-tone ladder through A440, in [\[-0.5, 0.5)]:
+    {!piptrack} over the magnitude spectrogram of [x] on the analysis
+    geometry [c], then {!pitch_tuning} over the detected pitches whose
+    magnitude reaches the median magnitude of all the detections — the
+    louder half, numpy's median halving the two middle values of an even
+    count. A signal with no detection has tuning [0.]. The result is the
+    [tuning] that {!Chroma.Config.create} and {!Cqt.Config.create} take when
+    [bins_per_octave] is the configuration's own — its [n_chroma] for a
+    chroma filterbank.
+
+    [Stft.Config.create ~fft_size:2048 ~pad:(`Constant 0.) ()] is librosa's
+    default analysis, the one its constant-Q transforms run when their
+    [tuning] is [None] — with [~bins_per_octave] set to the transform's, and
+    to [36] for [librosa.feature.chroma_cqt]. [resolution] and
+    [bins_per_octave] are {!pitch_tuning}'s, and [fmin], [fmax], [threshold]
+    and [reference] {!piptrack}'s, with the same defaults; the FFT size is
+    that of [c].
+
+    A whole-signal reduction, offered without a stage: the median spans every
+    frame, and the mode of a histogram does not decompose over chunks.
+    Leading axes do not broadcast: every channel and clip of [x] pools into
+    the one estimate, as in librosa, so a batch of clips takes one call per
+    clip. The analysis runs in double precision whatever the dtype of [x] —
+    the audio is widened, exactly, before the transform — so a float32 clip
+    has the estimate of the float64 clip of the same samples, where librosa
+    analyses it in single precision; and the detections are never rounded
+    to the dtype. Cost: the transform, one pass over its frames, and a sort
+    of the detections; only the detections are kept, never a
+    spectrogram-sized result.
+
+    Every step of the estimate is a discrete decision — the thresholds, the
+    local maxima, the median and the bin of each residual — so an input
+    within rounding of a decision can be estimated a whole [resolution] away
+    from the reference's estimate; the analysis of a pure tone also carries
+    the interpolation bias {!piptrack} documents, a few hundredths of a step.
+
+    Raises [Invalid_argument] as {!piptrack} and {!pitch_tuning} do on
+    their parameters, or if [x] has rank zero. *)
+
+val estimate_tuning_of_spectrogram :
+     ?resolution:float
+  -> ?bins_per_octave:int
+  -> ?fmin:float
+  -> ?fmax:float
+  -> ?threshold:float
+  -> ?reference:piptrack_reference
+  -> ?fft_size:int
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> float
+(** [estimate_tuning_of_spectrogram ~sample_rate s] is {!estimate_tuning}
+    over an already-computed magnitude spectrogram [s] —
+    {!Stft.power_spectrum}[ ~power:1.] output, or any non-negative
+    [[...; bins; frames]] tensor — librosa's [S=] mode: {!piptrack} with its
+    [fft_size] rule, then the median selection and {!pitch_tuning}. For
+    float64 audio [x],
+    [estimate_tuning_of_spectrogram ~fft_size:(Stft.Config.fft_size c)
+    ~sample_rate (Stft.power_spectrum ~power:1. c x)] is
+    [estimate_tuning c ~sample_rate x].
+
+    [librosa.feature.chroma_stft] estimates its tuning this way when its
+    [tuning] is [None]: over the {e power} spectrogram it projects, with
+    [~bins_per_octave] set to its [n_chroma] and [fft_size] left to the bin
+    count. The magnitudes are read in double precision whatever their dtype;
+    the pooling over leading axes and the whole-signal reduction are
+    {!estimate_tuning}'s.
+
+    Raises [Invalid_argument] as {!piptrack} and {!pitch_tuning} do. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each
