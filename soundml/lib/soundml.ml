@@ -249,6 +249,20 @@ let onset_strength = Onset.onset_strength
 
 let onset_strength_stage = Onset.stage
 
+(* Onset detection: flat delegations to the private [Onset] module. *)
+
+type peak_selection = Onset.selection
+
+let peak_pick = Onset.peak_pick
+
+let peak_pick_stage = Onset.peak_pick_stage
+
+let onset_detect = Onset.onset_detect
+
+let onset_detect_of_envelope = Onset.onset_detect_of_envelope
+
+let onset_backtrack = Onset.onset_backtrack
+
 (* Harmonic/percussive separation: flat delegations to the private [Hpss]
    module. *)
 
