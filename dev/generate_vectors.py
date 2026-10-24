@@ -79,6 +79,7 @@ SUITE_DIRECTORIES = {
     "onset_detect": "soundml/test/onset_detect/vectors",
     "rhythm": "soundml/test/rhythm/vectors",
     "tonal": "soundml/test/tonal/vectors",
+    "analysis": "soundml/test/analysis/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -7115,6 +7116,370 @@ class TonalVectorGenerator:
         write_suite(self.SUITE, "cens_audio", self.cens_audio_cases())
         write_suite(self.SUITE, "tonnetz_chroma", self.tonnetz_chroma_cases())
         write_suite(self.SUITE, "tonnetz_audio", self.tonnetz_audio_cases())
+class AnalysisVectorGenerator:
+    """Golden vectors for Soundml.autocorrelate, Soundml.lpc and the
+    Soundml.poly_features family: librosa.autocorrelate, librosa.lpc and
+    librosa.feature.poly_features, one file per function, plus inputs.json.
+
+    inputs.json holds the signals OCaml cannot rebuild bit for bit (each
+    "case" is one signal, its samples in "values"): sinusoids from np.sin and
+    autoregressive processes from scipy.signal.lfilter([1], a, drive) over an
+    LCG drive under their own seed offset, the first 200 samples dropped as
+    burn-in. Every other input is the 31-bit LCG of the stft suite under this
+    suite's seed, reshaped in C order, rebuilt exactly on the OCaml side.
+
+    autocorrelate: noise at lengths whose padded transform size takes each
+    radix (7 -> 15, 257 -> 540, 1000 -> 2000, 1009 -> 2025 where 2n - 1 =
+    2017 is prime, 4097 -> 8640), one to three samples, max_size below, at
+    and above the length, a 440 Hz tone at 8 kHz alone and under noise, and a
+    batched [2; 3; 300] input.
+
+    lpc: AR(2), AR(4), AR(5) and AR(8) processes with known coefficients (a
+    resonant AR(2) with poles at radius 0.95, Percival and Walden's AR(4),
+    librosa's own test AR(5), an AR(8) of four fixed pole pairs) fitted at
+    their order and above, up to order 32, a tone under weak noise, a
+    [2; 3; 512] bank of different AR(2) processes, white noise, the shortest
+    signal an order accepts without the reference reading past its buffers
+    (order + 1 samples), zeros and ones. No case fits a noiseless sinusoid at
+    an excessive order: there the recursive denominator collapses and the
+    reference's own rounding decides the output. Every case keeps
+    order <= n - 1.
+
+    poly_features: |LCG| spectrograms at orders 0 to 3 (and 5), on FFT grids
+    of 3 to 8939 bins (1089 and 8939 not of the form 2^k + 1), flat
+    spectrograms of one level, signed (dB-like) values, a tonal spectrogram
+    of exact peaks over a weak floor, frames spread over twelve decades, a
+    batched [2; 3; 65; 5] input, custom freq grids passed as freq (the exact
+    triangular grid of the spectral suite, and a grid of three distinct
+    frequencies that leaves a cubic rank-deficient), an exactly determined
+    4-bin and an underdetermined 3-bin spectrogram; and end to end from LCG
+    audio (center=True, pad_mode="constant" passed explicitly) at even and
+    odd FFT sizes, librosa's default geometry and a stereo signal. Each case
+    also carries "err_scale" = |P| @ |S|, P the pseudo-inverse of
+    numpy.polyfit's column-scaled Vandermonde matrix with the scale undone:
+    the size of the terms each coefficient sums, against which its rounding
+    is measured. Rank decisions are asserted to sit at least a factor of 10
+    away from polyfit's rcond threshold, so no rounding can move them.
+
+    float32 cases quantize the input to float32 and compute the reference in
+    float64.
+    """
+
+    SUITE = "analysis"
+
+    SEED = 20261103
+
+    BURN_IN = 200
+
+    # (signal key, AR denominator, length, drive seed offset)
+    AR_SIGNALS = [
+        ("ar2_resonant", [1.0, -1.6, 0.9], 1024, 1),
+        ("ar4_percival_walden", [1.0, -2.7607, 3.8106, -2.6535, 0.9238], 1024, 2),
+        ("ar5_librosa", [1.0, 0.5, 0.4, 0.3, 0.2, 0.1], 1000, 3),
+        ("ar2_short", [1.0, -1.6, 0.9], 64, 6),
+    ]
+
+    # the AR(8): (pole radius, angle / pi) for each conjugate pair
+    AR8_POLES = [(0.97, 0.15), (0.9, 0.35), (0.85, 0.6), (0.8, 0.85)]
+
+    # one AR(2) per channel of the [2; 3; 512] bank: (pole radius, angle)
+    AR_BANK = [(0.9, 0.3), (0.95, 0.8), (0.7, 1.5), (0.99, 0.1), (0.5, 2.5),
+               (0.85, 2.0)]
+
+    def lcg(self, n, offset=0):
+        return StftVectorGenerator.lcg_signal(n, seed=self.SEED + offset)
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    def ar(self, a, n, offset):
+        drive = self.lcg(n + self.BURN_IN, offset)
+        return scipy.signal.lfilter([1.0], a, drive)[self.BURN_IN:]
+
+    def signals(self):
+        t8k = np.arange(2048) / 8000.0
+        tone = np.sin(2.0 * np.pi * 440.0 * t8k)
+        signals = {
+            "tone_8k": tone,
+            "tone_noise_8k": 0.5 * tone[:1500] + 0.1 * self.lcg(1500, 4),
+            "tone_weak_noise_8k": tone + 1e-3 * self.lcg(2048, 5),
+        }
+        for key, a, n, offset in self.AR_SIGNALS:
+            signals[key] = self.ar(a, n, offset)
+        a8 = np.array([1.0])
+        for radius, angle in self.AR8_POLES:
+            a8 = np.convolve(a8, [1.0, -2.0 * radius * np.cos(np.pi * angle),
+                                  radius * radius])
+        signals["ar8"] = self.ar(a8, 4096, 7)
+        bank = []
+        for c, (radius, angle) in enumerate(self.AR_BANK):
+            a = [1.0, -2.0 * radius * np.cos(angle), radius * radius]
+            bank.append(self.ar(a, 512, 10 + c))
+        signals["ar2_bank"] = np.stack(bank).reshape(2, 3, 512)
+        for key, y in signals.items():
+            assert np.isfinite(y).all(), key
+        return signals
+
+    def input_of(self, source, signals):
+        if isinstance(source, str):
+            return signals[source], {"signal": source}
+        n = int(np.prod(source))
+        return self.lcg(n).reshape(source), {"input_shape": source}
+
+    # -- autocorrelate ------------------------------------------------------
+
+    # (case key, input: shape list for the LCG or a signal key, max_size,
+    # dtypes)
+    AUTOCORRELATE = [
+        ("noise_n1", [1], None, ["float64"]),
+        ("noise_n2", [2], None, ["float64"]),
+        ("noise_n3_max2", [3], 2, ["float64"]),
+        ("noise_n7", [7], None, ["float64"]),
+        ("noise_n100_max150", [100], 150, ["float64"]),
+        ("noise_n257_max64", [257], 64, ["float64"]),
+        ("noise_n1000", [1000], None, ["float64", "float32"]),
+        ("noise_n1009_max100", [1009], 100, ["float64"]),
+        ("noise_n4097_max10", [4097], 10, ["float64"]),
+        ("tone_n2048_max200", "tone_8k", 200, ["float64", "float32"]),
+        ("tone_noise_n1500_max300", "tone_noise_8k", 300, ["float64"]),
+        ("batched_2x3x300_max50", [2, 3, 300], 50, ["float64", "float32"]),
+    ]
+
+    def autocorrelate_cases(self, signals):
+        cases = []
+        for key, source, max_size, dtypes in self.AUTOCORRELATE:
+            base, params = self.input_of(source, signals)
+            for dtype in dtypes:
+                y = self.quantize(base, dtype)
+                expected = librosa.autocorrelate(y, max_size=max_size)
+                assert expected.dtype == np.float64
+                cases.append({"name": f"{key}_{dtype}",
+                              "params": {**params, "max_size": max_size,
+                                         "dtype": dtype},
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    # -- lpc ----------------------------------------------------------------
+
+    # (case key, input: shape list for the LCG, a signal key, or
+    # ("zeros" | "ones", n), order, dtypes)
+    LPC = [
+        ("ar2_resonant_o2", "ar2_resonant", 2, ["float64", "float32"]),
+        ("ar2_resonant_o4", "ar2_resonant", 4, ["float64"]),
+        ("ar2_resonant_o8", "ar2_resonant", 8, ["float64"]),
+        ("ar2_short_o8", "ar2_short", 8, ["float64"]),
+        ("ar4_percival_walden_o4", "ar4_percival_walden", 4,
+         ["float64", "float32"]),
+        ("ar4_percival_walden_o6", "ar4_percival_walden", 6, ["float64"]),
+        ("ar4_percival_walden_o12", "ar4_percival_walden", 12, ["float64"]),
+        ("ar5_librosa_o5", "ar5_librosa", 5, ["float64", "float32"]),
+        ("ar5_librosa_o16", "ar5_librosa", 16, ["float64"]),
+        ("ar8_o8", "ar8", 8, ["float64", "float32"]),
+        ("ar8_o32", "ar8", 32, ["float64"]),
+        ("tone_weak_noise_o2", "tone_weak_noise_8k", 2, ["float64"]),
+        ("tone_weak_noise_o4", "tone_weak_noise_8k", 4, ["float64"]),
+        ("tone_noise_o12", "tone_noise_8k", 12, ["float64"]),
+        ("ar2_bank_o6", "ar2_bank", 6, ["float64", "float32"]),
+        ("white_noise_n500_o10", [500], 10, ["float64"]),
+        ("minimal_length_n6_o5", [6], 5, ["float64"]),
+        ("zeros_n64_o4", ("zeros", 64), 4, ["float64"]),
+        ("ones_n32_o4", ("ones", 32), 4, ["float64"]),
+    ]
+
+    def lpc_cases(self, signals):
+        cases = []
+        for key, source, order, dtypes in self.LPC:
+            if isinstance(source, tuple):
+                kind, n = source
+                base = np.zeros(n) if kind == "zeros" else np.ones(n)
+                params = {"constant": kind, "input_shape": [n]}
+            else:
+                base, params = self.input_of(source, signals)
+            assert order <= base.shape[-1] - 1, key
+            for dtype in dtypes:
+                y = self.quantize(base, dtype)
+                expected = librosa.lpc(y, order=order)
+                assert expected.dtype == np.float64
+                assert np.isfinite(expected).all(), key
+                cases.append({"name": f"{key}_{dtype}",
+                              "params": {**params, "order": order,
+                                         "dtype": dtype},
+                              "shape": list(expected.shape),
+                              "values": expected.ravel().tolist()})
+        return cases
+
+    # -- poly_features ------------------------------------------------------
+
+    TONAL_PEAKS = [[5, 3.0], [17, 12.0], [40, 1.0], [41, 0.5], [100, 7.0]]
+
+    WIDE_SCALES = [1e-6, 1e-4, 1e-2, 1.0, 1e2, 1e4, 1e6]
+
+    # every bin of a "flat" spectrogram
+    FLAT_LEVEL = 0.1
+
+    # three distinct frequencies, eight bins each: rank three, one short of
+    # a cubic
+    REPEATED_FREQS = [100.0] * 8 + [250.0] * 8 + [400.0] * 8
+
+    # (case key, kind, input shape [... bins; frames], sample rate, order,
+    # freq grid ("fft", "triangular" or "repeated"), dtypes)
+    POLY_SPECTROGRAMS = [
+        ("lcg_fft512_o0", "abs", [257, 6], 22050, 0, "fft", ["float64"]),
+        ("lcg_fft512_o1", "abs", [257, 6], 22050, 1, "fft",
+         ["float64", "float32"]),
+        ("lcg_fft512_o2", "abs", [257, 6], 22050, 2, "fft", ["float64"]),
+        ("lcg_fft512_o3", "abs", [257, 6], 22050, 3, "fft",
+         ["float64", "float32"]),
+        ("lcg_fft512_o5", "abs", [257, 6], 22050, 5, "fft", ["float64"]),
+        ("lcg_fft2048_o3", "abs", [1025, 4], 22050, 3, "fft", ["float64"]),
+        ("lcg_fft1024_o0", "abs", [513, 4], 22050, 0, "fft", ["float64"]),
+        ("lcg_fft1024_o1", "abs", [513, 4], 22050, 1, "fft", ["float64"]),
+        ("lcg_fft2176_o0", "abs", [1089, 4], 22050, 0, "fft", ["float64"]),
+        ("lcg_fft2176_o1", "abs", [1089, 4], 22050, 1, "fft", ["float64"]),
+        ("lcg_fft4096_o0", "abs", [2049, 4], 44100, 0, "fft",
+         ["float64", "float32"]),
+        ("lcg_fft4096_o1", "abs", [2049, 4], 44100, 1, "fft",
+         ["float64", "float32"]),
+        ("lcg_fft8192_o3", "abs", [4097, 3], 44100, 3, "fft", ["float64"]),
+        ("lcg_fft17876_o0", "abs", [8939, 2], 22050, 0, "fft", ["float64"]),
+        ("flat_fft4096_o0", "flat", [2049, 2], 22050, 0, "fft", ["float64"]),
+        ("flat_fft4096_o1", "flat", [2049, 2], 22050, 1, "fft", ["float64"]),
+        ("lcg_fft128_sr16k_o2", "abs", [65, 12], 16000, 2, "fft", ["float64"]),
+        ("signed_o2", "signed", [129, 5], 22050, 2, "fft", ["float64"]),
+        ("tonal_o3", "tonal", [129, 8], 16000, 3, "fft",
+         ["float64", "float32"]),
+        ("wide_dynamic_o2", "wide", [65, 7], 22050, 2, "fft", ["float64"]),
+        ("batched_o2", "abs", [2, 3, 65, 5], 8000, 2, "fft",
+         ["float64", "float32"]),
+        ("triangular_o1", "abs", [40, 4], 22050, 1, "triangular", ["float64"]),
+        ("triangular_o3", "abs", [40, 4], 22050, 3, "triangular", ["float64"]),
+        ("repeated_freqs_o3", "abs", [24, 3], 22050, 3, "repeated", ["float64"]),
+        ("small_fft16_o3", "abs", [9, 3], 22050, 3, "fft", ["float64"]),
+        ("exactly_determined_o3", "abs", [4, 3], 22050, 3, "fft", ["float64"]),
+        ("underdetermined_o3", "abs", [3, 2], 22050, 3, "fft", ["float64"]),
+    ]
+
+    # (case key, input shape, fft_size, hop, sample rate, order, dtypes)
+    POLY_AUDIO = [
+        ("audio_fft512_hop128_o1", [4000], 512, 128, 22050, 1,
+         ["float64", "float32"]),
+        ("audio_fft512_hop128_o3", [4000], 512, 128, 22050, 3,
+         ["float64", "float32"]),
+        ("audio_fft255_hop64_o1", [3000], 255, 64, 22050, 1, ["float64"]),
+        ("audio_fft127_hop32_o2", [400], 127, 32, 22050, 2, ["float64"]),
+        ("audio_fft2048_hop512_default", [12000], 2048, 512, 22050, 1,
+         ["float64"]),
+        ("audio_stereo_fft256_hop64_o2", [2, 3000], 256, 64, 16000, 2,
+         ["float64"]),
+    ]
+
+    def spectrogram(self, kind, shape):
+        n = int(np.prod(shape))
+        base = self.lcg(n).reshape(shape)
+        if kind == "abs":
+            return np.abs(base)
+        if kind == "signed":
+            return 40.0 * base
+        if kind == "tonal":
+            s = 1e-3 * np.abs(base)
+            for k, value in self.TONAL_PEAKS:
+                s[..., k, :] = s[..., k, :] + value
+            return s
+        if kind == "wide":
+            return np.abs(base) * np.array(self.WIDE_SCALES)
+        if kind == "flat":
+            return np.full(shape, self.FLAT_LEVEL)
+        raise ValueError(kind)
+
+    @staticmethod
+    def error_scale(freq, order, S):
+        """|P| @ |S| for P polyfit's least-squares map, asserting that every
+        singular value of the column-scaled Vandermonde matrix sits at least
+        a factor of 10 from polyfit's rcond threshold."""
+        lhs = np.vander(freq, order + 1)
+        scale = np.sqrt((lhs * lhs).sum(axis=0))
+        rcond = len(freq) * np.finfo(np.float64).eps
+        sv = np.linalg.svd(lhs / scale, compute_uv=False)
+        ratio = sv / sv.max()
+        assert np.all((ratio > 10 * rcond) | (ratio < rcond / 10)), ratio
+        P = np.linalg.pinv(lhs / scale, rtol=rcond) / scale[:, None]
+        return np.abs(P) @ np.abs(S)
+
+    def poly_case(self, name, params, freq, order, S, compute):
+        with warnings.catch_warnings():
+            # rank-deficient fits warn (RankWarning); their minimum-norm
+            # solution is the reference
+            warnings.simplefilter("ignore", np.exceptions.RankWarning)
+            expected = compute()
+        assert expected.dtype == np.float64
+        assert np.isfinite(expected).all(), name
+        err_scale = self.error_scale(freq, order, S)
+        assert err_scale.shape == expected.shape, name
+        return {"name": name,
+                "params": {**params, "err_scale": err_scale.ravel().tolist()},
+                "shape": list(expected.shape),
+                "values": expected.ravel().tolist()}
+
+    def poly_cases(self):
+        cases = []
+        for key, kind, shape, sr, order, grid, dtypes in self.POLY_SPECTROGRAMS:
+            base = self.spectrogram(kind, shape)
+            bins = shape[-2]
+            if grid == "triangular":
+                freq = SpectralFeaturesVectorGenerator.triangular_freqs(bins)
+            elif grid == "repeated":
+                assert len(self.REPEATED_FREQS) == bins
+                freq = np.array(self.REPEATED_FREQS)
+            else:
+                freq = None
+            for dtype in dtypes:
+                S = self.quantize(base, dtype)
+                params = {"source": "spectrogram", "kind": kind,
+                          "input_shape": shape, "sample_rate": sr,
+                          "order": order, "dtype": dtype}
+                if freq is not None:
+                    params["freqs"] = freq.tolist()
+                if kind == "tonal":
+                    params["peaks"] = self.TONAL_PEAKS
+                if kind == "wide":
+                    params["frame_scales"] = self.WIDE_SCALES
+                if kind == "flat":
+                    params["level"] = self.FLAT_LEVEL
+                grid_freq = (freq if freq is not None else
+                             librosa.fft_frequencies(sr=sr, n_fft=2 * (bins - 1)))
+                cases.append(self.poly_case(
+                    f"{key}_{dtype}", params, grid_freq, order, S,
+                    lambda S=S, sr=sr, order=order, freq=freq:
+                        librosa.feature.poly_features(S=S, sr=sr, order=order,
+                                                      freq=freq)))
+        for key, shape, n_fft, hop, sr, order, dtypes in self.POLY_AUDIO:
+            base = self.lcg(int(np.prod(shape))).reshape(shape)
+            stft = {"n_fft": n_fft, "hop_length": hop, "window": "hann",
+                    "center": True, "pad_mode": "constant"}
+            for dtype in dtypes:
+                y = self.quantize(base, dtype)
+                S = np.abs(librosa.stft(y, **stft))
+                params = {"source": "audio", "input_shape": shape,
+                          "fft_size": n_fft, "hop": hop, "sample_rate": sr,
+                          "order": order, "dtype": dtype}
+                cases.append(self.poly_case(
+                    f"{key}_{dtype}", params,
+                    librosa.fft_frequencies(sr=sr, n_fft=n_fft), order, S,
+                    lambda y=y, sr=sr, order=order, stft=stft:
+                        librosa.feature.poly_features(y=y, sr=sr, order=order,
+                                                      **stft)))
+        return cases
+
+    def generate(self):
+        signals = self.signals()
+        write_suite(self.SUITE, "inputs", [
+            {"name": key, "params": {}, "shape": list(y.shape),
+             "values": y.ravel().tolist()} for key, y in signals.items()])
+        write_suite(self.SUITE, "autocorrelate", self.autocorrelate_cases(signals))
+        write_suite(self.SUITE, "lpc", self.lpc_cases(signals))
+        write_suite(self.SUITE, "poly_features", self.poly_cases())
 
 
 GENERATORS = [
@@ -7142,6 +7507,7 @@ GENERATORS = [
     OnsetDetectVectorGenerator,
     RhythmVectorGenerator,
     TonalVectorGenerator,
+    AnalysisVectorGenerator,
 ]
 
 if __name__ == "__main__":

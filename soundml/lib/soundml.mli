@@ -1325,6 +1325,245 @@ val estimate_tuning_of_spectrogram :
 
     Raises [Invalid_argument] as {!piptrack} and {!pitch_tuning} do. *)
 
+(** {2:features_analysis Autocorrelation, linear prediction and polynomial
+    features}
+
+    Two whole-signal analyses along the last axis, {!autocorrelate} and
+    {!lpc}, offline only like {!Effects.trim}; and the per-frame
+    least-squares polynomial fit of a spectrogram, {!poly_features}, with its
+    {!Pipeline} stage. *)
+
+val autocorrelate : ?max_size:int -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [autocorrelate x] is the autocorrelation of every row of the last axis of
+    [x], as [librosa.autocorrelate] computes it, shaped [[...; m]] in the
+    dtype of [x]: lag [k] of a row of [n] samples is the unnormalised sum
+    [Σₜ x t * x (t + k)] over [t] in [\[0, n - k)], for [k] in [\[0, m)] with
+    [m = min max_size n] — lag [0] is the row's energy. [max_size] defaults
+    to [n], every lag, and a larger value keeps every lag too. Leading axes
+    broadcast, so a batch of signals is one call.
+
+    The lags are the inverse real FFT of the power spectrum of the row
+    zero-padded to the smallest [2^a 3^b 5^c] points at or above [2n - 1] —
+    the length scipy's [next_fast_len] gives the reference, long enough that
+    no lag wraps around (Wiener–Khinchin). The padding depends on [n] alone,
+    so a smaller [max_size] keeps exactly the first lags of the full result,
+    bit for bit; each row is transformed alone, so its lags are the same bits
+    alone or among others. The transforms run in double precision whatever
+    the dtype, and the lags round to the dtype of [x] once, at the boundary.
+    An FFT rounds relative to the whole row, not to each lag: every lag is
+    within a few ulps of lag [0], so a lag far smaller than lag [0] carries a
+    correspondingly larger relative error, here as in the reference. On
+    float64 input the two agree within [6e-16] times lag [0] on the test
+    signals.
+
+    Deviations from the reference: float32 input is transformed in double
+    precision, where librosa transforms it in single precision, within about
+    [2e-7] of lag [0] of these lags; an empty row gives [[...; 0]], where the
+    reference raises; [max_size < 1] raises, where the reference returns no
+    lags or garbage ones. Complex input and axes other than the last are not
+    offered.
+
+    Every lag reads the whole row, so there is no stage. Cost: two real FFTs
+    of about [2n] points per row, through complex128 spectra and a float64
+    result of that length — some 50 bytes per input sample at the peak.
+
+    Raises [Invalid_argument] if [x] has rank zero or [max_size < 1]. *)
+
+val lpc : order:int -> (float, 'a) Nx.t -> (float, 'a) Nx.t
+(** [lpc ~order x] is the linear-prediction coefficients of every row of the
+    last axis of [x] by Burg's method, as [librosa.lpc] computes them, shaped
+    [[...; order + 1]] in the dtype of [x]: the prediction-error filter
+    [A(z) = a 0 + a 1 z^-1 + ... + a order z^-order] with [a 0 = 1], under
+    which [-(a 1 * x (t - 1) + ... + a order * x (t - order))] predicts
+    [x t] — the denominator of the all-pole model of [x]. Leading axes
+    broadcast, so a batch of signals is one call.
+
+    Burg's method (Burg 1975; Marple 1980, section III, which the reference
+    follows) picks each order's reflection coefficient to minimise the sum of
+    the forward and backward prediction-error energies, and extends the
+    filter by the Levinson recursion. The coefficient's denominator is summed
+    once, from the signal's energy, then updated order by order by Andersen's
+    recursion [(1 - k^2) den - b^2 - f^2] over the end samples of the updated
+    errors, with the smallest positive normal double added before each
+    division. The arithmetic is librosa's kernel, operation for operation —
+    every sum in index order, no fused multiply-add — in double precision: on
+    float64 input the coefficients are librosa's bits, on every platform.
+    Each row is computed alone, so a channel's coefficients are the same bits
+    alone or among others.
+
+    Ill-conditioned input: a signal of zeros gives [[1; 0; ...]] and a
+    constant one [[1; -1; 0; ...]], as in the reference. An order far beyond
+    what a signal determines — a noiseless sinusoid fitted at many times its
+    count of partials, say — lets the recursive denominator fall below the
+    true error energy, and a reflection coefficient can then exceed one in
+    magnitude: the filter is no longer minimum-phase and its values are
+    decided by rounding, exactly as the reference returns them while they
+    stay finite. Where a coefficient overflows instead — samples beyond about
+    [1e154], whose energy overflows double precision, or a divergence at such
+    an order — this function raises, where the reference returns NaN or
+    infinite coefficients (its documented [FloatingPointError] for
+    ill-conditioned input is no longer raised by librosa 1.0).
+
+    Further deviations: float32 input is widened exactly, analysed in double
+    precision and rounded once, where librosa runs its kernel in single
+    precision — on the same float32 samples, the coefficients are librosa's
+    float64 ones rounded to float32, which its float32 kernel misses by up to
+    [5e-4] on the autoregressive processes of the tests and by [3e-2] on a
+    tone under weak noise; the bias before each division is the double's for
+    every dtype, where the reference takes the input dtype's, a difference
+    visible only on float32 signals of energy below about [1e-30]. A row of
+    [n <= order] samples runs out of prediction errors after order [n - 1],
+    so its remaining coefficients are zeros: the reference reads past the end
+    of its buffers there (and returned zeros on every run measured).
+
+    Every coefficient reads the whole row, so there is no stage. Cost: about
+    [3 * n * order] multiply-adds per row of [n] samples.
+
+    Raises [Invalid_argument] if [order < 1], if [x] has rank zero, if a
+    sample is NaN or infinite, or if a coefficient overflows (above). *)
+
+val poly_features :
+     Stft.Config.t
+  -> ?order:int
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [poly_features c ~sample_rate x] is the coefficients of the least-squares
+    polynomial of degree [order] in frequency (Hz) fitted to every frame of
+    the magnitude spectrogram {!Stft.power_spectrum}[ ~power:1. c x], as
+    [librosa.feature.poly_features] computes them, shaped
+    [[...; order + 1; frames]] with the highest degree first: row [0] holds
+    the coefficient of [f ^ order] and row [order] the constant term.
+    [order] defaults to [1], the spectral slope and intercept; [0] fits each
+    frame's mean. The time axis is the last axis of [x]; leading axes
+    broadcast, so a batch of clips is one call. This face consumes raw audio;
+    {!poly_features_of_spectrogram} consumes an already-computed spectrogram.
+    librosa's defaults are the geometry
+    [Stft.Config.create ~fft_size:2048 ~hop:512 ~pad:(`Constant 0.) ()].
+
+    Bin [k] sits at [k * sample_rate / fft_size] on the grid of [c],
+    evaluated as one reciprocal and one multiply per bin as numpy's
+    [rfftfreq] does, so an odd [fft_size] fits on its own grid, as the
+    reference's audio path does.
+
+    The fit is [numpy.polyfit]'s problem, solved the same way: the
+    Vandermonde matrix of the bin frequencies, its columns scaled to unit
+    norm — which brings the condition number of an order-3 fit over an
+    audio-rate grid from about [1e12] to under [1e2] — and the least-squares
+    solution through the scaled matrix's singular value decomposition, where
+    singular values at or below [bins * eps] times the largest count as zero,
+    so a rank-deficient fit (fewer distinct frequencies than [order + 1])
+    yields numpy's minimum-norm solution. The decomposition is a one-sided
+    Jacobi SVD (Hestenes 1958; Demmel and Veselić 1992), computed once per
+    grid and order into the one matrix that maps a frame to its
+    coefficients, so each coefficient is a fixed-order sum over its own
+    frame's bins: the same bits alone or among others, computed in double
+    precision and rounded to the dtype of [x] once. Every sum over the bins,
+    the decomposition's and each frame's, is compensated (Neumaier 1974;
+    Ogita, Rump and Oishi 2005), so its rounding does not grow with the bin
+    count: an order-0 fit, the frame's mean, is within [3e-16] of the exact
+    mean at every bin count measured, up to 8939.
+
+    numpy solves through LAPACK's [gelsd] instead. On float64 input over FFT
+    grids of 3 to 8939 bins, each coefficient agrees within [4.1e-15] times
+    the sum of the magnitudes of the terms it adds, [Σⱼ |P i j| * |S j t|]
+    for the fit's map [P], at orders 0 to 3 — mostly the reference's own
+    rounding, as its order-0 fits miss the exact mean by up to [4e-15]. The
+    scaled problem's condition number grows about fivefold per order (3.7 at
+    order 1, 86 at order 3, [2.5e3] at order 5, [1.4e7] at order 10), and the
+    agreement degrades with it — [2e-14] of that scale at order 5 and
+    [1e-10] at order 10, over 257 to 2049 bins — so none is claimed beyond
+    order 12 or so; past order 17 the rank rule itself decides on
+    rounding-level ties. Over a custom grid
+    ({!poly_features_of_spectrogram}'s [freqs]) the agreement follows that
+    grid's conditioning instead: up to [3e-13] at order 3 on random grids of
+    four bins.
+
+    Deviations from the reference: the coefficients keep the dtype of [x],
+    where librosa returns float64; an infinite magnitude makes only its own
+    frame's coefficients non-finite, where the reference's solver spreads it
+    over every frame (a NaN stays within its frame in both).
+
+    Cost: the STFT, then [order + 1] compensated sums of [bins] products per
+    frame, some eight flops per bin and coefficient; the fit's matrix is
+    built once per call, in [O(bins * order^2)] flops per Jacobi sweep.
+
+    Raises [Invalid_argument] if [order < 0], if [sample_rate < 1], if [x]
+    has rank zero, or if the squares of a power of the bin frequencies up to
+    [order] overflow double precision — from order 33 at 96 kHz to order 43
+    at 8 kHz, order 38 at 22050 Hz, for an [fft_size] of 2048 — where the
+    reference's scaling overflows, zeroes the highest-degree coefficients
+    and returns a rank-reduced fit with a warning. *)
+
+val poly_features_of_spectrogram :
+     ?order:int
+  -> ?freqs:(float, 'a) Nx.t
+  -> sample_rate:int
+  -> (float, 'a) Nx.t
+  -> (float, 'a) Nx.t
+(** [poly_features_of_spectrogram ~sample_rate s] is {!poly_features} over an
+    already-computed spectrogram [s] — {!Stft.power_spectrum}[ ~power:1.]
+    output, or any real [[...; bins; frames]] tensor, decibels and other
+    signed values included — mapping [[...; bins; frames]] to
+    [[...; order + 1; frames]]: the reference's [S=] path. [order] and the
+    fit are those of {!poly_features}.
+
+    The bin frequencies default to the FFT grid the bin count implies — bin
+    [k] at [k * sample_rate / (2 * (bins - 1))], as for {!spectral_centroid}
+    and the reference's [S=] path — so applying this function to
+    [Stft.power_spectrum ~power:1. c x] is [poly_features c ~sample_rate x]
+    bit for bit when [fft_size] is even; for an odd one, pass the grid of [c]
+    as [freqs]. [freqs], a rank-one tensor of [bins] finite frequencies in
+    any order, repeats allowed, replaces that grid; when it is given,
+    [sample_rate] is validated but not otherwise consulted. It shares the
+    dtype of [s], so a float32 spectrogram fits over float32 frequencies,
+    where the reference also accepts a float64 grid; the fit widens them
+    exactly to double precision. The per-frame frequency {e matrix} of a
+    reassigned spectrogram is not supported. A spectrogram with no frames,
+    or a zero-size leading axis, maps to zeros of the result shape; one with
+    no bins raises.
+
+    Deviation from the reference on a float32 [freqs]: [numpy.polyfit] also
+    builds its matrix from those values in double precision, but takes its
+    rank threshold from the float32 epsilon — [bins] times [1.2e-7], about
+    [1.2e-4] over 1025 bins, instead of [2.3e-13] — so from order 6 or so
+    over a thousand bins it discards singular values that the double
+    threshold keeps and returns a rank-reduced fit, where this function
+    returns the full-rank one.
+
+    Raises [Invalid_argument] as {!poly_features} does on [order] and
+    [sample_rate], if [s] has rank below two or no bins, if [freqs] is
+    absent and [s] has a single bin (a one-bin spectrogram implies no FFT
+    grid; the reference divides by zero), if [freqs] is present and is not
+    rank-one with one finite frequency per bin, or if a power of the
+    frequencies up to [order] vanishes at every bin or its squares overflow
+    double precision, where the reference's scaling divides by zero or
+    overflows. *)
+
+val poly_features_stage :
+     Stft.Config.t
+  -> ?order:int
+  -> sample_rate:int
+  -> unit
+  -> ((float, 'a) Nx.t, (float, 'a) Nx.t, 'k) Pipeline.t
+(** [poly_features_stage c ~sample_rate ()] is {!poly_features} as a
+    memoryless pipeline stage: rate 1:1 in frames, latency zero and
+    format-preserving. It consumes {e magnitude}-spectrum chunks — compose
+    [Stft.power_stage ~power:1. c >> poly_features_stage c ~sample_rate ()]
+    for the streaming form of [poly_features c ~sample_rate], bit for bit at
+    every [fft_size] — mapping [[...; bins; frames]] to
+    [[...; order + 1; frames]]; an empty chunk maps to an empty chunk. The
+    fit is built on the grid of [c] when the stage is built, and every
+    partitioning of a spectrogram yields the same bits. For a custom grid,
+    wrap [poly_features_of_spectrogram ~freqs] in {!Pipeline.stateless}: it is
+    per-frame too, and refits its matrix on every chunk.
+
+    Raises [Invalid_argument] as {!poly_features} does on [order],
+    [sample_rate] and the powers of the bin frequencies, when the stage is
+    built. The stream {!Pipeline.Format} does not carry a bin count, so a
+    chunk whose bin axis is not [Stft.Config.bins c] long, or a chunk of
+    rank below two, is reported at that chunk, not at prepare time. *)
+
 (** {2:features_contrast Spectral contrast and onset strength}
 
     Octave-band spectral contrast and the spectral-flux onset envelope, each

@@ -185,6 +185,21 @@ Current suites:
   share to the nearest threshold, which the generator asserts to exceed the
   measured constant-Q share deviation many times over; the chords are
   quantised at an odd hop only, where neither side resamples.
+- `analysis` — `librosa.autocorrelate`, `librosa.lpc` and
+  `librosa.feature.poly_features`. Signals OCaml cannot rebuild bit for bit
+  (sinusoids, and autoregressive processes of known coefficients made by
+  `scipy.signal.lfilter` over an LCG drive) are stored in `inputs.json`;
+  everything else is the LCG under the suite's seed. Autocorrelation over
+  noise at lengths whose padded transform takes each radix, a tone alone and
+  under noise, `max_size` below, at and above the length, measured against
+  each row's lag 0; Burg's linear prediction bit for bit at orders up to 32,
+  every case kept at `order <= n - 1`, away from the reference's reads past
+  its buffers; polynomial fits at orders 0-3 (and 5) over magnitude
+  spectrograms on FFT grids of 3 to 8939 bins, flat, signed, tonal and
+  wide-range spectrograms, custom grids including a rank-deficient one, and
+  end to end from audio at even and odd FFT sizes, each coefficient measured
+  against the size of the terms it sums (`err_scale`, stored per case).
+  float32 cases quantize the input against a float64 reference.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which
