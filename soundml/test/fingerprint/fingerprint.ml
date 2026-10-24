@@ -1208,12 +1208,998 @@ let features (type a c) (tag, ctag) (dt : (float, a) Nx.dtype)
          >> Chroma.stage ~norm:`Inf chroma_c12 ) )
     x coarse
 
+(* {1 Since the rows above}
+
+   The features and stages that landed after the rows above were recorded,
+   appended in the order they landed so that every earlier line of the
+   expectation files stays as it is: their rows independent of the dtype, then
+   their rows and laws at each dtype, as above. *)
+
+(* {2 Images and laws of outputs that are not one tensor} *)
+
+(* A boolean output, as the integers 0 and 1 in its own shape. *)
+let bools (t : (bool, Nx.bool_elt) Nx.t) =
+  let values = Nx.to_array t in
+  let b = Bytes.create (8 * Array.length values) in
+  Array.iteri
+    (fun i v -> Bytes.set_int64_le b (8 * i) (if v then 1L else 0L))
+    values ;
+  {shape= Nx.shape t; words= Bytes.to_string b}
+
+(* Frame or sample indices, and sample intervals as their flattened bounds. *)
+let indices a = ints (Array.to_list a)
+
+let intervals a =
+  ints (List.concat_map (fun (start, stop) -> [start; stop]) (Array.to_list a))
+
+(* The images of a stream of pairs, joined component by component. *)
+let pair image l = [joined image (List.map fst l); joined image (List.map snd l)]
+
+(* The image of a stream of index arrays, joined end to end. *)
+let concatenated image l = [image (Array.concat l)]
+
+(* [law_by name ~join ~expected make x chunkings] is [law] for a stage whose
+   output is not one tensor: [join] maps the outputs of one run, in order, to
+   their images, and [expected] is the images a row printed. *)
+let law_by name ~join ~expected make x chunkings =
+  anchors := (name, digest expected) :: !anchors ;
+  let outputs = List.length expected in
+  List.iter
+    (fun c ->
+      let got = join (drive make c x) in
+      if List.length got <> outputs then begin
+        incr checks ;
+        failures :=
+          Printf.sprintf "%s, %s: %d outputs, expected %d" name (describe c)
+            (List.length got) outputs
+          :: !failures
+      end
+      else
+        List.iteri
+          (fun i (expected, got) ->
+            let what =
+              if outputs = 1 then describe c
+              else Printf.sprintf "%s, output %d" (describe c) i
+            in
+            check name what ~expected got )
+          (List.combine expected got) )
+    chunkings
+
+(* [cut length t] is [t] cut to its first [length] items along its last axis. *)
+let cut length t =
+  let rank = Nx.ndim t in
+  let len = Int.min length (Nx.dim (rank - 1) t) in
+  Nx.slice
+    (List.init rank (fun i -> if i = rank - 1 then Nx.R (0, len) else Nx.A))
+    t
+
+(* {2 Configurations} *)
+
+let q num den = {Pipeline.Rate.num; den}
+
+(* Butterworth designs, as transfer functions and as second-order sections, at
+   orders and cutoffs that take every band transform. *)
+let designs =
+  [ ("lowpass-1000 o4", 4, `Lowpass 1000.)
+  ; ("highpass-80 o2", 2, `Highpass 80.)
+  ; ("bandpass-300-3400 o3", 3, `Bandpass (300., 3400.))
+  ; ("bandstop-50-60 o2", 2, `Bandstop (50., 60.)) ]
+
+let sections =
+  [ ("lowpass-2000 o8", 8, `Lowpass 2000.)
+  ; ("bandpass-500-2000 o4", 4, `Bandpass (500., 2000.))
+  ; ("highpass-40 o5", 5, `Highpass 40.) ]
+
+let butter (_, order, band) = Filter.butter ~order ~sample_rate band
+
+let butter_sos (_, order, band) = Filter.butter_sos ~order ~sample_rate band
+
+let design s = List.find (fun (name, _, _) -> String.equal name s) designs
+
+let section s = List.find (fun (name, _, _) -> String.equal name s) sections
+
+(* A finite impulse response, and a transfer function to normalise by its
+   leading denominator coefficient. *)
+let fir =
+  ( Nx.create Nx.float64 [|5|] [|0.1; 0.2; 0.4; 0.2; 0.1|]
+  , Nx.create Nx.float64 [|1|] [|1.|] )
+
+let unnormalised =
+  ( Nx.create Nx.float64 [|2|] [|1.; 0.5|]
+  , Nx.create Nx.float64 [|3|] [|2.5; -1.; 0.3|] )
+
+let emphasis_state v = Nx.create Nx.float64 [|1|] [|v|]
+
+(* The excerpt the dearer features read, rows and laws alike, so that even the
+   one-sample partitions of their stages stay cheap: the 12288 samples (0.56 s)
+   from sample 16384 on, which hold the sawtooth, two of its clicks and the
+   inner silence. *)
+let excerpt_length = 12288
+
+let excerpt t = Nx.slice [Nx.A; Nx.R (16384, 16384 + excerpt_length)] t
+
+(* {2 Rows independent of the dtype} *)
+
+let grids_since () =
+  let latency p =
+    rate_ints (Pipeline.latency p) @ rate_ints (Pipeline.rate p)
+  in
+  (* Silence detection. *)
+  row "pipeline.latency effects.split_stage"
+    [ ints
+        (List.concat
+           [ latency
+               (Effects.split_stage ~top_db:20. ~frame_length:512 ~hop:128
+                  ~reference:(`Value 0.25) () )
+           ; latency
+               (Effects.split_stage ~top_db:35. ~frame_length:1023 ~hop:300
+                  ~reference:(`Value 0.1) () ) ] ) ] ;
+  (* Harmonic-percussive separation. *)
+  row "pipeline.latency hpss stages"
+    [ ints
+        (List.concat
+           [ latency
+               (hpss_of_spectrogram_stage ~kernel_size:(31, 31) ~power:2.
+                  ~margin:(1., 1.) () )
+           ; latency
+               (hpss_of_spectrogram_stage ~kernel_size:(16, 30)
+                  ~power:Float.infinity ~margin:(1., 2.) () )
+           ; latency
+               (hpss_masks_stage ~kernel_size:(31, 31) ~power:2.
+                  ~margin:(1.5, 1.5) () )
+           ; latency
+               (hpss_of_stft_stage ~kernel_size:(31, 31) ~power:2.
+                  ~margin:(1., 1.) () )
+           ; latency
+               Pipeline.(
+                 Stft.stage Nx.complex128 stft_hann
+                 >> map fst
+                      (hpss_of_stft_stage ~kernel_size:(31, 31) ~power:2.
+                         ~margin:(1., 1.) () )
+                 >> Stft.synthesis_stage Nx.float64 stft_hann ) ] ) ] ;
+  (* Time-scale and pitch modification. *)
+  row "pipeline.latency effects modification stages"
+    [ ints
+        (List.concat
+           [ latency
+               (Effects.phase_vocoder_stage ~phase:`Independent stft_hann
+                  ~rate:(q 3 2) )
+           ; latency
+               (Effects.phase_vocoder_stage ~phase:`Locked stft_hann
+                  ~rate:(q 3 4) )
+           ; latency
+               (Effects.time_stretch_stage ~phase:`Independent stft_hann
+                  ~rate:(q 5 4) )
+           ; latency
+               (Effects.time_stretch_stage ~phase:`Locked stft_hann
+                  ~rate:(q 4 5) )
+           ; latency
+               (Effects.time_stretch_stage ~phase:`Independent stft_odd
+                  ~rate:(q 1 1) )
+           ; latency
+               (Effects.pitch_shift_stage ~phase:`Locked ~quality:`High
+                  stft_hann
+                  ~ratio:(Effects.semitones ~bins_per_octave:12 3.) )
+           ; latency
+               (Effects.pitch_shift_stage ~phase:`Independent ~quality:`Fast
+                  stft_hann
+                  ~ratio:(Effects.semitones ~bins_per_octave:12 (-5.)) ) ] ) ] ;
+  (* Filtering. *)
+  List.iter
+    (fun ((name, _, _) as d) ->
+      let b, a = butter d in
+      row ("filter.butter " ^ name) [real b; real a] ;
+      row ("filter.lfilter_zi " ^ name) [real (Filter.lfilter_zi b a)] )
+    designs ;
+  List.iter
+    (fun ((name, _, _) as s) ->
+      let sos = butter_sos s in
+      row ("filter.butter_sos " ^ name) [real sos] ;
+      row ("filter.sosfilt_zi " ^ name) [real (Filter.sosfilt_zi sos)] )
+    sections ;
+  row "filter.lfilter_zi unnormalised"
+    [real (Filter.lfilter_zi (fst unnormalised) (snd unnormalised))] ;
+  row "pipeline.latency filter stages"
+    [ ints
+        (List.concat
+           [ (let b, a = butter (design "lowpass-1000 o4") in
+              latency (Filter.lfilter_stage b a) )
+           ; latency
+               (Filter.sosfilt_stage (butter_sos (section "lowpass-2000 o8")))
+           ; latency (Filter.preemphasis_stage ~coef:0.97 ())
+           ; latency
+               (Filter.preemphasis_stage ~coef:0.95 ~zi:(emphasis_state 0.1) ())
+           ; latency (Filter.deemphasis_stage ~coef:0.97 ())
+           ; latency
+               (Filter.deemphasis_stage ~coef:0.95 ~zi:(emphasis_state 0.1) ())
+           ] ) ] ;
+  (* Fundamental frequency, pitch tracking, onsets, rhythm. *)
+  row "pipeline.latency yin_stage"
+    [ ints
+        (List.concat
+           [ latency
+               (yin_stage ~frame_length:2048 ~hop:512 ~trough_threshold:0.1
+                  ~alignment:`Centered ~pad:(`Constant 0.) ~fmin:60. ~fmax:1000.
+                  ~sample_rate () )
+           ; latency
+               (yin_stage ~frame_length:1023 ~hop:300 ~trough_threshold:0.2
+                  ~alignment:`Left ~pad:`Edge ~fmin:80. ~fmax:2000. ~sample_rate
+                  () )
+           ; latency
+               (yin_stage ~frame_length:1500 ~hop:256 ~trough_threshold:0.15
+                  ~alignment:`Centered ~pad:`Reflect ~fmin:100. ~fmax:800.
+                  ~sample_rate () ) ] ) ] ;
+  row "pipeline.latency piptrack_stage"
+    [ ints
+        (latency
+           (piptrack_stage ~fmin:150. ~fmax:4000. ~threshold:0.1
+              ~reference:`Maximum ~fft_size:1024 ~sample_rate () ) ) ] ;
+  row "pipeline.latency peak_pick_stage"
+    [ ints
+        (List.concat
+           [ latency
+               (peak_pick_stage ~pre_max:3 ~post_max:1 ~pre_avg:10 ~post_avg:1
+                  ~delta:0.1 ~wait:3 )
+           ; latency
+               (peak_pick_stage ~pre_max:2 ~post_max:3 ~pre_avg:4 ~post_avg:6
+                  ~delta:0.05 ~wait:4 ) ] ) ] ;
+  row "pipeline.latency rhythm stages"
+    [ ints
+        (List.concat
+           [ latency
+               (tempogram_stage ~win_length:64 ~alignment:`Centered
+                  ~window:Window.Hann ~norm:`Inf () )
+           ; latency
+               (tempogram_stage ~win_length:33 ~alignment:`Left
+                  ~window:Window.Hamming ~norm:(`P 2.) () )
+           ; latency
+               (fourier_tempogram_stage Nx.complex128 ~win_length:64
+                  ~alignment:`Centered ~window:Window.Hann () )
+           ; latency
+               (fourier_tempogram_stage Nx.complex128 ~win_length:33
+                  ~alignment:`Left ~window:Window.Hamming () ) ] ) ] ;
+  (* Tonal features, analysis and inversion. *)
+  row "pipeline.latency tonal stages"
+    [ ints
+        (List.concat
+           [ latency
+               (chroma_cens_stage ~norm:(`P 2.) ~smoothing:(Some 41)
+                  ~smoothing_window:Window.Hann () )
+           ; latency
+               (chroma_cens_stage ~norm:`Inf ~smoothing:(Some 10)
+                  ~smoothing_window:Window.Hamming () )
+           ; latency
+               (chroma_cens_stage ~norm:(`P 1.) ~smoothing:None
+                  ~smoothing_window:Window.Hann () )
+           ; latency (tonnetz_stage ()) ] ) ] ;
+  row "pipeline.latency analysis and inverse stages"
+    [ ints
+        (List.concat
+           [ latency (poly_features_stage stft_hann ~order:1 ~sample_rate ())
+           ; latency
+               Pipeline.(
+                 Stft.power_stage ~power:1. stft_odd
+                 >> poly_features_stage stft_odd ~order:3 ~sample_rate () )
+           ; latency
+               (mfcc_to_mel_stage mel_slaney ~n_mfcc:13 ~lifter:22.
+                  ~reference:1. () )
+           ; latency (mel_to_stft_stage mel_slaney ~power:2. ()) ] ) ]
+
+(* {2 Rows and laws at one dtype}
+
+   As [features], at the real dtype [dt] and its complex counterpart [cdt]. Rows
+   on the excerpt end in [excerpt]. *)
+
+let features_since (type a c) (tag, ctag) (dt : (float, a) Nx.dtype)
+    (cdt : (Complex.t, c) Nx.dtype) (x : (float, a) Nx.t)
+    (noise : (float, a) Nx.t) =
+  let name s = s ^ " " ^ tag in
+  let r s images = row (name s) images in
+  let rc s images = row (s ^ " " ^ ctag) images in
+  let source = Pipeline.Format.audio dt ~sample_rate ~channels:2 in
+  let source1 = Pipeline.Format.audio dt ~sample_rate ~channels:1 in
+  let mono = Nx.slice [Nx.I 0; Nx.A] x in
+  let frame_law s expected p input =
+    law (name s) ~image:real ~expected (stream ~source p) input frames
+  in
+  let pair_law s ~image ~expected p input =
+    law_by (name s) ~join:(pair image)
+      ~expected:[image (fst expected); image (snd expected)]
+      (stream ~source p) input frames
+  in
+  let p2 = Stft.power_spectrum ~power:2. stft_hann x in
+  let m1 = Stft.power_spectrum ~power:1. stft_hann x in
+  let short = excerpt x in
+  let short_noise = excerpt noise in
+  let short_m1 = Stft.power_spectrum ~power:1. stft_hann short in
+  let short_z = Stft.transform cdt stft_hann short in
+  (* Silence detection streamed: against the offline split's row at its
+     configuration, and at an odd frame length on mono audio. *)
+  let split_law s ~top_db ~frame_length ~hop ~r:level y src chunkings =
+    law_by
+      (name ("effects.split_stage " ^ s))
+      ~join:(concatenated intervals)
+      ~expected:
+        [ intervals
+            (Effects.split ~top_db ~reference:(`Value level) ~frame_length ~hop
+               y ) ]
+      (stream ~source:src
+         (Effects.split_stage ~top_db ~frame_length ~hop
+            ~reference:(`Value level) () ) )
+      y chunkings
+  in
+  r "effects.split top-35 value-0.1 1023-300 mono"
+    [ intervals
+        (Effects.split ~top_db:35. ~reference:(`Value 0.1) ~frame_length:1023
+           ~hop:300 mono ) ] ;
+  split_law "top-20 value-0.25 512-128 stereo" ~top_db:20. ~frame_length:512
+    ~hop:128 ~r:0.25 x source audio ;
+  split_law "top-35 value-0.1 1023-300 mono" ~top_db:35. ~frame_length:1023
+    ~hop:300 ~r:0.1 mono source1 coarse ;
+  (* Harmonic-percussive separation streamed, each stage against its offline
+     face, and an even harmonic kernel under the hard mask. *)
+  List.iter
+    (fun (s, kernel_size, power, margin) ->
+      let separated =
+        hpss_of_spectrogram ~kernel_size ~power ~margin short_m1
+      in
+      r
+        (Printf.sprintf "hpss_of_spectrogram hann %s excerpt" s)
+        [real (fst separated); real (snd separated)] ;
+      pair_law
+        (Printf.sprintf "hpss_of_spectrogram_stage %s excerpt" s)
+        ~image:real ~expected:separated
+        (hpss_of_spectrogram_stage ~kernel_size ~power ~margin ())
+        short_m1 )
+    [ ("k31x31 p2 m1x1", (31, 31), 2., (1., 1.))
+    ; ("k16x30 pinf m1x2", (16, 30), Float.infinity, (1., 2.)) ] ;
+  let masks =
+    hpss_masks ~kernel_size:(31, 31) ~power:2. ~margin:(1.5, 1.5) short_m1
+  in
+  r "hpss_masks hann k31x31 p2 m1.5x1.5 excerpt"
+    [real (fst masks); real (snd masks)] ;
+  pair_law "hpss_masks_stage k31x31 p2 m1.5x1.5 excerpt" ~image:real
+    ~expected:masks
+    (hpss_masks_stage ~kernel_size:(31, 31) ~power:2. ~margin:(1.5, 1.5) ())
+    short_m1 ;
+  let components =
+    hpss_of_stft ~kernel_size:(31, 31) ~power:2. ~margin:(1., 1.) short_z
+  in
+  rc "hpss_of_stft hann k31x31 p2 m1x1 excerpt"
+    [complex (fst components); complex (snd components)] ;
+  pair_law "hpss_of_stft_stage k31x31 p2 m1x1 excerpt" ~image:complex
+    ~expected:components
+    (hpss_of_stft_stage ~kernel_size:(31, 31) ~power:2. ~margin:(1., 1.) ())
+    short_z ;
+  (* Time-scale and pitch modification streamed, each stage against its offline
+     face at the double its exact rate names. *)
+  List.iter
+    (fun (s, phase, rate, (num, den)) ->
+      let stretched = Effects.phase_vocoder ~phase stft_hann ~rate short_z in
+      rc
+        (Printf.sprintf "effects.phase_vocoder hann %s %g excerpt" s rate)
+        [complex stretched] ;
+      law
+        (name
+           (Printf.sprintf "effects.phase_vocoder_stage hann %s %d/%d excerpt" s
+              num den ) )
+        ~image:complex ~expected:stretched
+        (stream ~source
+           (Effects.phase_vocoder_stage ~phase stft_hann ~rate:(q num den)) )
+        short_z frames )
+    [ ("independent", `Independent, 1.5, (3, 2))
+    ; ("locked", `Locked, 0.75, (3, 4)) ] ;
+  List.iter
+    (fun (s, phase, rate, (num, den), chunkings) ->
+      let stretched = Effects.time_stretch ~phase stft_hann ~rate short in
+      r
+        (Printf.sprintf "effects.time_stretch hann %s %g excerpt" s rate)
+        [real stretched] ;
+      law
+        (name
+           (Printf.sprintf "effects.time_stretch_stage hann %s %d/%d excerpt" s
+              num den ) )
+        ~image:real ~expected:stretched
+        (stream ~source
+           (Effects.time_stretch_stage ~phase stft_hann ~rate:(q num den)) )
+        short chunkings )
+    [ ("independent", `Independent, 1.25, (5, 4), audio)
+    ; ("locked", `Locked, 0.8, (4, 5), coarse)
+    ; ("independent", `Independent, 1., (1, 1), coarse) ] ;
+  List.iter
+    (fun (s, phase, quality, semitones, chunkings) ->
+      let ratio = Effects.semitones ~bins_per_octave:12 semitones in
+      let shifted =
+        Effects.pitch_shift ~phase ~quality stft_hann ~ratio short
+      in
+      r
+        (Printf.sprintf "effects.pitch_shift hann %s %+g excerpt" s semitones)
+        [real shifted] ;
+      law
+        (name
+           (Printf.sprintf "effects.pitch_shift_stage hann %s %+g excerpt" s
+              semitones ) )
+        ~image:real ~expected:shifted
+        (stream ~source
+           (Effects.pitch_shift_stage ~phase ~quality stft_hann ~ratio) )
+        short chunkings )
+    [ ("locked high", `Locked, `High, 3., audio)
+    ; ("independent fast", `Independent, `Fast, -5., coarse) ] ;
+  (* The synthesis drained to an explicit length, against stft.invert at that
+     length: short of the default length, past it into the samples the last
+     frame reaches beyond the trailing trim and the zeros after them, and past
+     it on an uncentered geometry, which trims nothing. *)
+  List.iter
+    (fun (s, c, length) ->
+      let z = Stft.transform cdt c short in
+      let inverse = Stft.invert dt c ~length z in
+      r
+        (Printf.sprintf "stft.invert %s length-%d excerpt" s length)
+        [real inverse] ;
+      let synthesis max_block =
+        let k = Stft.Synthesis.prepare dt c cdt ~channels:2 ~max_block in
+        { push= Stft.Synthesis.step k
+        ; flush= (fun () -> Option.to_list (Stft.Synthesis.flush ~length k))
+        ; reset= (fun () -> Stft.Synthesis.reset k) }
+      in
+      law
+        (name
+           (Printf.sprintf "stft.synthesis %s flush length-%d excerpt" s length) )
+        ~image:(fun t -> real (cut length t))
+        ~expected:inverse synthesis z frames )
+    [ ("hann", stft_hann, 8000)
+    ; ("hann", stft_hann, 13000)
+    ; ("odd", stft_odd, 12500) ] ;
+  (* Silence in a batch of clips, each against its own maximum: the second clip
+     is the first reversed, 36 dB down, below the threshold against the first
+     clip's maximum and above it against its own, where it sounds earlier. *)
+  let batch = Nx.stack ~axis:0 [x; Nx.mul_s (Nx.flip ~axes:[1] x) 0x1p-6] in
+  let trimmed, (start, stop) =
+    Effects.trim ~top_db:30. ~reference:`Maximum ~frame_length:1024 ~hop:256
+      batch
+  in
+  r "effects.trim top-30 maximum 1024-256 batch"
+    [real trimmed; ints [start; stop]] ;
+  identity
+    (name "effects.trim = slice top-30 maximum 1024-256 batch")
+    ~image:real
+    (Nx.slice [Nx.A; Nx.A; Nx.R (start, stop)] batch)
+    trimmed ;
+  r "effects.split top-30 maximum 1024-256 batch"
+    [ intervals
+        (Effects.split ~top_db:30. ~reference:`Maximum ~frame_length:1024
+           ~hop:256 batch ) ] ;
+  (* Synthetic signals and the mu-law. *)
+  r "tone 440 length-4096 phase-0.3"
+    [real (tone dt ~length:4096 ~phase:0.3 ~sample_rate 440.)] ;
+  r "tone -3000.25 duration-0.3 phase--pi/2"
+    [ real
+        (tone dt ~duration:0.3 ~phase:(-.Float.pi /. 2.) ~sample_rate (-3000.25))
+    ] ;
+  r "chirp linear 100-8000 length-8192 phase-0"
+    [ real
+        (chirp dt ~length:8192 ~linear:true ~phase:0. ~sample_rate ~fmin:100.
+           ~fmax:8000. () ) ] ;
+  r "chirp exponential 55-7040 duration-0.5 phase-0.7"
+    [ real
+        (chirp dt ~duration:0.5 ~linear:false ~phase:0.7 ~sample_rate ~fmin:55.
+           ~fmax:7040. () ) ] ;
+  r "chirp exponential 9000-200 length-5000 phase--pi/2"
+    [ real
+        (chirp dt ~length:5000 ~linear:false ~phase:(-.Float.pi /. 2.)
+           ~sample_rate ~fmin:9000. ~fmax:200. () ) ] ;
+  r "clicks times hop-512 f1000 d0.1 length-n"
+    [ real
+        (clicks dt ~hop:512 ~click_frequency:1000. ~click_duration:0.1 ~length:n
+           ~sample_rate
+           (`Times [|0.; 0.25; 0.25; 1.; 1.99|]) ) ] ;
+  r "clicks frames hop-256 f2500 d0.03"
+    [ real
+        (clicks dt ~hop:256 ~click_frequency:2500. ~click_duration:0.03
+           ~sample_rate
+           (`Frames [|40; 0; 3; 170; 41|]) ) ] ;
+  r "clicks samples custom-stereo length-30000"
+    [ real
+        (clicks dt ~hop:512
+           ~click:(Nx.slice [Nx.A; Nx.R (5512, 5576)] x)
+           ~click_frequency:1000. ~click_duration:0.1 ~length:30000 ~sample_rate
+           (`Samples [|100; 50; 22050; 29990; 31000|]) ) ] ;
+  let quiet = Nx.mul_s short 0.5 in
+  List.iter
+    (fun (s, mu, quantize, chunkings) ->
+      let compressed = mu_compress ~mu ~quantize quiet in
+      let expanded = mu_expand ~mu ~quantize compressed in
+      r (Printf.sprintf "mu_compress %s excerpt" s) [real compressed] ;
+      r (Printf.sprintf "mu_expand %s excerpt" s) [real expanded] ;
+      law
+        (name (Printf.sprintf "mu_compress_stage %s excerpt" s))
+        ~image:real ~expected:compressed
+        (stream ~source (mu_compress_stage ~mu ~quantize ()))
+        quiet chunkings ;
+      law
+        (name (Printf.sprintf "mu_expand_stage %s excerpt" s))
+        ~image:real ~expected:expanded
+        (stream ~source (mu_expand_stage ~mu ~quantize ()))
+        compressed chunkings )
+    [ ("mu-255 quantize", 255., true, audio)
+    ; ("mu-255 continuous", 255., false, coarse)
+    ; ("mu-15 quantize", 15., true, coarse) ] ;
+  (* Filtering, on the excerpt. *)
+  let lp_b, lp_a = butter (design "lowpass-1000 o4") in
+  let hp_b, hp_a = butter (design "highpass-80 o2") in
+  let bp_b, bp_a = butter (design "bandpass-300-3400 o3") in
+  let bs_b, bs_a = butter (design "bandstop-50-60 o2") in
+  let lp_sos = butter_sos (section "lowpass-2000 o8") in
+  let bp_sos = butter_sos (section "bandpass-500-2000 o4") in
+  let hp_sos = butter_sos (section "highpass-40 o5") in
+  let hp_zi = Nx.mul_s (Filter.lfilter_zi hp_b hp_a) 0.25 in
+  let bp_zi = Nx.mul_s (Filter.lfilter_zi bp_b bp_a) (-0.5) in
+  let sos_zi = Nx.mul_s (Filter.sosfilt_zi bp_sos) 0.5 in
+  let lowpassed = Filter.lfilter lp_b lp_a short in
+  let highpassed = Filter.lfilter ~zi:hp_zi hp_b hp_a short in
+  let firred = Filter.lfilter (fst fir) (snd fir) short in
+  let sosfiltered = Filter.sosfilt lp_sos short in
+  let sosfiltered_zi = Filter.sosfilt ~zi:sos_zi bp_sos short in
+  List.iter
+    (fun (s, y) -> r (Printf.sprintf "filter.%s excerpt" s) [real y])
+    [ ("lfilter lowpass-1000 o4", lowpassed)
+    ; ("lfilter highpass-80 o2 zi-0.25", highpassed)
+    ; ("lfilter bandstop-50-60 o2", Filter.lfilter bs_b bs_a short)
+    ; ("lfilter fir-5", firred)
+    ; ( "lfilter unnormalised"
+      , Filter.lfilter (fst unnormalised) (snd unnormalised) short )
+    ; ("sosfilt lowpass-2000 o8", sosfiltered)
+    ; ("sosfilt bandpass-500-2000 o4 zi-0.5", sosfiltered_zi)
+    ; ( "filtfilt lowpass-1000 o4 odd-15"
+      , Filter.filtfilt ~pad:`Odd ~padlen:15 lp_b lp_a short )
+    ; ( "filtfilt highpass-80 o2 reflect-0"
+      , Filter.filtfilt ~pad:`Reflect ~padlen:0 hp_b hp_a short )
+    ; ( "filtfilt bandpass-300-3400 o3 edge-100"
+      , Filter.filtfilt ~pad:`Edge ~padlen:100 bp_b bp_a short )
+    ; ( "sosfiltfilt lowpass-2000 o8 odd-27"
+      , Filter.sosfiltfilt ~pad:`Odd ~padlen:27 lp_sos short )
+    ; ( "sosfiltfilt highpass-40 o5 reflect-500"
+      , Filter.sosfiltfilt ~pad:`Reflect ~padlen:500 hp_sos short ) ] ;
+  let y, zf = Filter.lfilter_zf ~zi:bp_zi bp_b bp_a short in
+  r "filter.lfilter_zf bandpass-300-3400 o3 zi--0.5 excerpt" [real y; real zf] ;
+  let half = excerpt_length / 2 in
+  let y1, z1 =
+    Filter.lfilter_zf ~zi:bp_zi bp_b bp_a
+      (Nx.slice [Nx.A; Nx.R (0, half)] short)
+  in
+  identity
+    (name "filter.lfilter_zf blocks = filter.lfilter excerpt")
+    ~image:real y
+    (Nx.concatenate ~axis:(-1)
+       [ y1
+       ; Filter.lfilter ~zi:z1 bp_b bp_a
+           (Nx.slice [Nx.A; Nx.R (half, excerpt_length)] short) ] ) ;
+  let y, zf = Filter.sosfilt_zf ~zi:sos_zi bp_sos short in
+  r "filter.sosfilt_zf bandpass-500-2000 o4 zi-0.5 excerpt" [real y; real zf] ;
+  List.iter
+    (fun (s, expected, stage, chunkings) ->
+      law
+        (name (Printf.sprintf "filter.%s excerpt" s))
+        ~image:real ~expected (stream ~source stage) short chunkings )
+    [ ( "lfilter_stage lowpass-1000 o4"
+      , lowpassed
+      , Filter.lfilter_stage lp_b lp_a
+      , audio )
+    ; ( "lfilter_stage highpass-80 o2 zi-0.25"
+      , highpassed
+      , Filter.lfilter_stage ~zi:hp_zi hp_b hp_a
+      , coarse )
+    ; ( "lfilter_stage fir-5"
+      , firred
+      , Filter.lfilter_stage (fst fir) (snd fir)
+      , coarse )
+    ; ( "sosfilt_stage lowpass-2000 o8"
+      , sosfiltered
+      , Filter.sosfilt_stage lp_sos
+      , audio )
+    ; ( "sosfilt_stage bandpass-500-2000 o4 zi-0.5"
+      , sosfiltered_zi
+      , Filter.sosfilt_stage ~zi:sos_zi bp_sos
+      , coarse ) ] ;
+  (* The emphasis filters: librosa's start, from the first two samples, on the
+     noise, whose first samples are not zero; an explicit state on the
+     signal. *)
+  List.iter
+    (fun (s, coef, zi, y, src, chunkings) ->
+      let pre = Filter.preemphasis ~coef ?zi y in
+      let de = Filter.deemphasis ~coef ?zi y in
+      r (Printf.sprintf "filter.preemphasis %s excerpt" s) [real pre] ;
+      r (Printf.sprintf "filter.deemphasis %s excerpt" s) [real de] ;
+      let pre', pre_zf = Filter.preemphasis_zf ~coef ?zi y in
+      let de', de_zf = Filter.deemphasis_zf ~coef ?zi y in
+      r
+        (Printf.sprintf "filter.preemphasis_zf %s excerpt" s)
+        [real pre'; real pre_zf] ;
+      r
+        (Printf.sprintf "filter.deemphasis_zf %s excerpt" s)
+        [real de'; real de_zf] ;
+      law
+        (name (Printf.sprintf "filter.preemphasis_stage %s excerpt" s))
+        ~image:real ~expected:pre
+        (stream ~source:src (Filter.preemphasis_stage ~coef ?zi ()))
+        y chunkings ;
+      law
+        (name (Printf.sprintf "filter.deemphasis_stage %s excerpt" s))
+        ~image:real ~expected:de
+        (stream ~source:src (Filter.deemphasis_stage ~coef ?zi ()))
+        y chunkings ;
+      Option.iter
+        (fun zi ->
+          let one = Nx.create Nx.float64 [|1|] [|1.|] in
+          let first = Nx.create Nx.float64 [|2|] [|1.; -.coef|] in
+          identity
+            (name (Printf.sprintf "filter.preemphasis = filter.lfilter %s" s))
+            ~image:real pre
+            (Filter.lfilter ~zi first one y) ;
+          identity
+            (name (Printf.sprintf "filter.deemphasis = filter.lfilter %s" s))
+            ~image:real de
+            (Filter.lfilter ~zi one first y) )
+        zi )
+    [ ("coef-0.97 librosa-start", 0.97, None, short_noise, source1, audio)
+    ; ( "coef-0.95 zi-0.1"
+      , 0.95
+      , Some (emphasis_state 0.1)
+      , short
+      , source
+      , coarse ) ] ;
+  (* Fundamental frequency, on the excerpt. *)
+  List.iter
+    (fun ( s
+         , (frame_length, hop, trough_threshold, alignment, pad, fmin, fmax)
+         , chunkings ) ->
+      let f0 =
+        yin ~frame_length ~hop ~trough_threshold ~alignment ~pad ~fmin ~fmax
+          ~sample_rate short
+      in
+      r (Printf.sprintf "yin %s excerpt" s) [real f0] ;
+      law
+        (name (Printf.sprintf "yin_stage %s excerpt" s))
+        ~image:real ~expected:f0
+        (stream ~source
+           (yin_stage ~frame_length ~hop ~trough_threshold ~alignment ~pad ~fmin
+              ~fmax ~sample_rate () ) )
+        short chunkings )
+    [ ( "2048-512 t0.1 centered constant-0 60-1000"
+      , (2048, 512, 0.1, `Centered, `Constant 0., 60., 1000.)
+      , audio )
+    ; ( "1023-300 t0.2 left edge 80-2000"
+      , (1023, 300, 0.2, `Left, `Edge, 80., 2000.)
+      , coarse )
+    ; ( "1500-256 t0.15 centered reflect 100-800"
+      , (1500, 256, 0.15, `Centered, `Reflect, 100., 800.)
+      , coarse ) ] ;
+  let pyin_row s (t : a pyin) =
+    r
+      (Printf.sprintf "pyin %s excerpt" s)
+      [real t.f0; bools t.voiced; real t.voiced_probability]
+  in
+  pyin_row "2048-512 60-1000 r0.1 nan pruned"
+    (pyin ~frame_length:2048 ~hop:512 ~n_thresholds:100
+       ~beta_parameters:(2., 18.) ~boltzmann_parameter:2. ~resolution:0.1
+       ~max_transition_rate:35.92 ~switch_prob:0.01 ~no_trough_prob:0.01
+       ~fill:(`Value Float.nan) ~alignment:`Centered ~pad:(`Constant 0.)
+       ~transition_min_prob:1e-4 ~fmin:60. ~fmax:1000. ~sample_rate short ) ;
+  pyin_row "1024-256 100-400 r0.25 decoded exact"
+    (pyin ~frame_length:1024 ~hop:256 ~n_thresholds:40 ~beta_parameters:(1., 9.)
+       ~boltzmann_parameter:1.5 ~resolution:0.25 ~max_transition_rate:20.
+       ~switch_prob:0.05 ~no_trough_prob:0.02 ~fill:`Decoded ~alignment:`Left
+       ~pad:`Edge ~transition_min_prob:0. ~fmin:100. ~fmax:400. ~sample_rate
+       short ) ;
+  (* Pitch tracking and tuning, on the excerpt. *)
+  List.iter
+    (fun (s, fmin, fmax, threshold, reference) ->
+      let tracked =
+        piptrack ~fmin ~fmax ~threshold ~reference ~fft_size:1024 ~sample_rate
+          short_m1
+      in
+      r
+        (Printf.sprintf "piptrack hann %s excerpt" s)
+        [real (fst tracked); real (snd tracked)] ;
+      pair_law
+        (Printf.sprintf "piptrack_stage hann %s excerpt" s)
+        ~image:real ~expected:tracked
+        (piptrack_stage ~fmin ~fmax ~threshold ~reference ~fft_size:1024
+           ~sample_rate () )
+        short_m1 )
+    [ ("f150-4000 t0.1 maximum", 150., 4000., 0.1, `Maximum)
+    ; ("f0-11025 t0.1 value-0.5", 0., 11025., 0.1, `Value 0.5) ] ;
+  let pitches, _ =
+    piptrack ~fmin:150. ~fmax:4000. ~threshold:0.1 ~reference:`Maximum
+      ~fft_size:1024 ~sample_rate short_m1
+  in
+  r "pitch_tuning piptrack r0.01 b12 excerpt"
+    [floats [pitch_tuning ~resolution:0.01 ~bins_per_octave:12 pitches]] ;
+  r "pitch_tuning piptrack r0.03 b36 excerpt"
+    [floats [pitch_tuning ~resolution:0.03 ~bins_per_octave:36 pitches]] ;
+  let tuning =
+    estimate_tuning stft_hann ~resolution:0.01 ~bins_per_octave:12 ~fmin:150.
+      ~fmax:4000. ~threshold:0.1 ~reference:`Maximum ~sample_rate short
+  in
+  r "estimate_tuning hann r0.01 b12 t0.1 maximum excerpt" [floats [tuning]] ;
+  r "estimate_tuning odd r0.001 b36 t0.2 value-1e-4 excerpt"
+    [ floats
+        [ estimate_tuning stft_odd ~resolution:0.001 ~bins_per_octave:36
+            ~fmin:50. ~fmax:2000. ~threshold:0.2 ~reference:(`Value 1e-4)
+            ~sample_rate short ] ] ;
+  r "estimate_tuning_of_spectrogram hann r0.01 b12 excerpt"
+    [ floats
+        [ estimate_tuning_of_spectrogram ~resolution:0.01 ~bins_per_octave:12
+            ~fmin:150. ~fmax:4000. ~threshold:0.1 ~reference:`Maximum
+            ~fft_size:1024 ~sample_rate short_m1 ] ] ;
+  identity
+    (name "estimate_tuning = estimate_tuning_of_spectrogram . power_spectrum")
+    ~image:(fun t -> floats [t])
+    tuning
+    (estimate_tuning_of_spectrogram ~resolution:0.01 ~bins_per_octave:12
+       ~fmin:150. ~fmax:4000. ~threshold:0.1 ~reference:`Maximum ~fft_size:1024
+       ~sample_rate
+       (Stft.power_spectrum ~power:1. stft_hann (Nx.cast Nx.float64 short)) ) ;
+  (* Peak picking, on the envelope of the noise channel, whose many small peaks
+     the selections choose among differently; onset detection, on the envelope
+     of the first channel, whose clicks it finds. *)
+  let envelopes = onset_strength stft_hann mel_slaney ~lag:1 x in
+  let envelope = Nx.slice [Nx.I 0; Nx.A] envelopes in
+  let noisy = Nx.slice [Nx.I 1; Nx.A] envelopes in
+  let energy = rms ~frame_length:1024 ~hop:256 mono in
+  List.iter
+    (fun (s, selection, (pre_max, post_max, pre_avg, post_avg, delta, wait)) ->
+      let peaks =
+        peak_pick ~selection ~pre_max ~post_max ~pre_avg ~post_avg ~delta ~wait
+          noisy
+      in
+      r ("peak_pick noise " ^ s) [indices peaks] ;
+      if selection = `Greedy then
+        law_by
+          (name ("peak_pick_stage noise " ^ s))
+          ~join:(concatenated indices)
+          ~expected:[indices peaks]
+          (stream ~source:source1
+             (peak_pick_stage ~pre_max ~post_max ~pre_avg ~post_avg ~delta ~wait) )
+          noisy frames )
+    [ ("greedy 3-1-10-1 d0.1 w3", `Greedy, (3, 1, 10, 1, 0.1, 3))
+    ; ("greedy 2-3-4-6 d0.05 w4", `Greedy, (2, 3, 4, 6, 0.05, 4))
+    ; ("dp_count 1-1-3-3 d0 w2", `Dp_count, (1, 1, 3, 3, 0., 2))
+    ; ("dp_value 1-1-3-3 d0 w2", `Dp_value, (1, 1, 3, 3, 0., 2)) ] ;
+  let onsets =
+    onset_detect stft_hann mel_slaney ~normalize:true ~selection:`Greedy
+      ~pre_max:1 ~post_max:1 ~pre_avg:4 ~post_avg:5 ~delta:0.02 ~wait:1 mono
+  in
+  r "onset_detect hann slaney norm greedy 1-1-4-5 d0.02 w1" [indices onsets] ;
+  identity
+    (name "onset_detect = onset_detect_of_envelope . onset_strength")
+    ~image:indices onsets
+    (onset_detect_of_envelope ~hop:256 ~normalize:true ~selection:`Greedy
+       ~pre_max:1 ~post_max:1 ~pre_avg:4 ~post_avg:5 ~delta:0.02 ~wait:1
+       ~sample_rate
+       (onset_strength stft_hann mel_slaney ~lag:1 mono) ) ;
+  r "onset_detect hann slaney norm rms dp_count 3-2-10-11 w3"
+    [ indices
+        (onset_detect stft_hann mel_slaney ~normalize:true
+           ~backtrack:(`Energy energy) ~selection:`Dp_count ~pre_max:3
+           ~post_max:2 ~pre_avg:10 ~post_avg:11 ~delta:0.03 ~wait:3 mono ) ] ;
+  r "onset_detect_of_envelope raw envelope dp_value 2-3-4-6"
+    [ indices
+        (onset_detect_of_envelope ~hop:256 ~normalize:false ~backtrack:`Envelope
+           ~selection:`Dp_value ~pre_max:2 ~post_max:3 ~pre_avg:4 ~post_avg:6
+           ~delta:0.25 ~wait:2 ~sample_rate envelope ) ] ;
+  let raw_greedy =
+    onset_detect_of_envelope ~hop:256 ~normalize:false ~selection:`Greedy
+      ~pre_max:3 ~post_max:1 ~pre_avg:10 ~post_avg:1 ~delta:0.5 ~wait:3
+      ~sample_rate envelope
+  in
+  identity
+    (name "onset_detect_of_envelope raw greedy = peak_pick")
+    ~image:indices raw_greedy
+    (peak_pick ~selection:`Greedy ~pre_max:3 ~post_max:1 ~pre_avg:10 ~post_avg:1
+       ~delta:0.5 ~wait:3 envelope ) ;
+  r "onset_backtrack peak_pick greedy 3-1-10-1 d0.5 w3 rms"
+    [indices (onset_backtrack raw_greedy energy)] ;
+  (* Tempo and beat. *)
+  r "tempo_frequencies hop-256 n64"
+    [real (tempo_frequencies dt ~hop:256 ~sample_rate 64)] ;
+  r "fourier_tempo_frequencies hop-256 win64"
+    [real (fourier_tempo_frequencies dt ~hop:256 ~sample_rate 64)] ;
+  let tempograms =
+    [ ("centered hann w64", 64, `Centered, Window.Hann, ("inf", `Inf))
+    ; ("left hamming w33", 33, `Left, Window.Hamming, ("l2", `P 2.)) ]
+  in
+  List.iter
+    (fun (s, win_length, alignment, window, (norm_name, norm)) ->
+      let s = s ^ " " ^ norm_name in
+      let t = tempogram ~win_length ~alignment ~window ~norm envelopes in
+      r ("tempogram " ^ s) [real t] ;
+      frame_law ("tempogram_stage " ^ s) t
+        (tempogram_stage ~win_length ~alignment ~window ~norm ())
+        envelopes )
+    tempograms ;
+  List.iter
+    (fun (s, win_length, alignment, window, _) ->
+      let t = fourier_tempogram cdt ~win_length ~alignment ~window envelopes in
+      rc ("fourier_tempogram " ^ s) [complex t] ;
+      law
+        (name ("fourier_tempogram_stage " ^ s))
+        ~image:complex ~expected:t
+        (stream ~source
+           (fourier_tempogram_stage cdt ~win_length ~alignment ~window ()) )
+        envelopes frames )
+    tempograms ;
+  r "tempo hop-256 120-1 ac2 max320 mean"
+    [ real
+        (tempo ~hop:256 ~start_bpm:120. ~std_bpm:1. ~ac_size:2. ~tempo_max:320.
+           ~aggregate:`Mean ~sample_rate envelopes ) ] ;
+  r "tempo hop-256 100-0.5 ac1.5 max200 median"
+    [ real
+        (tempo ~hop:256 ~start_bpm:100. ~std_bpm:0.5 ~ac_size:1.5
+           ~tempo_max:200. ~aggregate:`Median ~sample_rate envelopes ) ] ;
+  r "tempo hop-256 ac1 max-inf none uniform-prior"
+    [ real
+        (tempo ~hop:256 ~start_bpm:120. ~std_bpm:1. ~ac_size:1.
+           ~tempo_max:Float.infinity ~aggregate:`None
+           ~prior:(fun _ -> 0.)
+           ~sample_rate envelopes ) ] ;
+  let bpm, beats =
+    beat_track ~hop:256 ~start_bpm:120. ~tightness:100. ~trim:true ~sample_rate
+      envelope
+  in
+  r "beat_track hop-256 120 t100 trim" [floats [bpm]; indices beats] ;
+  let bpm, beats =
+    beat_track ~hop:256 ~start_bpm:120. ~tightness:400. ~trim:false ~bpm:150.
+      ~sample_rate envelope
+  in
+  r "beat_track hop-256 bpm-150 t400 no-trim" [floats [bpm]; indices beats] ;
+  r "plp hop-256 w64 30-300 reference"
+    [ real
+        (plp ~hop:256 ~win_length:64 ~tempo_min:30. ~tempo_max:300.
+           ~kernels:`Reference ~sample_rate envelopes ) ] ;
+  r "plp hop-256 w96 60-240 unit"
+    [ real
+        (plp ~hop:256 ~win_length:96 ~tempo_min:60. ~tempo_max:240.
+           ~kernels:`Unit ~sample_rate envelopes ) ] ;
+  (* Chroma energy normalised statistics and the tonal centroid. *)
+  let cqt_m1 = Cqt.power_spectrum ~power:1. cqt x in
+  let unnormalised_chroma = Chroma.of_cqt ~n_chroma:12 ~norm:`None cqt cqt_m1 in
+  let cens =
+    chroma_cens cqt ~n_chroma:12 ~norm:(`P 2.) ~smoothing:(Some 41)
+      ~smoothing_window:Window.Hann x
+  in
+  r "chroma_cens cqt c12 l2 s41 hann" [real cens] ;
+  identity
+    (name "chroma_cens = chroma_cens_of_chroma . chroma_cqt")
+    ~image:real cens
+    (chroma_cens_of_chroma ~norm:(`P 2.) ~smoothing:(Some 41)
+       ~smoothing_window:Window.Hann unnormalised_chroma ) ;
+  let stft_chroma_a24 = Chroma.apply ~norm:`None chroma_a24 p2 in
+  List.iter
+    (fun (s, chroma, norm, smoothing, smoothing_window) ->
+      let c = chroma_cens_of_chroma ~norm ~smoothing ~smoothing_window chroma in
+      r ("chroma_cens_of_chroma " ^ s) [real c] ;
+      frame_law ("chroma_cens_stage " ^ s) c
+        (chroma_cens_stage ~norm ~smoothing ~smoothing_window ())
+        chroma )
+    [ ( "cqt c12 inf s10 hamming"
+      , unnormalised_chroma
+      , `Inf
+      , Some 10
+      , Window.Hamming )
+    ; ("cqt c12 l1 none", unnormalised_chroma, `P 1., None, Window.Hann)
+    ; ("stft a24 l2 s41 hann", stft_chroma_a24, `P 2., Some 41, Window.Hann) ] ;
+  let centroid = tonnetz cqt ~n_chroma:12 x in
+  r "tonnetz cqt c12" [real centroid] ;
+  identity
+    (name "tonnetz = tonnetz_of_chroma . chroma_cqt")
+    ~image:real centroid
+    (tonnetz_of_chroma (Chroma.of_cqt ~n_chroma:12 ~norm:`Inf cqt cqt_m1)) ;
+  List.iter
+    (fun (s, chroma) ->
+      let t = tonnetz_of_chroma chroma in
+      r ("tonnetz_of_chroma " ^ s) [real t] ;
+      frame_law ("tonnetz_stage " ^ s) t (tonnetz_stage ()) chroma )
+    [ ("stft c12 inf", Chroma.apply ~norm:`Inf chroma_c12 p2)
+    ; ("stft a24 none", stft_chroma_a24) ] ;
+  (* Autocorrelation, linear prediction and polynomial features. *)
+  let full = autocorrelate ~max_size:100000 x in
+  let lags = autocorrelate ~max_size:2048 x in
+  r "autocorrelate max-100000" [real full] ;
+  r "autocorrelate max-2048" [real lags] ;
+  identity
+    (name "autocorrelate max-2048 = slice of autocorrelate")
+    ~image:real
+    (Nx.slice [Nx.A; Nx.R (0, 2048)] full)
+    lags ;
+  r "lpc order-16" [real (lpc ~order:16 x)] ;
+  r "lpc order-5 noise" [real (lpc ~order:5 noise)] ;
+  let slope = poly_features stft_hann ~order:1 ~sample_rate x in
+  let cubic = poly_features stft_odd ~order:3 ~sample_rate x in
+  r "poly_features hann o1" [real slope] ;
+  r "poly_features odd o3" [real cubic] ;
+  let custom =
+    Nx.cast dt
+      (Nx.create Nx.float64 [|513|]
+         (Array.init 513 (fun k -> Float.of_int (k * k) /. 24.)) )
+  in
+  r "poly_features_of_spectrogram hann o2 custom-freqs"
+    [real (poly_features_of_spectrogram ~order:2 ~freqs:custom ~sample_rate m1)] ;
+  r "poly_features_of_spectrogram hann o0"
+    [real (poly_features_of_spectrogram ~order:0 ~sample_rate m1)] ;
+  identity
+    (name "poly_features = poly_features_of_spectrogram . power_spectrum")
+    ~image:real slope
+    (poly_features_of_spectrogram ~order:1 ~sample_rate m1) ;
+  frame_law "poly_features_stage hann o1" slope
+    (poly_features_stage stft_hann ~order:1 ~sample_rate ())
+    m1 ;
+  law
+    (name "power_stage >> poly_features_stage odd o3")
+    ~image:real ~expected:cubic
+    (stream ~source
+       Pipeline.(
+         Stft.power_stage ~power:1. stft_odd
+         >> poly_features_stage stft_odd ~order:3 ~sample_rate () ) )
+    x coarse ;
+  (* Feature inversion, on the excerpt and back to its length. *)
+  let mel_short =
+    Mel.apply mel_slaney (Stft.power_spectrum ~power:2. stft_hann short)
+  in
+  let mf = mfcc stft_hann mel_slaney ~n_mfcc:13 ~lifter:22. short in
+  let mel_of_mf = mfcc_to_mel mel_slaney ~lifter:22. ~reference:1. mf in
+  r "mfcc_to_mel slaney n13 lifter-22 ref-1 excerpt" [real mel_of_mf] ;
+  r "mfcc_to_mel htk n20 lifter-0 ref-2 excerpt"
+    [ real
+        (mfcc_to_mel mel_htk ~lifter:0. ~reference:2.
+           (mfcc stft_hann mel_htk ~n_mfcc:20 ~lifter:0. short) ) ] ;
+  frame_law "mfcc_to_mel_stage slaney n13 lifter-22 ref-1 excerpt" mel_of_mf
+    (mfcc_to_mel_stage mel_slaney ~n_mfcc:13 ~lifter:22. ~reference:1. ())
+    mf ;
+  let fitted = mel_to_stft mel_slaney ~power:2. mel_short in
+  r "mel_to_stft slaney p2 excerpt" [real fitted] ;
+  frame_law "mel_to_stft_stage slaney p2 excerpt" fitted
+    (mel_to_stft_stage mel_slaney ~power:2. ())
+    mel_short ;
+  let mel_htk_m1 = Mel.apply mel_htk short_m1 in
+  let fitted_htk = mel_to_stft mel_htk ~power:1. mel_htk_m1 in
+  r "mel_to_stft htk p1 excerpt" [real fitted_htk] ;
+  frame_law "mel_to_stft_stage htk p1 excerpt" fitted_htk
+    (mel_to_stft_stage mel_htk ~power:1. ())
+    mel_htk_m1 ;
+  let audio_of_mel =
+    mel_to_audio stft_hann mel_slaney ~power:2. ~n_iter:4 ~length:excerpt_length
+      mel_short
+  in
+  r "mel_to_audio hann slaney p2 i4 excerpt" [real audio_of_mel] ;
+  identity
+    (name "mel_to_audio = stft.griffin_lim . mel_to_stft")
+    ~image:real audio_of_mel
+    (Stft.griffin_lim ~n_iter:4 ~momentum:0.99 ~init:`Zero_phase
+       ~length:excerpt_length stft_hann fitted ) ;
+  let audio_of_mfcc =
+    mfcc_to_audio stft_hann mel_slaney ~lifter:22. ~reference:1. ~power:2.
+      ~n_iter:4 ~length:excerpt_length mf
+  in
+  r "mfcc_to_audio hann slaney lifter-22 ref-1 p2 i4 excerpt"
+    [real audio_of_mfcc] ;
+  identity
+    (name "mfcc_to_audio = mel_to_audio . mfcc_to_mel")
+    ~image:real audio_of_mfcc
+    (mel_to_audio stft_hann mel_slaney ~power:2. ~n_iter:4
+       ~length:excerpt_length mel_of_mf )
+
 let () =
   grids () ;
   features ("f32", "c64") Nx.float32 Nx.complex64
     (Nx.cast Nx.float32 signal)
     (Nx.cast Nx.float32 noise) ;
   features ("f64", "c128") Nx.float64 Nx.complex128 signal noise ;
+  grids_since () ;
+  features_since ("f32", "c64") Nx.float32 Nx.complex64
+    (Nx.cast Nx.float32 signal)
+    (Nx.cast Nx.float32 noise) ;
+  features_since ("f64", "c128") Nx.float64 Nx.complex128 signal noise ;
   check_anchors () ;
   match List.rev !failures with
   | [] ->
