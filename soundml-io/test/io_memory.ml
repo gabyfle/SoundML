@@ -400,6 +400,26 @@ let signal ~channels ~frames seed =
     (Array.init (channels * frames) (fun i ->
          match i with 1 -> 1.5 | 2 -> -1.5 | _ -> (1.6 *. draw ()) -. 0.8 ) )
 
+(* [unstamped s] is [s] with the timestamp of its PEAK chunk zeroed. libsndfile
+   stamps the float WAV and AIFF PEAK chunk with the wall-clock second of the
+   encode (its version field, then [time (NULL)]), so two encodes a second apart
+   differ there and nowhere else. The chunk precedes the sample data, so its
+   marker's first occurrence is the chunk. *)
+let unstamped s =
+  let n = String.length s in
+  let rec find p =
+    if p + 16 > n then None
+    else if String.sub s p 4 = "PEAK" then Some p
+    else find (p + 1)
+  in
+  match find 0 with
+  | None ->
+      s
+  | Some p ->
+      let b = Bytes.of_string s in
+      Bytes.fill b (p + 12) 4 '\000' ;
+      Bytes.to_string b
+
 (* [write] then [read] against [Memory.write] then [Memory.read]: the bytes (or,
    for Ogg, their length) and both decodes. *)
 let check_encode format (a : _ audio) =
@@ -416,7 +436,7 @@ let check_encode format (a : _ audio) =
       equal ~msg:"ogg stream length" int (String.length file)
         (String.length bytes)
   | _ ->
-      check_bytes ~msg:"encoded bytes" file bytes ) ;
+      check_bytes ~msg:"encoded bytes" (unstamped file) (unstamped bytes) ) ;
   check_audio ~msg:"f64"
     (ok ~msg:"read" (read Nx.float64 path))
     (ok ~msg:"Memory.read" (Memory.read Nx.float64 bytes)) ;
