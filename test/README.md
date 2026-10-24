@@ -129,6 +129,22 @@ Current suites:
   Without a state, librosa's de-emphasis returns the state of an
   uncorrected recursion: the vectors record the state that continues the
   corrected output, and the generator asserts librosa's value.
+- `f0` — `librosa.yin` and `librosa.pyin` over synthetic signals rebuilt
+  on the OCaml side from the recipes each case records (pure and harmonic
+  tones across the range, vibrato, a chirp, LCG noise, silence, transitions
+  between tone and silence, a tone over a DC offset): librosa's default
+  geometry, a 16 kHz speech geometry, an uncentered odd frame length,
+  edge and reflect padding at 8 kHz with a hop longer than the frame, a
+  constant-0.5 padding (librosa on the signal padded by hand), signals
+  shorter than a frame, two thresholds, a `[2; 3]` batch, both element
+  dtypes, and pyin's own parameters, fill modes and Viterbi pruning
+  (exact search, 1e-3). The difference function is an FFT autocorrelation
+  on both sides, so the generator asserts that every discrete decision —
+  troughs, thresholds, minima, the parabola's branch, the pitch bin —
+  lies at least 1e-9 from its tie on librosa's own values and survives a
+  2^-40 relative perturbation of the input unchanged. pyin cases stack
+  the frequency (NaN where unvoiced, written as JSON `NaN`), the voiced
+  flag and the voiced probability.
 - `io` — decode parity for `Soundml_io` against python-soundfile (the io
   vector files record the soundfile and bundled-libsndfile versions beside
   the base stack) over the committed fixtures in `test/io/corpus/`, which

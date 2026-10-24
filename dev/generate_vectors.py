@@ -72,6 +72,7 @@ SUITE_DIRECTORIES = {
     "filters": "soundml/test/filter/vectors",
     "defaults": "soundml/test/defaults/vectors",
     "synthesis": "soundml/test/synthesis/vectors",
+    "f0": "soundml/test/f0/vectors",
     "io": "soundml-io/test/vectors",
 }
 
@@ -4585,6 +4586,388 @@ class SynthesisVectorGenerator:
         write_suite(self.SUITE, "chirp", self.chirp_cases())
         write_suite(self.SUITE, "clicks", self.clicks_cases())
         write_suite(self.SUITE, "mu", self.mu_cases())
+class F0VectorGenerator:
+    """Golden vectors for Soundml.yin and Soundml.pyin: librosa.yin and
+    librosa.pyin over synthetic signals, each channel a run of segments
+    [length, recipe] evaluated on the segment's own time t = i / sr:
+
+    - ["silence"];
+    - ["tone", f, amp, phase]: amp * sin(2 pi f t + phase);
+    - ["harmonic", f, k]: the sum over h = 1..k of
+      (0.6 / h) * sin(2 pi (h f) t + 0.1 h);
+    - ["vibrato", fc, depth, rate]:
+      0.5 * sin(2 pi fc t + (depth / rate) * sin(2 pi rate t));
+    - ["chirp", f0, f1]: 0.5 * sin(2 pi (f0 t + (0.5 k) t t)), linear from
+      f0 to f1 over the segment, k = (f1 - f0) / (length / sr);
+    - ["noise", scale, seed]: scale times the LCG stream under that seed;
+    - ["offset", c, f, amp]: c + amp * sin(2 pi f t + 0.3).
+
+    A case's "lead" is its leading shape and "channels" lists one segment run
+    per channel in C order. Geometries: librosa's defaults (22.05 kHz, C2 to
+    C7, 2048-sample frames), a 16 kHz speech geometry, an uncentered odd
+    frame length at 44.1 kHz, 8 kHz with edge and reflect padding (and a hop
+    longer than the frame), signals shorter than a frame, a [2; 3] batch,
+    and pyin's own parameters, fill modes and Viterbi pruning thresholds.
+    The constant-0.5 padding has no librosa argument: its reference is
+    librosa on the signal padded by hand, uncentered.
+
+    librosa computes the difference function through an FFT
+    autocorrelation and its decisions are discrete: the troughs, the
+    absolute threshold, the global minimum, the pyin thresholds, the
+    parabola branch, the pitch-bin rounding and the Viterbi maxima. Every
+    case asserts that each decision of every frame whose cumulative mean
+    normalized difference is not identically zero lies at least MARGIN from
+    its tie on librosa's own difference function, and that multiplying the
+    input by 1 + 2 ** -40 times an LCG stream leaves every yin estimate
+    within 1e-9 relative and every decoded pyin state unchanged. The
+    sinusoids are rebuilt on the OCaml side with libm, within ulps of
+    numpy's; the margins cover that as well. float32 cases quantize the
+    input to float32 and compute the reference in float64. pyin cases stack
+    f0 (NaN where unvoiced, unless the case fills), the voiced flag as 0/1
+    and the voiced probability on a new leading axis.
+    """
+
+    SUITE = "f0"
+
+    SEED = 20261103
+
+    C2 = 65.40639132514966  # librosa.note_to_hz("C2")
+
+    C7 = 2093.004522404789  # librosa.note_to_hz("C7")
+
+    MARGIN = 1e-9
+
+    DEFAULT = {"sample_rate": 22050, "fmin": C2, "fmax": C7}
+
+    SPEECH = {"sample_rate": 16000, "fmin": 50.0, "fmax": 800.0,
+              "frame_length": 1024, "hop": 160}
+
+    ODD = {"sample_rate": 44100, "fmin": 100.0, "fmax": 1000.0,
+           "frame_length": 2047, "hop": 300, "center": False}
+
+    EDGE = {"sample_rate": 8000, "fmin": 80.0, "fmax": 400.0,
+            "frame_length": 512, "hop": 128, "pad": "edge"}
+
+    REFLECT = dict(EDGE, pad="reflect")
+
+    REFLECT_LONG_HOP = dict(EDGE, pad="reflect", hop=700)
+
+    VARIANT = {"n_thresholds": 50, "beta_parameters": [1.5, 12.0],
+               "boltzmann_parameter": 1.5, "resolution": 0.05,
+               "max_transition_rate": 20.0, "switch_prob": 0.05,
+               "no_trough_prob": 0.05, "fill": 0.0, "fmin": 70.0,
+               "fmax": 1100.0, "hop": 256}
+
+    N = 11025
+
+    @classmethod
+    def mono(cls, *segments):
+        return {"lead": [], "channels": [list(segments)]}
+
+    @classmethod
+    def whole(cls, recipe, n):
+        return cls.mono([n, recipe])
+
+    @classmethod
+    def signals(cls, n):
+        half = n // 2
+        quiet = n * 4 // 11
+        return {
+            "tone97": cls.whole(["tone", 97.3, 0.5, 0.3], n),
+            "tone311": cls.whole(["tone", 311.7, 0.5, 0.3], n),
+            "tone1234": cls.whole(["tone", 1234.5, 0.4, 1.1], n),
+            "harmonic147": cls.whole(["harmonic", 146.83, 6], n),
+            "vibrato250": cls.whole(["vibrato", 250.0, 8.0, 5.0], n),
+            "chirp120_380": cls.whole(["chirp", 120.0, 380.0], n),
+            "noise": cls.whole(["noise", 0.3, cls.SEED], n),
+            "silence": cls.whole(["silence"], n),
+            "tone_to_silence": cls.mono([half, ["tone", 203.3, 0.5, 0.3]],
+                                        [n - half, ["silence"]]),
+            "silence_to_tone": cls.mono([quiet, ["silence"]],
+                                        [n - quiet, ["tone", 523.0, 0.5, 0.0]]),
+            "offset_tone": cls.whole(["offset", 0.2, 173.9, 0.4], n),
+        }
+
+    @classmethod
+    def batch(cls, n):
+        s = cls.signals(n)
+        names = ["harmonic147", "tone_to_silence", "noise", "vibrato250",
+                 "silence", "chirp120_380"]
+        return {"lead": [2, 3],
+                "channels": [s[k]["channels"][0] for k in names]}
+
+    @classmethod
+    def cases_table(cls):
+        """(key, geometry, {signal name: signal}, functions, dtypes)."""
+        d = cls.signals(cls.N)
+        s16 = cls.signals(8000)
+        s44 = cls.signals(22050)
+        s8 = cls.signals(4000)
+        both, yin, pyin = ("yin", "pyin"), ("yin",), ("pyin",)
+        f64, f32 = ("float64",), ("float32",)
+
+        def pick(table, *names):
+            return {k: table[k] for k in names}
+
+        voices = ("harmonic147", "tone_to_silence", "noise", "vibrato250")
+        return [
+            ("default", cls.DEFAULT, d, both, f64),
+            ("threshold0.05", dict(cls.DEFAULT, trough_threshold=0.05),
+             pick(d, "harmonic147", "chirp120_380"), yin, f64),
+            ("threshold0.25", dict(cls.DEFAULT, trough_threshold=0.25),
+             pick(d, "harmonic147", "chirp120_380"), yin, f64),
+            ("speech16k", cls.SPEECH,
+             pick(s16, "chirp120_380", "vibrato250", "tone_to_silence"), both,
+             f64),
+            ("odd44k_uncentered", cls.ODD,
+             {"tone150": cls.whole(["tone", 150.0, 0.5, 0.3], 22050),
+              "harmonic147": s44["harmonic147"],
+              "chirp120_380": s44["chirp120_380"]}, both, f64),
+            ("edge8k", cls.EDGE, pick(s8, "offset_tone", "tone_to_silence"),
+             both, f64),
+            ("reflect8k", cls.REFLECT,
+             pick(s8, "offset_tone", "tone_to_silence"), both, f64),
+            ("reflect8k_hop700", cls.REFLECT_LONG_HOP,
+             pick(s8, "offset_tone", "tone_to_silence"), yin, f64),
+            ("constant0.5", dict(cls.DEFAULT, pad_value=0.5),
+             pick(d, "harmonic147", "tone_to_silence"), both, f64),
+            ("short", cls.DEFAULT,
+             {"harmonic147_n300": cls.whole(["harmonic", 146.83, 6], 300),
+              "harmonic147_n1025": cls.whole(["harmonic", 146.83, 6], 1025)},
+             both, f64),
+            ("short_reflect", dict(cls.DEFAULT, pad="reflect"),
+             {"harmonic147_n1": cls.whole(["harmonic", 146.83, 6], 1),
+              "harmonic147_n700": cls.whole(["harmonic", 146.83, 6], 700)},
+             both, f64),
+            ("batch", cls.DEFAULT, {"batch2x3": cls.batch(cls.N)}, both,
+             ("float64", "float32")),
+            ("default", cls.DEFAULT,
+             pick(d, "harmonic147", "chirp120_380", "tone_to_silence"), both,
+             f32),
+            ("decoded", dict(cls.DEFAULT, fill="decoded"),
+             pick(d, "tone_to_silence", "silence", "noise", "vibrato250"),
+             pyin, f64),
+            ("variant", dict(cls.DEFAULT, **cls.VARIANT), pick(d, *voices),
+             pyin, f64),
+            ("exact", dict(cls.DEFAULT, transition_min_prob=0.0),
+             pick(d, *voices), pyin, f64),
+            ("variant_prune1e-3",
+             dict(cls.DEFAULT, **cls.VARIANT, transition_min_prob=1e-3),
+             pick(d, *voices), pyin, f64),
+        ]
+
+    # -- signals ---------------------------------------------------------------
+
+    @staticmethod
+    def segment(recipe, n, sr):
+        kind = recipe[0]
+        t = np.arange(n) / sr
+        two_pi = 2 * np.pi
+        if kind == "silence":
+            return np.zeros(n)
+        if kind == "tone":
+            f, amp, phase = recipe[1:]
+            return amp * np.sin(two_pi * f * t + phase)
+        if kind == "harmonic":
+            f, partials = recipe[1:]
+            y = 0
+            for h in range(1, partials + 1):
+                y = y + (0.6 / h) * np.sin(two_pi * (h * f) * t + 0.1 * h)
+            return y
+        if kind == "vibrato":
+            fc, depth, rate = recipe[1:]
+            return 0.5 * np.sin(two_pi * fc * t
+                                + (depth / rate) * np.sin(two_pi * rate * t))
+        if kind == "chirp":
+            f0, f1 = recipe[1:]
+            k = (f1 - f0) / (n / sr)
+            return 0.5 * np.sin(two_pi * (f0 * t + (0.5 * k) * t * t))
+        if kind == "noise":
+            scale, seed = recipe[1:]
+            return scale * StftVectorGenerator.lcg_signal(n, seed=seed)
+        if kind == "offset":
+            c, f, amp = recipe[1:]
+            return c + amp * np.sin(two_pi * f * t + 0.3)
+        raise ValueError(kind)
+
+    @classmethod
+    def signal(cls, spec, sr):
+        rows = [np.concatenate([cls.segment(r, n, sr) for n, r in segments])
+                for segments in spec["channels"]]
+        y = np.stack(rows)
+        return y.reshape(spec["lead"] + [y.shape[-1]]) if spec["lead"] else y[0]
+
+    @staticmethod
+    def quantize(y, dtype):
+        return y if dtype == "float64" else y.astype(np.float32).astype(np.float64)
+
+    # -- the reference ---------------------------------------------------------
+
+    @staticmethod
+    def librosa_args(g, function):
+        frame_length = g.get("frame_length", 2048)
+        args = {"fmin": g["fmin"], "fmax": g["fmax"], "sr": g["sample_rate"],
+                "frame_length": frame_length,
+                "hop_length": g.get("hop", frame_length // 4),
+                "center": g.get("center", True),
+                "pad_mode": g.get("pad", "constant")}
+        if function == "yin":
+            args["trough_threshold"] = g.get("trough_threshold", 0.1)
+            return args
+        for key in ("n_thresholds", "boltzmann_parameter", "resolution",
+                    "max_transition_rate", "switch_prob", "no_trough_prob"):
+            if key in g:
+                args[key] = g[key]
+        if "beta_parameters" in g:
+            args["beta_parameters"] = tuple(g["beta_parameters"])
+        fill = g.get("fill", "nan")
+        args["fill_na"] = (np.nan if fill == "nan"
+                           else None if fill == "decoded" else fill)
+        tmp = g.get("transition_min_prob", 1e-4)
+        args["transition_min_prob"] = None if tmp == 0.0 else tmp
+        return args
+
+    @staticmethod
+    def by_hand(y, g, args):
+        """The constant-v padding librosa has no argument for: the signal
+        padded by hand, then analysed uncentered."""
+        if "pad_value" not in g:
+            return y, args
+        border = args["frame_length"] // 2
+        y = np.pad(y, [(0, 0)] * (y.ndim - 1) + [(border, border)],
+                   mode="constant", constant_values=g["pad_value"])
+        return y, dict(args, center=False)
+
+    @classmethod
+    def run(cls, function, y, g):
+        y, args = cls.by_hand(y, g, cls.librosa_args(g, function))
+        if function == "yin":
+            return librosa.yin(y, **args)
+        f0, voiced, probability = librosa.pyin(y, **args)
+        return np.stack([f0, voiced.astype(np.float64), probability])
+
+    # -- decision margins on librosa's own difference function ----------------
+
+    @classmethod
+    def cmnd(cls, y, g):
+        y, args = cls.by_hand(y, g, cls.librosa_args(g, "yin"))
+        W, hop, sr = args["frame_length"], args["hop_length"], args["sr"]
+        if args["center"]:
+            y = np.pad(y, [(0, 0)] * (y.ndim - 1) + [(W // 2, W // 2)],
+                       mode=args["pad_mode"])
+        frames = librosa.util.frame(y, frame_length=W, hop_length=hop)
+        min_period = int(np.floor(sr / g["fmax"]))
+        max_period = min(int(np.ceil(sr / g["fmin"])), W - 1)
+        from librosa.core import pitch
+        c = pitch._cumulative_mean_normalized_difference(
+            frames, min_period, max_period)
+        rows = np.moveaxis(c, -2, -1).reshape(-1, c.shape[-2])
+        return rows, min_period
+
+    @staticmethod
+    def troughs(x):
+        t = np.zeros(len(x), bool)
+        t[1:-1] = (x[1:-1] < x[:-2]) & (x[1:-1] <= x[2:])
+        t[-1] = x[-1] < x[-2]
+        t[0] = x[0] < x[1]
+        return t
+
+    @staticmethod
+    def parabola(x, i):
+        """The parabola branch's distance from its tie, and the shift."""
+        if i == 0 or i == len(x) - 1:
+            return np.inf, 0.0
+        a = x[i + 1] + x[i - 1] - 2 * x[i]
+        b = (x[i + 1] - x[i - 1]) / 2
+        return abs(abs(b) - abs(a)), (0.0 if abs(b) >= abs(a) else -b / a)
+
+    @classmethod
+    def margin(cls, y, g, function):
+        rows, min_period = cls.cmnd(y, g)
+        sr = g["sample_rate"]
+        worst = np.inf
+        for x in rows:
+            if not np.any(x):
+                continue  # digital silence: exact on every side
+            diffs = np.abs(np.diff(x))
+            t = cls.troughs(x)
+            if function == "yin":
+                thr = g.get("trough_threshold", 0.1)
+                below = np.flatnonzero(t & (x < thr))
+                if len(below):
+                    pick = below[0]
+                    upto = pick + 1
+                    m = abs(x[pick] - thr)
+                else:
+                    order = np.sort(x)
+                    pick = int(np.argmin(x))
+                    upto = len(x)
+                    m = order[1] - order[0]
+                for j in range(upto):
+                    if x[j] < thr + 1e-3:
+                        m = min(m, abs(x[j] - thr))
+                        if j > 0:
+                            m = min(m, diffs[j - 1])
+                        if j < len(x) - 1:
+                            m = min(m, diffs[j])
+                m = min(m, cls.parabola(x, pick)[0])
+            else:
+                n_thresholds = g.get("n_thresholds", 100)
+                thresholds = np.linspace(0, 1, n_thresholds + 1)[1:]
+                nbps = int(np.ceil(1.0 / g.get("resolution", 0.1)))
+                n_bins = int(np.floor(12 * nbps * np.log2(g["fmax"] / g["fmin"]))) + 1
+                m = diffs.min()
+                index = np.flatnonzero(t)
+                if len(index):
+                    h = x[index]
+                    m = min(m, np.min(np.abs(h[:, None] - thresholds[None, :])))
+                    if len(h) > 1:
+                        order = np.sort(h)
+                        m = min(m, order[1] - order[0])
+                    for i in index:
+                        gap, shift = cls.parabola(x, i)
+                        b = 12 * nbps * np.log2((sr / ((min_period + i) + shift))
+                                                / g["fmin"])
+                        m = min(m, gap, abs(b - np.floor(b) - 0.5),
+                                abs(b - (n_bins - 0.5)))
+            worst = min(worst, m)
+        return worst
+
+    def stable(self, function, y, g, expected):
+        wiggle = StftVectorGenerator.lcg_signal(y.size, seed=self.SEED + 7)
+        again = self.run(function,
+                         y * (1 + 2.0 ** -40 * wiggle.reshape(y.shape)), g)
+        if function == "yin":
+            return float(np.max(np.abs(again - expected) / expected)) < 1e-9
+        return np.array_equal(again[:2], expected[:2], equal_nan=True)
+
+    def cases(self):
+        out = {"yin": [], "pyin": []}
+        for key, geometry, signals, functions, dtypes in self.cases_table():
+            for name, spec in signals.items():
+                base = self.signal(spec, geometry["sample_rate"])
+                for dtype in dtypes:
+                    y = self.quantize(base, dtype)
+                    for function in functions:
+                        m = self.margin(y, geometry, function)
+                        assert m > self.MARGIN, (key, name, function, dtype, m)
+                        expected = self.run(function, y, geometry)
+                        assert self.stable(function, y, geometry, expected), (
+                            key, name, function, dtype)
+                        params = dict(geometry)
+                        params.update(spec)
+                        params["dtype"] = dtype
+                        out[function].append({
+                            "name": f"{function}_{key}_{name}_{dtype}",
+                            "params": params,
+                            "shape": list(expected.shape),
+                            "values": expected.ravel().tolist()})
+        return out
+
+    def generate(self):
+        out = self.cases()
+        write_suite(self.SUITE, "yin", out["yin"])
+        write_suite(self.SUITE, "pyin", out["pyin"])
 
 
 GENERATORS = [
@@ -4607,6 +4990,7 @@ GENERATORS = [
     FilterVectorGenerator,
     DefaultsVectorGenerator,
     SynthesisVectorGenerator,
+    F0VectorGenerator,
 ]
 
 if __name__ == "__main__":
